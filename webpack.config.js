@@ -1,12 +1,19 @@
 const path = require('path');
+const HtmlWebpackPlugin = require('html-webpack-plugin');
 
 module.exports = {
     mode: 'development', // 设置模式为开发模式
     entry: './src/index.jsx', // 指定入口文件
     output: {
-        path: path.resolve(__dirname, 'dist'), // 输出目录
+        path: path.resolve(__dirname, 'build'), // 输出目录
         filename: 'bundle.js', // 输出文件名
     },
+    plugins: [
+        new HtmlWebpackPlugin({
+            template: './public/index.html',
+            filename: 'index.html'
+        }),
+    ],
     watch: true, // 开启实时监控
     module: {
         rules: [
