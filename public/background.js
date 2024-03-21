@@ -40,15 +40,20 @@ heartbeat()
 setInterval(heartbeat, 3000)
 
 console.info("Chrome Extenstion Background is loaded")
+
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-    if (msg.action === "connectWebsocket") {
+    if (msg.action === "connect") {
         console.info("Start to connect websocket")
-        connectWebsocket(msg.url)
-    } else if (msg.action === "init") {
+        const host = msg['host'] || "127.0.0.1"
+        const port = msg['port'] || 11212
+        connectWebsocket(`ws://${host}:${port}/?token=${"a"}`)
+    } else if (msg.action === 'disconnect') {
+        disconnectWebsocket()
+    } else if (msg.action === "status") {
         if (socket) {
-            chrome.runtime.sendMessage({status: "connected"})
+            chrome.runtime.sendMessage({connected: true})
         } else {
-            chrome.runtime.sendMessage({status: "initialized"})
+            chrome.runtime.sendMessage({connected: false})
         }
     }
 })
