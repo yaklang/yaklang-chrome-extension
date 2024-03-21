@@ -21,9 +21,13 @@ export const Controller: React.FC<ControllerProp> = (props) => {
             wsc.updateWSCStatus()
         }
         updateStatus()
-        const id = setInterval(updateStatus, 1000)
+        const id = setInterval(updateStatus, 500)
 
         wsc.onWSCMessage((req: { connected: boolean }) => {
+            if (req['connected'] === undefined) {
+                return
+            }
+
             setConnected(req.connected)
             setTimeout(() => {
                 setInit(true)
@@ -35,11 +39,7 @@ export const Controller: React.FC<ControllerProp> = (props) => {
     }, [])
 
     useEffect(() => {
-        if (!init) {
-            return
-        }
-
-        if (connected) {
+        if (!init || connected) {
             return
         }
 
@@ -47,12 +47,12 @@ export const Controller: React.FC<ControllerProp> = (props) => {
             const ws = new WebSocket(`ws://127.0.0.1:${port}`)
             ws.onclose = (e: CloseEvent) => {
                 if (e.reason !== `FoundYakitWebSocketController` && (port + 1 <= max)) {
-                    setTimeout(() => findPort(port + 1, max), 1000)
+                    setTimeout(() => findPort(port + 1, max), 300)
                 }
 
                 if (port + 1 > max) {
                     setFindingPort(false)
-                    setAutoFindFailedReason("Yakit 未启动或无法监测到 WebSocket Controller 端口")
+                    setAutoFindFailedReason("Cannot found Yakit or Yakit WebSocket Controller Port is not right")
                 }
             }
             ws.onopen = () => {
@@ -67,21 +67,29 @@ export const Controller: React.FC<ControllerProp> = (props) => {
     const freeze = findingPort || (!init);
     const safeConnected = connected && init;
 
-    return <Card size={"small"} extra={safeConnected ? <Button>
-        断开链接
-    </Button> : <Button></Button>}>
-        {connected && init ? <Alert type={"success"} message={"已连接至 Yakit"}/> : <Form onSubmitCapture={e => {
-            e.preventDefault()
+    return <Card size={"small"} extra={safeConnected ? <Button size={"small"} danger={true} onClick={() => {
+        wsc.disconnect()
+    }}>
+        Disconnect
+    </Button> : undefined}>
+        {connected && init ?
+            <Alert type={"success"} message={"Yakit Connected"}/> :
+            <Form
+                onSubmitCapture={e => {
+                    e.preventDefault()
 
-            wsc.connect(port)
-        }}>
-            {autoFindFailedReason !== '' ? <Alert type={"error"} message={autoFindFailedReason}/> : undefined}
-            <Form.Item label={"端口"}>
-                <InputNumber disabled={freeze} value={port} onChange={e => setPort(e)}/>
-            </Form.Item>
-            <Form.Item>
-                <Button loading={freeze} htmlType={"submit"}>连接至 Yakit</Button>
-            </Form.Item>
-        </Form>}
+                    wsc.connect(port)
+                }}
+                size={"small"}
+            >
+                {autoFindFailedReason !== '' ? <Alert type={"error"} message={autoFindFailedReason}/> : undefined}
+                <Form.Item label={"Controller Port"}>
+                    <InputNumber disabled={freeze} value={port} onChange={e => setPort(e)}/>
+                </Form.Item>
+                <Form.Item>
+                    <Button size={"small"} type={"primary"} loading={freeze} htmlType={"submit"}>Connect to
+                        Yakit</Button>
+                </Form.Item>
+            </Form>}
     </Card>
 };
