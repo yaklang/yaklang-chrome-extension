@@ -2,6 +2,7 @@ import React from 'react';
 import './App.css';
 import {Layout, Row} from 'antd';
 import {Controller} from "./components/Controller";
+import {Proxifier} from "./components/Proxifier";
 
 function App() {
     return (
@@ -11,7 +12,7 @@ function App() {
                     <Controller/>
                 </Row>
                 <Row>
-                    PROXY
+                    <Proxifier/>
                 </Row>
             </Layout>
         </div>

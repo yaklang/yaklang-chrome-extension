@@ -18,12 +18,12 @@ export const Controller: React.FC<ControllerProp> = (props) => {
     useEffect(() => {
         // control status
         const updateStatus = () => {
-            wsc.getStatus()
+            wsc.updateWSCStatus()
         }
         updateStatus()
         const id = setInterval(updateStatus, 1000)
 
-        wsc.listen((req: { connected: boolean }) => {
+        wsc.onWSCMessage((req: { connected: boolean }) => {
             setConnected(req.connected)
             setTimeout(() => {
                 setInit(true)
