@@ -1,0 +1,61 @@
+.Contro {
+  display: flex;
+  align-items: center;
+  height: 40px;
+  padding: 8px 16px;
+  font-size: 12px;
+}
+
+.Contro-error-bg {
+  background-color: rgba(244, 115, 107, .10);
+}
+
+.Contro-success-bg {
+  background-color: rgba(86, 201, 145, .10);
+}
+
+.Contro-cont-input {
+  height: 24px;
+  margin-right: 8px;
+}
+
+.Contro-lable {
+  color: #85899E;
+}
+
+.Contro-cont {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex: 1;
+}
+
+.Contro-cont-text-error {
+  color: #F6544A;
+}
+
+.Contro-cont-text-success {
+  color: #56C991;
+}
+
+.Contro-handle-icon {
+  display: flex;
+  align-items: center;
+}
+
+.Contro-handle-icon svg {
+  cursor: pointer;
+}
+
+.contro-handle-icon-check {
+  margin-left: 8px;
+}
+
+.icon-p {
+  display: inline-block;
+  padding: 4px;
+}
+
+.Contro-cont span.anticon:hover {
+  background: #F0F1F3;
+}
