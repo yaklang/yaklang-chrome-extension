@@ -1,22 +1,28 @@
-import React from 'react';
-import './App.css';
-import {Layout, Row} from 'antd';
-import {Controller} from "./components/Controller";
+import React from "react";
+import "./App.css";
+import { ConfigProvider } from "antd";
+import { Contro } from "@components/Contro";
+import { Prox } from "@components/Prox";
+// import { Controller } from "./components/Controller";
 import {Proxifier} from "./components/Proxifier";
 
 function App() {
-    return (
-        <div className="App" style={{width: 300, backgroundColor: "#eee", padding: 8}}>
-            <Layout>
-                <Row>
-                    <Controller/>
-                </Row>
-                <Row>
-                    <Proxifier/>
-                </Row>
-            </Layout>
-        </div>
-    );
+  return (
+    <ConfigProvider
+      theme={{
+        token: {
+          colorPrimary: "#F28B44",
+        },
+      }}
+    >
+      <div className="App">
+        {/* <Contro /> */}
+        <Prox />
+        {/* <Controller/> */}
+        {/* <Proxifier/> */}
+      </div>
+    </ConfigProvider>
+  );
 }
 
 export default App;

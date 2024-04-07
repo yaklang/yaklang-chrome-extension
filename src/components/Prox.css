@@ -1,0 +1,113 @@
+.Prox-title-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 24px 8px;
+}
+
+.Prox-title-wrap-left {
+  display: flex;
+  align-items: center;
+}
+
+.Prox-title-wrap-left .prox-title {
+  margin-right: 4px;
+  color: #31343F;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.Prox-title-wrap-left .prox-number {
+  display: inline-block;
+  width: 18px;
+  height: 16px;
+  text-align: center;
+  color: #85899E;
+  border-radius: 8px;
+  background: #F0F1F3;
+  font-size: 10px;
+}
+
+.Prox-title-wrap-right {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.Prox-title-wrap-right .Prox-add-text {
+  margin-right: 4px;
+  color: var(--yakit-primary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.Prox-title-wrap-right .Prox-add-icon svg {
+  color: var(--yakit-primary);
+}
+
+.Prox-list-wrap {
+  overflow-y: auto;
+  max-height: 305px;
+  padding: 16px;
+  padding-top: 0;
+}
+
+.add-list {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 28px;
+  cursor: pointer;
+  border: 1px solid #EAECF3;
+  border-radius: 4px;
+  background-color: #FFFFFF;
+}
+
+.add-list:hover {
+  border: 1px solid var(--yakit-primary);
+}
+
+.add-list .add-list-icon svg {
+  color: #85899E;
+}
+
+.Prox-list-wrap .add-list .add-list-text {
+  margin-left: 4px;
+  color: #31343F;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.Prox-list-wrap .Prox-list-item-wrap {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 8px;
+  border-radius: 8px;
+}
+
+.Prox-list-wrap .Prox-list-item-wrap:hover {
+  background-color: #F8F8F8;
+}
+
+.Prox-list-item-space .ant-space-item .ant-space-compact {
+  height: 28px;
+}
+
+.Prox-list-item-space .ant-space-item .ant-space-compact .ant-select-single {
+  height: 28px;
+}
+
+.Prox-list-wrap .Prox-list-item-wrap:hover .proxy-list-del-icon {
+  display: block;
+}
+
+.proxy-list-del-icon {
+  display: none;
+  cursor: pointer;
+  padding: 4px;
+}
+
+.proxy-list-del-icon:hover {
+  background: #F0F1F3;
+}
