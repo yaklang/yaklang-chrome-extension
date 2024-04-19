@@ -1,93 +1,307 @@
-import React, {useEffect, useState} from "react";
-import {Button, Card, Form, Input, InputNumber, Select, Space} from "antd";
-import {wsc} from "../network/chrome";
+import React, { useEffect, useState } from "react";
+import { Space, Select, Input, Switch } from "antd";
+import { PlusSmIcon, TrashIcon } from "@assets/icon/icon";
+import { wsc } from "@network/chrome";
+import "./Proxifier.css";
 
-export interface ProxifierProp {
-
-}
-
-const {Compact} = Space;
-
+type Scheme = "http" | "socks5";
 interface ProxyConfig {
-    scheme: "http" | "socks5";
-    host: string;
-    port: number;
+  id: string;
+  scheme: Scheme;
+  host: string;
+  port: string;
+  hostStatus: "error" | "";
+  portStatus: "error" | "";
+  open: boolean;
+  proxy: string;
 }
 
-export const Proxifier: React.FC<ProxifierProp> = (props) => {
-    const [config, setConfig] = useState<ProxyConfig>({
-        scheme: "http",
-        host: "127.0.0.1",
-        port: 8083
-    });
-    const [init, setInit] = useState(false);
-    const [proxyEnable, setProxyEnable] = useState(false);
-    const [currentProxy, setCurrentProxy] = useState("");
+export interface ProxifierProps {}
+export const Proxifier: React.FC<ProxifierProps> = () => {
+  const [proxyList, setProxyList] = useState<ProxyConfig[]>(() => {
+    const storageProxyList = localStorage.getItem("yakit-proxy-list") || "[]";
+    return JSON.parse(storageProxyList);
+  });
 
-    useEffect(() => {
-        if (init) {
-            return
+  useEffect(() => {
+    localStorage.setItem("yakit-proxy-list", JSON.stringify(proxyList));
+  }, [proxyList]);
+
+  const addNewProxyListItem = (
+    scheme: Scheme,
+    host: string,
+    port: string,
+    open: boolean,
+    proxy: string
+  ) => {
+    const proxyItem: ProxyConfig = {
+      id: Math.random() + "",
+      scheme: scheme as Scheme,
+      host: host,
+      port: port,
+      hostStatus: "",
+      portStatus: "",
+      open: open,
+      proxy: proxy,
+    };
+    return proxyItem;
+  };
+
+  const parseUrl = (url: string) => {
+    const regex = /^(.*?):\/\/(.*?):(\d+)/;
+    const match = url.match(regex);
+    if (match) {
+      const scheme = match[1];
+      const host = match[2];
+      const port = match[3];
+      return {
+        scheme,
+        host,
+        port,
+      };
+    } else {
+      return null; // 不匹配格式
+    }
+  };
+
+  useEffect(() => {
+    wsc.updateProxyStatus();
+
+    wsc.onProxyStatusMessage((msg) => {
+      if (!msg.proxy || !msg.enable) {
+        if (proxyList.some((i) => i.open)) {
+          const copyProxyList = [...proxyList];
+          copyProxyList.forEach((i) => {
+            i.open = false;
+          });
+          setProxyList(copyProxyList);
         }
+        return;
+      }
 
-        wsc.onProxyStatusMessage(msg => {
-            if (msg['proxy'] === undefined || msg['enable'] === undefined) {
-                return
+      if (msg.proxy && msg.enable) {
+        const copyProxyList = [...proxyList];
+        let newProxyItem: ProxyConfig = undefined;
+        if (!copyProxyList.length) {
+          const urlObj = parseUrl(msg.proxy);
+          if (urlObj) {
+            newProxyItem = addNewProxyListItem(
+              urlObj.scheme as Scheme,
+              urlObj.host,
+              urlObj.port,
+              true,
+              msg.proxy
+            );
+          }
+        } else {
+          const proxyExist = copyProxyList.some((i) => i.proxy === msg.proxy);
+          if (proxyExist) {
+            const proxyOpen = copyProxyList.some(
+              (i) => i.open && i.proxy === msg.proxy
+            );
+            if (!proxyOpen) {
+              copyProxyList.forEach((i) => {
+                i.open = false;
+              });
+              for (let i = 0; i < copyProxyList.length; i++) {
+                if (copyProxyList[i].proxy === msg.proxy) {
+                  copyProxyList[i].open = true;
+                  break;
+                }
+              }
             }
-
-            setInit(true)
-            setProxyEnable(msg.enable)
-            setCurrentProxy(msg.proxy)
-        })
-    }, [init])
-
-    // proxy
-    useEffect(() => {
-        const update = () => {
-            wsc.updateProxyStatus()
+          } else {
+            copyProxyList.forEach((i) => {
+              i.open = false;
+            });
+            const urlObj = parseUrl(msg.proxy);
+            if (urlObj) {
+              newProxyItem = addNewProxyListItem(
+                urlObj.scheme as Scheme,
+                urlObj.host,
+                urlObj.port,
+                true,
+                msg.proxy
+              );
+            }
+          }
         }
-        update()
-        const id = setInterval(update, 500)
-        return () => {
-            clearInterval(id)
-        }
-    }, [])
 
-    return <Card title={`Proxy Set: ${proxyEnable ? currentProxy : "Non-Config"}`} size={"small"} extra={<>{
-        proxyEnable ? <Button size={"small"} onClick={() => {
-            wsc.clearproxy()
-        }}>停用</Button> : undefined
-    }</>}>
-        <Form size={"small"} onSubmitCapture={e => {
-            e.preventDefault()
-            setInit(false)
-            wsc.setproxy(config.scheme, config.host, config.port)
-        }} disabled={!init || proxyEnable}>
-            <Form.Item label={"Proxy Setting"}>
-                <Compact>
-                    <Select
-                        style={{width: 86}}
-                        value={config.scheme}
-                        onChange={e => (setConfig({...config, scheme: e}))}
-                    >
-                        <Select.Option value={"http"}>HTTP</Select.Option>
-                        <Select.Option value={"socks5"}>Socks5</Select.Option>
-                    </Select>
-                    <Input
-                        style={{width: 100}}
-                        placeholder={"ProxyHost"}
-                        value={config.host}
-                        onChange={e => (setConfig({...config, host: e.target.value}))}/>
-                    <InputNumber
-                        style={{width: 65}}
-                        placeholder={"Port"}
-                        value={config.port}
-                        onChange={e => (setConfig({...config, port: e}))}
-                    />
-                </Compact>
-            </Form.Item>
-            <Form.Item>
-                <Button type={"primary"} htmlType={"submit"} loading={!init}>Enable Proxy</Button>
-            </Form.Item>
-        </Form>
-    </Card>
+        if (newProxyItem) {
+          copyProxyList.unshift(newProxyItem);
+        }
+        setProxyList(copyProxyList);
+      }
+    });
+  }, []);
+
+  const hostOnchange = (value: string, id: string) => {
+    const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+    const domainPattern = /^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    const copyProxyList = structuredClone(proxyList);
+    if (value === "" || ipPattern.test(value) || domainPattern.test(value)) {
+      copyProxyList.forEach((i) => {
+        if (i.id === id) {
+          i.hostStatus = "";
+          i.host = value;
+          i.proxy = i.scheme + "://" + value + ":" + i.port;
+        }
+      });
+    } else {
+      copyProxyList.forEach((i) => {
+        if (i.id === id) {
+          i.hostStatus = "error";
+          i.host = value;
+          i.proxy = i.scheme + "://" + value + ":" + i.port;
+        }
+      });
+    }
+    setProxyList(copyProxyList);
+  };
+
+  const portOnchange = (value: string, id: string) => {
+    const portNumber = parseInt(value, 10);
+    const copyProxyList = structuredClone(proxyList);
+    if (
+      value === "" ||
+      (/^\d+$/.test(value) && portNumber >= 0 && portNumber <= 65535)
+    ) {
+      copyProxyList.forEach((i) => {
+        if (i.id === id) {
+          i.portStatus = "";
+          const port = value === "" ? "" : portNumber + "";
+          i.port = port;
+          i.proxy = i.scheme + "://" + i.host + ":" + port;
+        }
+      });
+    } else {
+      copyProxyList.forEach((i) => {
+        if (i.id === id) {
+          i.portStatus = "error";
+          i.port = value;
+          i.proxy = i.scheme + "://" + i.host + ":" + value;
+        }
+      });
+    }
+    setProxyList(copyProxyList);
+  };
+
+  return (
+    <div className="Prox">
+      <div className="Prox-title-wrap">
+        <div className="Prox-title-wrap-left">
+          <span className="prox-title">设置代理</span>
+          <span className="prox-number">{proxyList.length}</span>
+        </div>
+        <div
+          className="Prox-title-wrap-right"
+          onClick={() => {
+            setProxyList([
+              ...proxyList,
+              addNewProxyListItem("http", "", "", false, "http://"),
+            ]);
+          }}
+        >
+          <span className="Prox-add-text">添加</span>
+          <PlusSmIcon className="Prox-add-icon" />
+        </div>
+      </div>
+      <div className="Prox-list-wrap">
+        {proxyList.length ? (
+          proxyList.map((item) => (
+            <div className="Prox-list-item-wrap" key={item.id}>
+              <Space className="Prox-list-item-space">
+                <Space.Compact>
+                  <Select
+                    value={item.scheme}
+                    style={{ width: 88 }}
+                    disabled={item.open}
+                    onChange={(value, option) => {
+                      const copyProxyList = structuredClone(proxyList);
+                      copyProxyList.forEach((i) => {
+                        if (i.id === item.id) {
+                          i.scheme = value;
+                          i.proxy = value + "://" + i.host + ":" + i.port;
+                        }
+                      });
+                      setProxyList(copyProxyList);
+                    }}
+                  >
+                    <Select.Option value="http">HTTP</Select.Option>
+                    <Select.Option value="socks5">Socks5</Select.Option>
+                  </Select>
+                  <Input
+                    value={item.host}
+                    style={{ width: 136 }}
+                    disabled={item.open}
+                    status={item.hostStatus}
+                    onChange={(e) => hostOnchange(e.target.value, item.id)}
+                  />
+                  <Input
+                    value={item.port}
+                    style={{ width: 64 }}
+                    disabled={item.open}
+                    status={item.portStatus}
+                    onChange={(e) => portOnchange(e.target.value, item.id)}
+                  />
+                </Space.Compact>
+              </Space>
+              {!item.open && (
+                <TrashIcon
+                  className="proxy-list-del-icon"
+                  onClick={() => {
+                    setProxyList(proxyList.filter((i) => i.id !== item.id));
+                  }}
+                />
+              )}
+              <Switch
+                checkedChildren="启"
+                unCheckedChildren="停"
+                value={item.open}
+                disabled={
+                  item.hostStatus === "error" ||
+                  item.portStatus === "error" ||
+                  item.host === "" ||
+                  item.port === ""
+                }
+                onChange={(checked: boolean) => {
+                  wsc.clearproxy();
+                  const copyProxyList = structuredClone(proxyList);
+                  copyProxyList.forEach((i) => {
+                    if (i.id === item.id) {
+                      i.open = checked;
+                      if (checked) {
+                        wsc.setproxy(item.scheme, item.host, Number(item.port));
+                      }
+                    } else {
+                      i.open = false;
+                    }
+                  });
+                  setProxyList(copyProxyList);
+                }}
+              />
+            </div>
+          ))
+        ) : (
+          <div
+            className="add-list"
+            onClick={() => {
+              setProxyList([
+                addNewProxyListItem(
+                  "http",
+                  "127.0.0.1",
+                  "8083",
+                  false,
+                  "http://127.0.0.1:8083"
+                ),
+              ]);
+            }}
+          >
+            <PlusSmIcon className="add-list-icon" />
+            <span className="add-list-text">添加</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
