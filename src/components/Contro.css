@@ -56,6 +56,18 @@
   padding: 4px;
 }
 
+.icon-p svg {
+  color: #85899E;
+}
+
 .Contro-cont span.anticon:hover {
   background: #F0F1F3;
+}
+
+.grey-icon svg {
+  color: #85899E;
+}
+
+.icon-active:active svg {
+  color: #F28B44;
 }

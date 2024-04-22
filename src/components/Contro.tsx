@@ -98,7 +98,7 @@ export const Contro: React.FC<ControProps> = () => {
                 />
                 <div className="Contro-handle-icon">
                   <XIcon
-                    className="icon-p"
+                    className="grey-icon icon-p icon-active"
                     onClick={() => {
                       setIsEdit(false);
                     }}
@@ -132,7 +132,7 @@ export const Contro: React.FC<ControProps> = () => {
                 <div className="Contro-handle-icon">
                   <Tooltip title="修改监听端口">
                     <PencilAltIcon
-                      className="icon-p"
+                      className="grey-icon icon-p icon-active"
                       onClick={() => {
                         setIsEdit(true);
                         setEnginePortTemp(enginePort);
@@ -148,6 +148,7 @@ export const Contro: React.FC<ControProps> = () => {
                   {failConnected && (
                     <Tooltip title="重新连接">
                       <RefreshIcon
+                        className="grey-icon icon-active"
                         onClick={() => {
                           if (enginePort) {
                             wsc.connect(Number(enginePort));
