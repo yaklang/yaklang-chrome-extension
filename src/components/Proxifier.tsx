@@ -68,7 +68,10 @@ export const Proxifier: React.FC<ProxifierProps> = () => {
     wsc.updateProxyStatus();
 
     wsc.onProxyStatusMessage((msg) => {
-      if (!msg.proxy || !msg.enable) {
+      if (msg.proxy === undefined || msg.enable === undefined) {
+        return;
+      }
+      if (msg.proxy === "" || msg.enable === false) {
         if (proxyList.some((i) => i.open)) {
           const copyProxyList = [...proxyList];
           copyProxyList.forEach((i) => {

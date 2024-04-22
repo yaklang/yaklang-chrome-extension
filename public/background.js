@@ -44,6 +44,7 @@ console.info("Chrome Extenstion Background is loaded")
 let proxyHost = "";
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+    console.log(msg);
     if (msg.action === "connect") {
         console.info("Start to connect websocket")
         const host = msg['host'] || "127.0.0.1"
