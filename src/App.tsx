@@ -1,9 +1,9 @@
 import React from "react";
 import "./App.css";
 import { ConfigProvider } from "antd";
-// import { Contro } from "@components/Contro";
+import { Contro } from "@components/Contro";
 import { Proxifier } from "@components/Proxifier";
-// import { Controller } from "./components/Controller";
+import { Controller } from "./components/Controller";
 
 function App() {
   return (
@@ -15,9 +15,9 @@ function App() {
       }}
     >
       <div className="App">
-        {/* <Contro /> */}
-        {/* <Controller/> */}
+        <Contro />
         <Proxifier/>
+        {/* <Controller/> */}
       </div>
     </ConfigProvider>
   );
