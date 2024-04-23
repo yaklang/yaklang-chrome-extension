@@ -8,7 +8,6 @@ import {
   RefreshIcon,
   XIcon,
 } from "@assets/icon/icon";
-import { useUpdateEffect } from "ahooks";
 import { wsc } from "@network/chrome";
 import "./Contro.css";
 
@@ -16,55 +15,49 @@ interface ControProps {}
 export const Contro: React.FC<ControProps> = () => {
   const [isEdit, setIsEdit] = useState<boolean>(false);
   const [connected, setConnected] = useState(false);
-  const [init, setInit] = React.useState(false);
   const [autoFindFailedReason, setAutoFindFailedReason] = useState<string>("");
   const [enginePort, setEnginePort] = useState<string>("");
   const [enginePortTemp, setEnginePortTemp] = useState<string>(enginePort);
 
   useEffect(() => {
-    const updateStatus = () => {
-      wsc.updateWSCStatus();
-    };
-    updateStatus();
-    const id = setInterval(updateStatus, 500);
+    findPort(11212, 11222);
+  }, []);
+  const findPort = (port: number, max: number) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    ws.onclose = (e: CloseEvent) => {
+      if (e.reason !== `FoundYakitWebSocketController` && port + 1 <= max) {
+        setTimeout(() => findPort(port + 1, max), 200);
+      }
 
+      if (port + 1 > max) {
+        setConnected(false);
+        setEnginePort("");
+        setAutoFindFailedReason("Cannot found Yakit");
+      }
+    };
+    ws.onopen = () => {
+      setConnected(true);
+      setEnginePort(port + "");
+      setAutoFindFailedReason("");
+      ws.close(1000, "FoundYakitWebSocketController");
+      connectPort(port);
+    };
+  };
+
+  const connectPort = (port: number) => {
+    wsc.connect(port);
     wsc.onWSCMessage((req: { connected: boolean }) => {
       if (req["connected"] === undefined) {
         return;
       }
       setConnected(req.connected);
-      setInit(true);
+      if (req.connected === false) {
+        setAutoFindFailedReason("Yakit WebSocket Controller Port is not right");
+      } else {
+        setAutoFindFailedReason("");
+      }
     });
-    return () => {
-      clearInterval(id);
-    };
-  }, []);
-
-  const findPort = (port: number, max: number) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-    ws.onclose = (e: CloseEvent) => {
-      if (e.reason !== `FoundYakitWebSocketController` && port + 1 <= max) {
-        setTimeout(() => findPort(port + 1, max), 300);
-      }
-
-      if (port + 1 > max) {
-        setAutoFindFailedReason(
-          "Cannot found Yakit or Yakit WebSocket Controller Port is not right"
-        );
-      }
-    };
-    ws.onopen = () => {
-      setEnginePort(port + "");
-      ws.close(1000, "FoundYakitWebSocketController");
-    };
   };
-
-  useUpdateEffect(() => {
-    if (!init || connected) {
-      return;
-    }
-    findPort(11212, 11222);
-  }, [connected, init]);
 
   const safeConnected = useMemo(() => {
     return connected && enginePort;
@@ -109,7 +102,7 @@ export const Contro: React.FC<ControProps> = () => {
                       if (enginePortTemp) {
                         setIsEdit(false);
                         setEnginePort(enginePortTemp);
-                        wsc.connect(Number(enginePortTemp));
+                        connectPort(Number(enginePortTemp));
                       }
                     }}
                   />
@@ -151,7 +144,7 @@ export const Contro: React.FC<ControProps> = () => {
                         className="grey-icon icon-active"
                         onClick={() => {
                           if (enginePort) {
-                            wsc.connect(Number(enginePort));
+                            connectPort(Number(enginePort));
                           } else {
                             findPort(11212, 11222);
                           }

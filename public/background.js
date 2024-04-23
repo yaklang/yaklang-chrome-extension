@@ -3,10 +3,10 @@ const connectWebsocket = url => {
     disconnectWebsocket()
     socket = new WebSocket(url);
     socket.onopen = () => {
-        chrome.runtime.sendMessage({status: "connected"})
+        chrome.runtime.sendMessage({connected: true})
     }
     socket.onclose = () => {
-        chrome.runtime.sendMessage({status: "disconnected"})
+        chrome.runtime.sendMessage({connected: false})
     }
 }
 
@@ -44,7 +44,6 @@ console.info("Chrome Extenstion Background is loaded")
 let proxyHost = "";
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-    console.log(msg);
     if (msg.action === "connect") {
         console.info("Start to connect websocket")
         const host = msg['host'] || "127.0.0.1"
@@ -52,12 +51,6 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         connectWebsocket(`ws://${host}:${port}/?token=${"a"}`)
     } else if (msg.action === 'disconnect') {
         disconnectWebsocket()
-    } else if (msg.action === "status") {
-        if (socket) {
-            chrome.runtime.sendMessage({connected: true})
-        } else {
-            chrome.runtime.sendMessage({connected: false})
-        }
     } else if (msg.action === 'setproxy') {
         chrome.proxy.settings.set({
             value: {
