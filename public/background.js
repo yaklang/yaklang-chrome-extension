@@ -3,10 +3,10 @@ const connectWebsocket = url => {
     disconnectWebsocket()
     socket = new WebSocket(url);
     socket.onopen = () => {
-        chrome.runtime.sendMessage({connected: true})
+        chrome.runtime.sendMessage({ connected: true })
     }
     socket.onclose = () => {
-        chrome.runtime.sendMessage({connected: false})
+        chrome.runtime.sendMessage({ connected: false })
     }
 }
 
@@ -41,8 +41,6 @@ setInterval(heartbeat, 3000)
 
 console.info("Chrome Extenstion Background is loaded")
 
-let proxyHost = "";
-
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     if (msg.action === "connect") {
         console.info("Start to connect websocket")
@@ -65,15 +63,17 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             },
             scope: 'regular',
         })
-        proxyHost = `${msg.scheme}://${msg.host}:${msg.port}`
+
     } else if (msg.action === 'clearproxy') {
         chrome.proxy.settings.clear({})
-        proxyHost = ""
     } else if (msg.action === 'proxystatus') {
-        if (proxyHost !== '') {
-            chrome.runtime.sendMessage({enable: !!proxyHost, proxy: proxyHost})
-        } else {
-            chrome.runtime.sendMessage({enable: false, proxy: ""})
-        }
+        chrome.proxy.settings.get({}, function (details) {
+            if (details.value && details.value.mode === "fixed_servers") {
+                let proxyConfig = details.value.rules.singleProxy;
+                chrome.runtime.sendMessage({ enable: true, proxy: `${proxyConfig.scheme}://${proxyConfig.host}:${proxyConfig.port}` })
+            } else {
+                chrome.runtime.sendMessage({ enable: false, proxy: "" })
+            }
+        });
     }
 })
