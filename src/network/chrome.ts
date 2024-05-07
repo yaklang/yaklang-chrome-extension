@@ -1,9 +1,18 @@
 import {chrome} from "./chromeapi";
 
+enum ActionType {
+    CONNECT = 'connect',
+    DISCONNECT = 'disconnect',
+    STATUS = 'status',
+    PROXYSTATUS = 'proxystatus',
+    SETPROXY = 'setproxy',
+    CLEARPROXY = 'clearproxy'
+}
+
 export namespace wsc {
     export function connect(port: number, host?: string) {
         chrome.runtime.sendMessage({
-            action: 'connect',
+            action: ActionType.CONNECT,
             host: host || '127.0.0.1',
             port: port,
         });
@@ -11,19 +20,19 @@ export namespace wsc {
 
     export function disconnect() {
         chrome.runtime.sendMessage({
-            action: 'disconnect',
+            action: ActionType.DISCONNECT,
         });
     }
 
     export function updateWSCStatus() {
         chrome.runtime.sendMessage({
-            action: 'status',
+            action: ActionType.STATUS,
         });
     }
 
     export function updateProxyStatus() {
         chrome.runtime.sendMessage({
-            action: 'proxystatus',
+            action: ActionType.PROXYSTATUS,
         });
     }
 
@@ -36,11 +45,11 @@ export namespace wsc {
     }
 
     export function setproxy(scheme: string, host: string, port: number) {
-        chrome.runtime.sendMessage({action: "setproxy", scheme, host, port})
+        chrome.runtime.sendMessage({action: ActionType.SETPROXY, scheme, host, port})
     }
 
     export function clearproxy() {
-        chrome.runtime.sendMessage({action: 'clearproxy'})
+        chrome.runtime.sendMessage({action: ActionType.CLEARPROXY})
     }
 
 
