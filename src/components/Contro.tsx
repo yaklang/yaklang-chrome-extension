@@ -10,6 +10,7 @@ import {
 } from "@assets/icon/icon";
 import { wsc } from "@network/chrome";
 import "./Contro.css";
+import {ActionType} from "../../public/connect";
 
 interface ControProps {}
 export const Contro: React.FC<ControProps> = () => {
@@ -46,15 +47,18 @@ export const Contro: React.FC<ControProps> = () => {
 
   const connectPort = (port: number) => {
     wsc.connect(port);
-    wsc.onWSCMessage((req: { connected: boolean }) => {
-      if (req["connected"] === undefined) {
-        return;
-      }
-      setConnected(req.connected);
-      if (req.connected === false) {
-        setAutoFindFailedReason("Yakit WebSocket Controller Port is not right");
-      } else {
-        setAutoFindFailedReason("");
+    wsc.onWSCMessage((message) => {
+      if (message.action === ActionType.STATUS) {
+        console.log("onWSCMessage", message)
+        if (message.connected === undefined) {
+          return;
+        }
+        setConnected(message.connected);
+        if (message.connected === false) {
+          setAutoFindFailedReason("Yakit WebSocket Controller Port is not right");
+        } else {
+          setAutoFindFailedReason("");
+        }
       }
     });
   };
