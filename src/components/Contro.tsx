@@ -10,7 +10,7 @@ import {
 } from "@assets/icon/icon";
 import { wsc } from "@network/chrome";
 import "./Contro.css";
-import {ActionType} from "../../public/connect";
+import { ActionType } from "../../public/connect";
 
 interface ControProps {}
 export const Contro: React.FC<ControProps> = () => {
@@ -21,8 +21,35 @@ export const Contro: React.FC<ControProps> = () => {
   const [enginePortTemp, setEnginePortTemp] = useState<string>(enginePort);
 
   useEffect(() => {
-    findPort(11212, 11222);
+    const yakitConnectInfo = localStorage.getItem("yakit-connect");
+    if (!yakitConnectInfo) {
+      findPort(11212, 11222);
+    } else {
+      const { port, connected } = JSON.parse(yakitConnectInfo);
+      setConnected(connected);
+      setEnginePort(port + "");
+      setAutoFindFailedReason("");
+    }
+
+    wsc.onWSCMessage((message) => {
+      if (message.action === ActionType.STATUS) {
+        setConnected(message.connected);
+        if (message.connected === false) {
+          localStorage.setItem("yakit-connect", "");
+          setAutoFindFailedReason(
+            "Yakit WebSocket Controller Port is not right"
+          );
+        } else {
+          localStorage.setItem(
+            "yakit-connect",
+            JSON.stringify({ connected: true, port: message.port })
+          );
+          setAutoFindFailedReason("");
+        }
+      }
+    });
   }, []);
+
   const findPort = (port: number, max: number) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     ws.onclose = (e: CloseEvent) => {
@@ -34,6 +61,7 @@ export const Contro: React.FC<ControProps> = () => {
         setConnected(false);
         setEnginePort("");
         setAutoFindFailedReason("Cannot found Yakit");
+        localStorage.setItem("yakit-connect", "");
       }
     };
     ws.onopen = () => {
@@ -47,20 +75,6 @@ export const Contro: React.FC<ControProps> = () => {
 
   const connectPort = (port: number) => {
     wsc.connect(port);
-    wsc.onWSCMessage((message) => {
-      if (message.action === ActionType.STATUS) {
-        console.log("onWSCMessage", message)
-        if (message.connected === undefined) {
-          return;
-        }
-        setConnected(message.connected);
-        if (message.connected === false) {
-          setAutoFindFailedReason("Yakit WebSocket Controller Port is not right");
-        } else {
-          setAutoFindFailedReason("");
-        }
-      }
-    });
   };
 
   const safeConnected = useMemo(() => {

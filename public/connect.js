@@ -13,12 +13,12 @@ export class WebSocketManager {
         this.intervalId = null;
     }
 
-    connectWebsocket(url) {
+    connectWebsocket(url, port) {
         this.disconnectWebsocket();
         this.socket = new WebSocket(url);
 
         this.socket.onopen = () => {
-            chrome.runtime.sendMessage({action: ActionType.STATUS, connected: true});
+            chrome.runtime.sendMessage({action: ActionType.STATUS, connected: true, port: port});
             this.startHeartbeat();
         };
 
@@ -27,7 +27,7 @@ export class WebSocketManager {
         };
 
         this.socket.onclose = () => {
-            chrome.runtime.sendMessage({action: ActionType.STATUS, connected: false});
+            chrome.runtime.sendMessage({action: ActionType.STATUS, connected: false, port: port});
         };
 
         this.socket.onerror = (error) => {
