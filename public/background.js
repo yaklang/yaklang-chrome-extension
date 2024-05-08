@@ -52,8 +52,18 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     }
 })
 
-chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(function (tab) {
-        console.log("Tab ID",tab.id); // 输出每个标签页的ID
+
+chrome.runtime.onInstalled.addListener(() => {
+    chrome.scripting.registerContentScripts([{
+        id: 'myScript',
+        matches: ['<all_urls>'],  // 根据需要调整匹配模式
+        js: ['inject.js'],
+        runAt: 'document_start'
+    }], (result) => {
+        if (chrome.runtime.lastError) {
+            console.error(`Error registering script: ${chrome.runtime.lastError.message}`);
+        } else {
+            console.log('Script registered', result);
+        }
     });
 });
