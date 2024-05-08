@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Divider, Tooltip, Input } from "antd";
 import classNames from "classnames";
 import {
@@ -19,6 +19,11 @@ export const Contro: React.FC<ControProps> = () => {
   const [autoFindFailedReason, setAutoFindFailedReason] = useState<string>("");
   const [enginePort, setEnginePort] = useState<string>("");
   const [enginePortTemp, setEnginePortTemp] = useState<string>(enginePort);
+  const enginePortRef = useRef<string>(enginePort);
+
+  useEffect(() => {
+    enginePortRef.current = enginePort;
+  }, [enginePort]);
 
   useEffect(() => {
     const yakitConnectInfo = localStorage.getItem("yakit-connect");
@@ -36,9 +41,7 @@ export const Contro: React.FC<ControProps> = () => {
         setConnected(message.connected);
         if (message.connected === false) {
           localStorage.setItem("yakit-connect", "");
-          setAutoFindFailedReason(
-            "Yakit WebSocket Controller Connect Fail"
-          );
+          setAutoFindFailedReason("Yakit WebSocket Controller Connect Fail");
         } else {
           localStorage.setItem(
             "yakit-connect",
@@ -53,6 +56,7 @@ export const Contro: React.FC<ControProps> = () => {
   const findPort = (port: number, max: number) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     ws.onclose = (e: CloseEvent) => {
+      if (enginePortRef.current) return
       if (e.reason !== `FoundYakitWebSocketController` && port + 1 <= max) {
         setTimeout(() => findPort(port + 1, max), 200);
       }
