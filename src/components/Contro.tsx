@@ -37,7 +37,7 @@ export const Contro: React.FC<ControProps> = () => {
         if (message.connected === false) {
           localStorage.setItem("yakit-connect", "");
           setAutoFindFailedReason(
-            "Yakit WebSocket Controller Port is not right"
+            "Yakit WebSocket Controller Connect Fail"
           );
         } else {
           localStorage.setItem(
@@ -67,13 +67,13 @@ export const Contro: React.FC<ControProps> = () => {
     ws.onopen = () => {
       setConnected(true);
       setEnginePort(port + "");
-      setAutoFindFailedReason("");
       ws.close(1000, "FoundYakitWebSocketController");
       connectPort(port);
     };
   };
 
   const connectPort = (port: number) => {
+    setAutoFindFailedReason("");
     wsc.connect(port);
   };
 
