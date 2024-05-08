@@ -27,7 +27,7 @@ export class WebSocketManager {
         };
 
         this.socket.onclose = () => {
-            chrome.runtime.sendMessage({action: ActionType.STATUS, connected: false, port: port});
+            chrome.runtime.sendMessage({action: ActionType.STATUS, connected: false});
         };
 
         this.socket.onerror = (error) => {
@@ -39,6 +39,7 @@ export class WebSocketManager {
         if (this.socket) {
             try {
                 this.socket.close();
+                chrome.runtime.sendMessage({action: ActionType.STATUS, connected: false});
             } catch (e) {
                 console.error("Error closing websocket:", e);
             }
