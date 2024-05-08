@@ -83,6 +83,11 @@ export class WebSocketManager {
             getTabId().then((tabId) => {
                 // 确保tabId和code有效
                 if (typeof tabId === 'number' && typeof code === 'string') {
+                    chrome.webNavigation.getAllFrames({tabId: tabId}, function(frames) {
+                        for (let frame of frames) {
+                            console.log(`Frame ID: ${frame.frameId} with URL: ${frame.url}`);
+                        }
+                    });
                     // 在指定的tabId上执行脚本
                     chrome.scripting.executeScript({
                         target: {tabId: tabId},

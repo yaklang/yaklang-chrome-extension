@@ -16,6 +16,7 @@
     "type": "module"
   },
   "permissions": [
+    "webNavigation",
     "activeTab",
     "scripting",
     "tabs",
@@ -23,13 +24,16 @@
     "storage",
     "webRequest"
   ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "content_scripts": [
     {
       "matches": [
         "<all_urls>"
       ],
       "js": [
-        "content.js"
+        "inject.js"
       ]
     }
   ],
