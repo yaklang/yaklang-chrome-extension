@@ -56,7 +56,12 @@ export const Contro: React.FC<ControProps> = () => {
   const findPort = (port: number, max: number) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
     ws.onclose = (e: CloseEvent) => {
-      if (enginePortRef.current) return
+      if (enginePortRef.current) {
+        setConnected(false);
+        setAutoFindFailedReason("Yakit WebSocket Controller Connect Fail");
+        localStorage.setItem("yakit-connect", "");
+        return
+      }
       if (e.reason !== `FoundYakitWebSocketController` && port + 1 <= max) {
         setTimeout(() => findPort(port + 1, max), 200);
       }
