@@ -60,7 +60,7 @@ export const Contro: React.FC<ControProps> = () => {
         setConnected(false);
         setAutoFindFailedReason("Yakit WebSocket Controller Connect Fail");
         localStorage.setItem("yakit-connect", "");
-        return
+        return;
       }
       if (e.reason !== `FoundYakitWebSocketController` && port + 1 <= max) {
         setTimeout(() => findPort(port + 1, max), 200);
@@ -161,23 +161,19 @@ export const Contro: React.FC<ControProps> = () => {
                   </Tooltip>
                   <Divider type="vertical" style={{ height: 16 }} />
                   {safeConnected && (
-                    <Tooltip title="断开连接">
-                      <ExitIcon onClick={() => wsc.disconnect()} />
-                    </Tooltip>
+                    <ExitIcon onClick={() => wsc.disconnect()} />
                   )}
                   {failConnected && (
-                    <Tooltip title="重新连接">
-                      <RefreshIcon
-                        className="grey-icon icon-active"
-                        onClick={() => {
-                          if (enginePort) {
-                            connectPort(Number(enginePort));
-                          } else {
-                            findPort(11212, 11222);
-                          }
-                        }}
-                      />
-                    </Tooltip>
+                    <RefreshIcon
+                      className="grey-icon icon-active"
+                      onClick={() => {
+                        if (enginePort) {
+                          connectPort(Number(enginePort));
+                        } else {
+                          findPort(11212, 11222);
+                        }
+                      }}
+                    />
                   )}
                 </div>
               </>
