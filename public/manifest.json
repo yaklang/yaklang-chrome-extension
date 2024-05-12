@@ -15,6 +15,11 @@
     "service_worker": "background.js",
     "type": "module"
   },
+  "sandbox": {
+    "pages": [
+      "sandbox.html"
+    ]
+  },
   "permissions": [
     "webNavigation",
     "activeTab",
@@ -27,14 +32,12 @@
   "host_permissions": [
     "<all_urls>"
   ],
-  "content_scripts": [
+
+  "web_accessible_resources": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "content.js"
-      ]
+      "resources": ["content.js"],
+      "matches": ["<all_urls>"],
+      "use_dynamic_url": true
     }
   ],
   "icons": {

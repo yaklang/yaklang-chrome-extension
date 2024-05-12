@@ -1,5 +1,3 @@
-import {chrome} from "./chromeapi";
-
 enum ActionType {
     CONNECT = 'connect',
     DISCONNECT = 'disconnect',

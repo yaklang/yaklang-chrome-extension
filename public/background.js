@@ -1,4 +1,4 @@
-import {ActionType, WebSocketManager} from './connect.js';
+import {ActionType, WebSocketManager} from './socket.js';
 
 
 console.info("Chrome Extenstion Background is loaded")
@@ -49,21 +49,48 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                 }
             });
             break;
+        case ActionType.ECHO:
+            console.log("Echo ", msg.result)
     }
+
 })
 
-
-chrome.runtime.onInstalled.addListener(() => {
-    chrome.scripting.registerContentScripts([{
-        id: 'myScript',
-        matches: ['<all_urls>'],  // 根据需要调整匹配模式
-        js: ['inject.js'],
-        runAt: 'document_start'
-    }], (result) => {
-        if (chrome.runtime.lastError) {
-            console.error(`Error registering script: ${chrome.runtime.lastError.message}`);
+const pageFunction = (code) => {
+    chrome.runtime.sendMessage({code}, response => {
+        if (response && response.success) {
+            console.log('Result:', response.result);
         } else {
-            console.log('Script registered', result);
+            console.error('Error:', response.error);
         }
     });
-});
+}
+
+// chrome.runtime.onInstalled.addListener(() => {
+//     chrome.scripting.registerContentScripts([{
+//         id: 'myScript',
+//         matches: ['<all_urls>'],  // 根据需要调整匹配模式
+//         js: ['content2.js'],
+//         // world: 'MAIN',
+//         // runAt: 'document_start'
+//     }], (result) => {
+//         if (chrome.runtime.lastError) {
+//             console.error(`Error registering script: ${chrome.runtime.lastError.message}`);
+//         } else {
+//             console.log('Script registered', result);
+//         }
+//     });
+// });
+
+// chrome.runtime.onConnect.addListener(function (port) {
+//     console.assert(port.name === "content-script");
+//     port.onMessage.addListener(function (msg) {
+//         console.log("on connect", msg)
+//     });
+//     port.onDisconnect.addListener(function () {
+//         console.error("Disconnected from port.");
+//     });
+//     // port.postMessage({action: "TEST POST MESSAGE"});
+//
+// });
+
+
