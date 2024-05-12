@@ -1,6 +1,7 @@
 import React, {useEffect, useState} from "react";
 import {Button} from "antd";
 import TextArea from "antd/lib/input/TextArea";
+import {wsc} from "@network/chrome";
 
 interface EvalInTabProps {
 }
@@ -18,28 +19,28 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
             port.onDisconnect.addListener(function () {
                 console.error("Disconnected from port.");
             });
-            port.postMessage({ type: "TEST", fn_name: "Encrypt", args: inputData });
+            port.postMessage({type: "TEST", fn_name: "Encrypt", args: inputData});
         };
 
         chrome.runtime.onConnect.addListener(onConnectListener);
 
-        return () => {
-            chrome.runtime.onConnect.removeListener(onConnectListener);
-        };
+        // return () => {
+        //     chrome.runtime.onConnect.removeListener(onConnectListener);
+        // };
     }, [inputData]);
 
-    const handleClick = () => {
-
-
-        chrome.tabs.query({ active: true, lastFocusedWindow: true }, function (tabs) {
-            console.log(tabs[0].title);
+    const handleClick = async () => {
+        if (!isScriptInjected) {
             chrome.scripting.executeScript({
-                target: { tabId: tabs[0].id },
+                target: {tabId: await wsc.getTabId()},
                 files: ['inject.js'],
             }).then(injectResults => {
                 console.log(injectResults)
+                setIsScriptInjected(true);
             });
-        });
+        }
+        console.log("injected script")
+
     };
 
     const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {

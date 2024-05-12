@@ -6,14 +6,21 @@
  * @see    {@link http://stackoverflow.com/questions/20499994/access-window-variable-from-content-script}
  */
 function injectScript(file_path, tag) {
-    var node = document.getElementsByTagName(tag)[0];
+    const node = document.getElementsByTagName(tag)[0];
     if (!node) {
         console.error('The "' + tag + '" tag is not available in the document.');
         return;
     }
-    var script = document.createElement('script');
+    // 移除之前的脚本
+    const oldScript = document.getElementById('yakit-injected-script');
+    if (oldScript) {
+        node.removeChild(oldScript);
+    }
+    const script = document.createElement('script');
     script.setAttribute('type', 'text/javascript');
     script.setAttribute('src', file_path);
+    script.setAttribute('id', 'yakit-injected-script');
+
     node.appendChild(script);
 }
 
