@@ -50,5 +50,15 @@ export namespace wsc {
         chrome.runtime.sendMessage({action: ActionType.CLEARPROXY})
     }
 
-
+    export function getTabId() {
+        return new Promise<number>((resolve, reject) => {
+            chrome.tabs.query({ active: true, lastFocusedWindow: true }, function (tabs) {
+                if (tabs.length) {
+                    resolve(tabs[0].id);
+                } else {
+                    reject('No active tab found');
+                }
+            });
+        });
+    }
 }
