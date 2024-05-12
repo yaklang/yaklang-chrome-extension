@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Title</title>
+    <script src="./src/crypto-js.min.js"></script>
+</head>
+<script>
+    window.addEventListener('message', async function (event) {
+        try {
+            console.log("sandbox event", event)
+            if (!event.data[0]) {
+                throw new Error('格式化方法有问题');
+            }
+            const func = new Function('obj', event.data[0]);
+            event.source.window.postMessage(eval(event.data), event.origin);
+        } catch (e) {
+            console.error(e);
+            event.source.window.postMessage(eval(event.data), event.origin);
+        }
+
+    });
+</script>
+</html>

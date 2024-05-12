@@ -4,7 +4,9 @@ export const ActionType = {
     STATUS: 'status',
     PROXYSTATUS: 'proxystatus',
     SETPROXY: 'setproxy',
-    CLEARPROXY: 'clearproxy'
+    CLEARPROXY: 'clearproxy',
+    EVAL: 'eval',
+    ECHO: 'echo',
 }
 
 export class WebSocketManager {
@@ -78,34 +80,34 @@ export class WebSocketManager {
     handleMessage(message) {
         console.log("message", message)
         // 解析消息
-        try {
-            // 解析从WebSocket接收到的JSON数据
-            let code = message;
-            getTabId().then((tabId) => {
-                // 确保tabId和code有效
-                if (typeof tabId === 'number' && typeof code === 'string') {
-                    chrome.webNavigation.getAllFrames({tabId: tabId}, function(frames) {
-                        for (let frame of frames) {
-                            console.log(`Frame ID: ${frame.frameId} with URL: ${frame.url}`);
-                        }
-                    });
-                    // 在指定的tabId上执行脚本
-                    chrome.scripting.executeScript({
-                        target: {tabId: tabId},
-                        // function: getTitle,
-                        function: log,
-                        args: [code]
-                    }, (injectionResults) => {
-                        // 处理脚本执行的结果，如日志记录等
-                        console.log('Script executed:', injectionResults);
-                    });
-                } else {
-                    console.error('Received malformed message:', message);
-                }
-            });
-        } catch (err) {
-            console.error('Error parsing message from WebSocket:', err);
-        }
+        // try {
+        //     // 解析从WebSocket接收到的JSON数据
+        //     let code = message;
+        //     getTabId().then((tabId) => {
+        //         // 确保tabId和code有效
+        //         if (typeof tabId === 'number' && typeof code === 'string') {
+        //             chrome.webNavigation.getAllFrames({tabId: tabId}, function(frames) {
+        //                 for (let frame of frames) {
+        //                     console.log(`Frame ID: ${frame.frameId} with URL: ${frame.url}`);
+        //                 }
+        //             });
+        //             // 在指定的tabId上执行脚本
+        //             chrome.scripting.executeScript({
+        //                 target: {tabId: tabId},
+        //                 // function: getTitle,
+        //                 function: log,
+        //                 args: [code]
+        //             }, (injectionResults) => {
+        //                 // 处理脚本执行的结果，如日志记录等
+        //                 console.log('Script executed:', injectionResults);
+        //             });
+        //         } else {
+        //             console.error('Received malformed message:', message);
+        //         }
+        //     });
+        // } catch (err) {
+        //     console.error('Error parsing message from WebSocket:', err);
+        // }
     }
 }
 
@@ -117,9 +119,9 @@ function log(message) {
     return console.log(message);
 }
 
-function getTabId() {
+export const getTabId = () => {
     return new Promise((resolve, reject) => {
-        chrome.tabs.query({active: true, currentWindow: true}, (tabs) => {
+        chrome.tabs.query({active: true, lastFocusedWindow: true}, (tabs) => {
             if (tabs.length) {
                 resolve(tabs[0].id);
             } else {

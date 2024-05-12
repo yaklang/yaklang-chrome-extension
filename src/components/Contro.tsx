@@ -10,7 +10,7 @@ import {
 } from "@assets/icon/icon";
 import { wsc } from "@network/chrome";
 import "./Contro.css";
-import { ActionType } from "../../public/connect";
+import { ActionType } from "../../public/socket";
 
 interface ControProps {}
 export const Contro: React.FC<ControProps> = () => {
