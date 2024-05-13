@@ -9,7 +9,7 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
     "ahooks": "^3.7.10",
-    "antd": "^5.15.3",
+    "antd": "^5.17.0",
     "babel-jest": "^27.4.2",
     "babel-plugin-named-asset-import": "^0.3.8",
     "babel-preset-react-app": "^10.0.1",
