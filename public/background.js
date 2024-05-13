@@ -81,16 +81,15 @@ const pageFunction = (code) => {
 //     });
 // });
 
-// chrome.runtime.onConnect.addListener(function (port) {
-//     console.assert(port.name === "content-script");
-//     port.onMessage.addListener(function (msg) {
-//         console.log("on connect", msg)
-//     });
-//     port.onDisconnect.addListener(function () {
-//         console.error("Disconnected from port.");
-//     });
-//     // port.postMessage({action: "TEST POST MESSAGE"});
-//
-// });
+chrome.runtime.onConnect.addListener(function (port) {
+    console.assert(port.name === "content-to-ex");
+    port.onMessage.addListener(function (msg) {
+        console.log("[content-to-ex]", msg)
+    });
+    port.onDisconnect.addListener(function () {
+        console.error("[content-to-ex] Disconnected from port.");
+    });
+    // port.postMessage({action: "TEST POST MESSAGE"});
+});
 
 
