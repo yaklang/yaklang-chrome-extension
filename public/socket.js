@@ -2,14 +2,11 @@ export const ActionType = {
     CONNECT: 'connect',
     DISCONNECT: 'disconnect',
     STATUS: 'status',
-    PROXYSTATUS: 'proxystatus',
-    SETPROXY: 'setproxy',
-    CLEARPROXY: 'clearproxy',
-    INJECTSCRIPT: 'INJECT_SCRIPT',
-    SENDRESFROMPAGE: "SEND_RES_FROM_PAGE",
-    RESTOEVALINTAB: "RES_TO_EVALINTAB",
-    EVAL: 'eval',
-    ECHO: 'echo',
+    PROXY_STATUS: 'proxy_status',
+    SET_PROXY: 'set_proxy',
+    CLEAR_PROXY: 'clear_proxy',
+    INJECT_SCRIPT: 'yakit_inject_script',
+    TO_EXTENSION_PAGE: "yakit_to_extension_page",
 }
 
 export class WebSocketManager {
