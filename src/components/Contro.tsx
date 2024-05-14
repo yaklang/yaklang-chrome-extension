@@ -10,7 +10,6 @@ import {
 } from "@assets/icon/icon";
 import {wsc} from "@network/chrome";
 import "./Contro.css";
-import {ActionType} from "@network/chrome";
 
 interface ControProps {
 }
@@ -39,7 +38,7 @@ export const Contro: React.FC<ControProps> = () => {
         }
 
         wsc.onWSCMessage((message) => {
-            if (message.action === ActionType.STATUS) {
+            if (message.action === wsc.ActionType.STATUS) {
                 if (message.connected === false) {
                     handleConnectFail();
                 } else {

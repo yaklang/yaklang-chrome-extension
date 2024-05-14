@@ -2,7 +2,6 @@ import React, {useEffect, useState} from "react";
 import {Button, Input} from "antd";
 import TextArea from "antd/lib/input/TextArea";
 import {wsc} from "@network/chrome";
-import {ActionType} from "@network/chrome";
 
 interface EvalInTabProps {
 }
@@ -14,7 +13,7 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
 
     useEffect(() => {
         wsc.onWSCMessage((message) => {
-            if (message.action === ActionType.TO_EXTENSION_PAGE) {
+            if (message.action === wsc.ActionType.TO_EXTENSION_PAGE) {
                 console.log("res:", message.result);
                 alert("from content script: " + JSON.stringify(message.result));
             }
@@ -23,10 +22,10 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
 
     const handleClick = async () => {
         try {
-            const tabId = await wsc.getTabId();
+            const [tab] = await wsc.getTab();
             await chrome.runtime.sendMessage({
-                action: ActionType.INJECT_SCRIPT,
-                tabId: tabId,
+                action: wsc.ActionType.INJECT_SCRIPT,
+                tabId: tab.id,
                 value: {mode: "CONTENT_CALL_FUNCTION", fn_name: funcName, args: inputArgsData},
             });
         } catch (error) {
@@ -40,10 +39,10 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
 
     const handleEvalCodeClick = async () => {
         try {
-            const tabId = await wsc.getTabId();
+            const [tab] = await wsc.getTab();
             await chrome.runtime.sendMessage({
-                action: ActionType.INJECT_SCRIPT,
-                tabId: tabId,
+                action: wsc.ActionType.INJECT_SCRIPT,
+                tabId: tab.id,
                 value: {mode: "CONTENT_EVAL_CODE", code: code},
             });
         } catch (error) {
