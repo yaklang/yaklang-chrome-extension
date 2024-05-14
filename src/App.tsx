@@ -3,7 +3,6 @@ import "./App.css";
 import {ConfigProvider} from "antd";
 import {Contro} from "@components/Contro";
 import {Proxifier} from "@components/Proxifier";
-import {Controller} from "./components/Controller";
 import {Eval} from "@components/Eval";
 import {EvalInTab} from "@components/EvalInTab";
 
@@ -22,7 +21,6 @@ function App() {
 
                 <Eval/>
                 <EvalInTab/>
-                {/* <Controller/> */}
             </div>
         </ConfigProvider>
     );
