@@ -1,4 +1,4 @@
-import { ActionType, WebSocketManager } from './socket.js';
+import {ActionType, WebSocketManager} from './socket.js';
 
 
 console.info("Chrome Extenstion Background is loaded")
@@ -18,7 +18,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         case ActionType.DISCONNECT:
             websocketManager.disconnectWebsocket();
             break;
-        case ActionType.SETPROXY:
+        case ActionType.SET_PROXY:
             chrome.proxy.settings.set({
                 value: {
                     mode: "fixed_servers",
@@ -33,10 +33,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                 scope: 'regular',
             });
             break;
-        case ActionType.CLEARPROXY:
+        case ActionType.CLEAR_PROXY:
             chrome.proxy.settings.clear({})
             break;
-        case ActionType.PROXYSTATUS:
+        case ActionType.PROXY_STATUS:
             chrome.proxy.settings.get({}, function (details) {
                 if (details.value && details.value.mode === "fixed_servers") {
                     let proxyConfig = details.value.rules.singleProxy;
@@ -45,25 +45,26 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                         proxy: `${proxyConfig.scheme}://${proxyConfig.host}:${proxyConfig.port}`
                     })
                 } else {
-                    chrome.runtime.sendMessage({ enable: false, proxy: "" })
+                    chrome.runtime.sendMessage({enable: false, proxy: ""})
                 }
             });
             break;
-        case ActionType.INJECTSCRIPT:
+        case ActionType.INJECT_SCRIPT:
             chrome.scripting.executeScript({
-                target: { tabId: msg.tabId },
+                target: {tabId: msg.tabId},
                 files: ['content.js']
             }).then(() => {
-                chrome.tabs.sendMessage(msg.tabId, { type: 'INJECT_CODE', value: msg.value });
+                chrome.tabs.sendMessage(msg.tabId,
+                    {type: ActionType.INJECT_SCRIPT, value: msg.value}
+                ).then(response => {
+                    console.log("response", response)
+                    if (response && response.action === ActionType.TO_EXTENSION_PAGE) {
+                        chrome.runtime.sendMessage(response)
+                    }
+                })
             }).catch(err => {
                 console.error('Script injection failed:', err);
             });
-            break
-        case ActionType.SENDRESFROMPAGE:
-            chrome.runtime.sendMessage({
-                action: ActionType.RESTOEVALINTAB,
-                result: msg.result
-            })
             break
         case ActionType.ECHO:
             console.log("Echo ", msg.result)
@@ -72,7 +73,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 })
 
 const pageFunction = (code) => {
-    chrome.runtime.sendMessage({ code }, response => {
+    chrome.runtime.sendMessage({code}, response => {
         if (response && response.success) {
             console.log('Result:', response.result);
         } else {

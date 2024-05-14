@@ -3,7 +3,6 @@ import "./App.css";
 import {ConfigProvider} from "antd";
 import {Contro} from "@components/Contro";
 import {Proxifier} from "@components/Proxifier";
-import {Eval} from "@components/Eval";
 import {EvalInTab} from "@components/EvalInTab";
 
 function App() {
@@ -16,10 +15,9 @@ function App() {
             }}
         >
             <div className="App">
-                {/*<Contro/>*/}
-                {/*<Proxifier/>*/}
+                <Contro/>
+                <Proxifier/>
 
-                <Eval/>
                 <EvalInTab/>
             </div>
         </ConfigProvider>

@@ -1,10 +1,12 @@
-enum ActionType {
+export enum ActionType {
     CONNECT = 'connect',
     DISCONNECT = 'disconnect',
     STATUS = 'status',
-    PROXYSTATUS = 'proxystatus',
-    SETPROXY = 'setproxy',
-    CLEARPROXY = 'clearproxy'
+    PROXY_STATUS = 'proxy_status',
+    SET_PROXY = 'set_proxy',
+    CLEAR_PROXY = 'clear_proxy',
+    INJECT_SCRIPT = 'yakit_inject_script',
+    TO_EXTENSION_PAGE = "yakit_to_extension_page",
 }
 
 export namespace wsc {
@@ -30,7 +32,7 @@ export namespace wsc {
 
     export function updateProxyStatus() {
         chrome.runtime.sendMessage({
-            action: ActionType.PROXYSTATUS,
+            action: ActionType.PROXY_STATUS,
         });
     }
 
@@ -43,16 +45,16 @@ export namespace wsc {
     }
 
     export function setproxy(scheme: string, host: string, port: number) {
-        chrome.runtime.sendMessage({action: ActionType.SETPROXY, scheme, host, port})
+        chrome.runtime.sendMessage({action: ActionType.SET_PROXY, scheme, host, port})
     }
 
     export function clearproxy() {
-        chrome.runtime.sendMessage({action: ActionType.CLEARPROXY})
+        chrome.runtime.sendMessage({action: ActionType.CLEAR_PROXY})
     }
 
     export function getTabId() {
         return new Promise<number>((resolve, reject) => {
-            chrome.tabs.query({ active: true, lastFocusedWindow: true }, function (tabs) {
+            chrome.tabs.query({active: true, currentWindow: true}, function (tabs) {
                 if (tabs.length) {
                     resolve(tabs[0].id);
                 } else {

@@ -1,64 +1,75 @@
-import React, { useEffect, useState } from "react";
-import { Button } from "antd";
+import React, {useEffect, useState} from "react";
+import {Button, Input} from "antd";
 import TextArea from "antd/lib/input/TextArea";
-import { wsc } from "@network/chrome";
-import { ActionType } from "../../public/socket";
+import {wsc} from "@network/chrome";
+import {ActionType} from "@network/chrome";
 
-interface EvalInTabProps {}
+interface EvalInTabProps {
+}
 
 export const EvalInTab: React.FC<EvalInTabProps> = () => {
-  const [inputData, setInputData] = useState("");
+    const [funcName, setFuncName] = useState("");
+    const [inputArgsData, setInputArgsData] = useState("");
+    const [code, setCode] = useState("");
 
-  // useEffect(() => {
-  //     // const onConnectListener = (port: chrome.runtime.Port) => {
-  //     //     console.assert(port.name === "content-script");
-  //     //     port.onMessage.addListener(function (msg) {
-  //     //         console.log("on connect", msg)
-  //     //     });
-  //     //     port.onDisconnect.addListener(function () {
-  //     //         console.error("Disconnected from port.");
-  //     //     });
-  //     //     port.postMessage({type: "TEST", fn_name: "Encrypt", args: inputData});
-  //     // };
-  //     //
-  //     // chrome.runtime.onConnect.addListener(onConnectListener);
-  //
-  //     // return () => {
-  //     //     chrome.runtime.onConnect.removeListener(onConnectListener);
-  //     // };
-  // }, [inputData]);
+    useEffect(() => {
+        wsc.onWSCMessage((message) => {
+            if (message.action === ActionType.TO_EXTENSION_PAGE) {
+                console.log("res:", message.result);
+                alert("from content script: " + JSON.stringify(message.result));
+            }
+        });
+    }, []);
 
-  useEffect(() => {
-    wsc.onWSCMessage((message) => {
-      if (message.action === ActionType.RESTOEVALINTAB) {
-        console.log("res:", message.result);
-      }
-    });
-  }, []);
+    const handleClick = async () => {
+        try {
+            const tabId = await wsc.getTabId();
+            await chrome.runtime.sendMessage({
+                action: ActionType.INJECT_SCRIPT,
+                tabId: tabId,
+                value: {mode: "CONTENT_CALL_FUNCTION", fn_name: funcName, args: inputArgsData},
+            });
+        } catch (error) {
+        }
+    };
 
-  const handleClick = async () => {
-    try {
-      const tabId = await wsc.getTabId();
-      chrome.runtime.sendMessage({
-        action: ActionType.INJECTSCRIPT,
-        tabId: tabId,
-        value: { fn_name: "Encrypt", args: inputData },
-      });
-    } catch (error) {}
-  };
+    const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setInputArgsData(event.target.value);
+    };
 
-  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInputData(event.target.value);
-  };
 
-  return (
-    <div>
-      <TextArea
-        value={inputData}
-        onChange={handleInputChange}
-        placeholder="Enter your expression (e.g., 22 * 33)"
-      />
-      <Button onClick={handleClick}>eval in tab me</Button>
-    </div>
-  );
+    const handleEvalCodeClick = async () => {
+        try {
+            const tabId = await wsc.getTabId();
+            await chrome.runtime.sendMessage({
+                action: ActionType.INJECT_SCRIPT,
+                tabId: tabId,
+                value: {mode: "CONTENT_EVAL_CODE", code: code},
+            });
+        } catch (error) {
+        }
+    }
+
+    return (
+        <div>
+            <Input
+                value={funcName}
+                onChange={(e) => setFuncName(e.target.value)}
+                placeholder="Enter function name"
+            ></Input>
+            <TextArea
+                value={inputArgsData}
+                onChange={handleInputChange}
+                placeholder="Enter your expression (e.g., 22 * 33)"
+            />
+            <Button onClick={handleClick}>eval func in tab</Button>
+
+            <TextArea
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="Enter your expression (e.g., 22 * 33)"
+            />
+            <Button onClick={handleEvalCodeClick}>eval code in tab</Button>
+        </div>
+    );
 };
