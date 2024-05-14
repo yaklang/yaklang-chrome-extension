@@ -8,7 +8,7 @@ interface EvalInTabProps {
 
 export const EvalInTab: React.FC<EvalInTabProps> = () => {
     const [inputData, setInputData] = useState("");
-    const [isScriptInjected, setIsScriptInjected] = useState(false);
+    const [port, setPort] = useState<chrome.runtime.Port>()
 
     // useEffect(() => {
     //     // const onConnectListener = (port: chrome.runtime.Port) => {
@@ -29,29 +29,30 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
     //     // };
     // }, [inputData]);
 
-    const handleClick = async () => {
-        const tabId = await wsc.getTabId();
-        if (!isScriptInjected) {
+    useEffect(() => {
+        const injectFun = async () => {
+            const tabId = await wsc.getTabId();
             chrome.scripting.executeScript({
-                target: {tabId: await wsc.getTabId()},
+                target: {tabId: tabId},
                 files: ['inject.js'],
-            }).then(injectResults => {
-                console.log(injectResults)
-                setIsScriptInjected(true);
-
-                const port = chrome.tabs.connect(tabId, {name: "ex-to-content"})
-                port.postMessage({type: "TEST", fn_name: "Encrypt", args: inputData});
-                port.onMessage.addListener(function (msg) {
+            }).then(() => {
+                const newPort = chrome.tabs.connect(tabId, {name: "ex-to-content"})
+                setPort(newPort)
+                newPort.onMessage.addListener(function (msg) {
                     console.log(msg)
                 })
-            });
+            })
         }
-        console.log("injected script")
-        const port = chrome.tabs.connect(tabId, {name: "ex-to-content"})
+        injectFun()
+        return () => {
+            if (port) {
+                port.disconnect()
+            }
+        }
+    }, [])
+
+    const handleClick = async () => {
         port.postMessage({type: "TEST", fn_name: "Encrypt", args: inputData});
-        port.onMessage.addListener(function (msg) {
-            console.log(msg)
-        })
     };
 
     const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {

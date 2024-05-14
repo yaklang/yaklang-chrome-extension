@@ -83,13 +83,14 @@ const pageFunction = (code) => {
 
 chrome.runtime.onConnect.addListener(function (port) {
     console.assert(port.name === "content-to-ex");
-    port.onMessage.addListener(function (msg) {
-        console.log("[content-to-ex]", msg)
-    });
-    port.onDisconnect.addListener(function () {
-        console.error("[content-to-ex] Disconnected from port.");
-    });
-    // port.postMessage({action: "TEST POST MESSAGE"});
+    if (!port.hasListener) {
+        port.onMessage.addListener(function (msg) {
+            console.log("[content-to-ex]", msg)
+        });
+        port.onDisconnect.addListener(function () {
+            console.error("[content-to-ex] Disconnected from port.");
+        });
+        // port.postMessage({action: "TEST POST MESSAGE"});
+        port.hasListener = true;
+    }
 });
-
-
