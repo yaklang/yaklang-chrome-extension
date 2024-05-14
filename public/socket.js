@@ -5,6 +5,9 @@ export const ActionType = {
     PROXYSTATUS: 'proxystatus',
     SETPROXY: 'setproxy',
     CLEARPROXY: 'clearproxy',
+    INJECTSCRIPT: 'INJECT_SCRIPT',
+    SENDRESFROMPAGE: "SEND_RES_FROM_PAGE",
+    RESTOEVALINTAB: "RES_TO_EVALINTAB",
     EVAL: 'eval',
     ECHO: 'echo',
 }

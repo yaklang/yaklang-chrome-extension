@@ -1,4 +1,4 @@
-import {ActionType, WebSocketManager} from './socket.js';
+import { ActionType, WebSocketManager } from './socket.js';
 
 
 console.info("Chrome Extenstion Background is loaded")
@@ -45,10 +45,26 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                         proxy: `${proxyConfig.scheme}://${proxyConfig.host}:${proxyConfig.port}`
                     })
                 } else {
-                    chrome.runtime.sendMessage({enable: false, proxy: ""})
+                    chrome.runtime.sendMessage({ enable: false, proxy: "" })
                 }
             });
             break;
+        case ActionType.INJECTSCRIPT:
+            chrome.scripting.executeScript({
+                target: { tabId: msg.tabId },
+                files: ['content.js']
+            }).then(() => {
+                chrome.tabs.sendMessage(msg.tabId, { type: 'INJECT_CODE', value: msg.value });
+            }).catch(err => {
+                console.error('Script injection failed:', err);
+            });
+            break
+        case ActionType.SENDRESFROMPAGE:
+            chrome.runtime.sendMessage({
+                action: ActionType.RESTOEVALINTAB,
+                result: msg.result
+            })
+            break
         case ActionType.ECHO:
             console.log("Echo ", msg.result)
     }
@@ -56,7 +72,7 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 })
 
 const pageFunction = (code) => {
-    chrome.runtime.sendMessage({code}, response => {
+    chrome.runtime.sendMessage({ code }, response => {
         if (response && response.success) {
             console.log('Result:', response.result);
         } else {
@@ -64,33 +80,3 @@ const pageFunction = (code) => {
         }
     });
 }
-
-// chrome.runtime.onInstalled.addListener(() => {
-//     chrome.scripting.registerContentScripts([{
-//         id: 'myScript',
-//         matches: ['<all_urls>'],  // 根据需要调整匹配模式
-//         js: ['content2.js'],
-//         // world: 'MAIN',
-//         // runAt: 'document_start'
-//     }], (result) => {
-//         if (chrome.runtime.lastError) {
-//             console.error(`Error registering script: ${chrome.runtime.lastError.message}`);
-//         } else {
-//             console.log('Script registered', result);
-//         }
-//     });
-// });
-
-chrome.runtime.onConnect.addListener(function (port) {
-    console.assert(port.name === "content-to-ex");
-    if (!port.hasListener) {
-        port.onMessage.addListener(function (msg) {
-            console.log("[content-to-ex]", msg)
-        });
-        port.onDisconnect.addListener(function () {
-            console.error("[content-to-ex] Disconnected from port.");
-        });
-        // port.postMessage({action: "TEST POST MESSAGE"});
-        port.hasListener = true;
-    }
-});
