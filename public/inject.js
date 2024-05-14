@@ -4,7 +4,7 @@ function injectScript(src, id, message) {
         const script = document.createElement('script')
 
         script.onload = () => {
-            const onMessage = ({data}) => {
+            const onMessage = ({ data }) => {
                 console.log(data)
                 if (!data.yakitex || !data.yakitex.msg) {
                     return
@@ -12,7 +12,7 @@ function injectScript(src, id, message) {
 
                 window.removeEventListener('message', onMessage)
 
-                resolve(data.yakitex.msg)
+                // resolve(data.yakitex.msg)
 
                 script.remove()
             }
@@ -30,26 +30,34 @@ function injectScript(src, id, message) {
     })
 }
 
-chrome.runtime.onConnect.addListener(function (port) {
+if (!window.hasAddedMessageListener2) {
+    window.addEventListener("message", (event) => {
+        if (event.data.type && (event.data.type === "FROM_PAGE")) {
+            const port = chrome.runtime.connect({ name: "content-to-ex" });
+            port.postMessage(event.data.text);
+            port.disconnect();
+            return
+        }
+    })
+    window.hasAddedMessageListener2 = true;
+}
+
+
+function connectAddListenerFun(port) {
     console.assert(port.name === "ex-to-content");
-    port.onMessage.addListener(function (msg) {
-        injectScript('content.js', 'sender', {yakitex: "123", id: "yakit", msg: msg}).then((res) => {
-            window.addEventListener("message", (event) => {
-                // if (event.source !== window) {
-                //     return;
-                // }
-                if (event.data.type && (event.data.type === "FROM_PAGE")) {
-                    console.log(event)
-                    const port2 = chrome.runtime.connect({name: "content-to-ex"});
-                    port2.postMessage(event.data.text);
-                    port2.disconnect();
-                }
-            },);
+    if (!port.hasListener) {
+        port.onMessage.addListener(function (msg) {
+            console.log(111111111111111);
+            injectScript('content.js', 'sender', { yakitex: "123", id: "yakit", msg: msg })
+        });
+    
+        port.onDisconnect.addListener(function () {
+            console.error("[ex-to-content] Disconnected from port.");
+        });
+        port.hasListener = true
+    }
+}
 
-        })
-    });
-
-    port.onDisconnect.addListener(function () {
-        console.error("[ex-to-content] Disconnected from port.");
-    });
-});
+if (!chrome.runtime.onConnect.hasListener(connectAddListenerFun)) {
+    chrome.runtime.onConnect.addListener(connectAddListenerFun);
+}
