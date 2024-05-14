@@ -79,48 +79,5 @@ export class WebSocketManager {
 
     handleMessage(message) {
         console.log("message", message)
-        // 解析消息
-        // try {
-        //     // 解析从WebSocket接收到的JSON数据
-        //     let code = message;
-        //     getTabId().then((tabId) => {
-        //         // 确保tabId和code有效
-        //         if (typeof tabId === 'number' && typeof code === 'string') {
-        //             chrome.webNavigation.getAllFrames({tabId: tabId}, function(frames) {
-        //                 for (let frame of frames) {
-        //                     console.log(`Frame ID: ${frame.frameId} with URL: ${frame.url}`);
-        //                 }
-        //             });
-        //             // 在指定的tabId上执行脚本
-        //             chrome.scripting.executeScript({
-        //                 target: {tabId: tabId},
-        //                 // function: getTitle,
-        //                 function: log,
-        //                 args: [code]
-        //             }, (injectionResults) => {
-        //                 // 处理脚本执行的结果，如日志记录等
-        //                 console.log('Script executed:', injectionResults);
-        //             });
-        //         } else {
-        //             console.error('Received malformed message:', message);
-        //         }
-        //     });
-        // } catch (err) {
-        //     console.error('Error parsing message from WebSocket:', err);
-        // }
     }
 }
-
-function getTitle() {
-    return document.title;
-}
-
-function log(message) {
-    return console.log(message);
-}
-
-// chrome.tabs.query({}, (tabs) => {
-//     tabs.forEach(function (tab) {
-//         console.log(tab.id); // 输出每个标签页的ID
-//     });
-// })

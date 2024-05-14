@@ -268,13 +268,13 @@ export const Proxifier: React.FC<ProxifierProps> = () => {
                   item.port === ""
                 }
                 onChange={(checked: boolean) => {
-                  wsc.clearproxy();
+                  wsc.clearProxy();
                   const copyProxyList = structuredClone(proxyList);
                   copyProxyList.forEach((i) => {
                     if (i.id === item.id) {
                       i.open = checked;
                       if (checked) {
-                        wsc.setproxy(item.scheme, item.host, Number(item.port));
+                        wsc.setProxy(item.scheme, item.host, Number(item.port));
                       }
                     } else {
                       i.open = false;

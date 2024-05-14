@@ -1,15 +1,16 @@
-export enum ActionType {
-    CONNECT = 'connect',
-    DISCONNECT = 'disconnect',
-    STATUS = 'status',
-    PROXY_STATUS = 'proxy_status',
-    SET_PROXY = 'set_proxy',
-    CLEAR_PROXY = 'clear_proxy',
-    INJECT_SCRIPT = 'yakit_inject_script',
-    TO_EXTENSION_PAGE = "yakit_to_extension_page",
-}
-
 export namespace wsc {
+    export enum ActionType {
+        CONNECT = 'connect',
+        DISCONNECT = 'disconnect',
+        STATUS = 'status',
+        PROXY_STATUS = 'proxy_status',
+        SET_PROXY = 'set_proxy',
+        CLEAR_PROXY = 'clear_proxy',
+        INJECT_SCRIPT = 'yakit_inject_script',
+        // 用于接收来自content script的消息
+        TO_EXTENSION_PAGE = "yakit_to_extension_page",
+    }
+
     export function connect(port: number, host?: string) {
         chrome.runtime.sendMessage({
             action: ActionType.CONNECT,
@@ -44,23 +45,16 @@ export namespace wsc {
         chrome.runtime.onMessage.addListener(onMessage)
     }
 
-    export function setproxy(scheme: string, host: string, port: number) {
+    export function setProxy(scheme: string, host: string, port: number) {
         chrome.runtime.sendMessage({action: ActionType.SET_PROXY, scheme, host, port})
     }
 
-    export function clearproxy() {
+    export function clearProxy() {
         chrome.runtime.sendMessage({action: ActionType.CLEAR_PROXY})
     }
 
-    export function getTabId() {
-        return new Promise<number>((resolve, reject) => {
-            chrome.tabs.query({active: true, currentWindow: true}, function (tabs) {
-                if (tabs.length) {
-                    resolve(tabs[0].id);
-                } else {
-                    reject('No active tab found');
-                }
-            });
-        });
+    // 获取当前tab
+    export async function getTab() {
+        return chrome.tabs.query({active: true, currentWindow: true})
     }
 }

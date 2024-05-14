@@ -15,7 +15,7 @@ function App() {
             }}
         >
             <div className="App">
-                <Contro/>
+                {/*<Contro/>*/}
                 <Proxifier/>
 
                 <EvalInTab/>

@@ -50,24 +50,29 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             });
             break;
         case ActionType.INJECT_SCRIPT:
-            chrome.scripting.executeScript({
-                target: {tabId: msg.tabId},
-                files: ['content.js']
-            }).then(() => {
-                chrome.tabs.sendMessage(msg.tabId,
-                    {type: ActionType.INJECT_SCRIPT, value: msg.value}
-                ).then(response => {
-                    console.log("response", response)
+            (async () => {
+                try {
+                    // 注入 JS 脚本
+                    await chrome.scripting.executeScript({
+                        target: {tabId: msg.tabId},
+                        files: ['content.js']
+                    });
+
+                    // 发送消息
+                    const response = await chrome.tabs.sendMessage(msg.tabId, {
+                        type: ActionType.INJECT_SCRIPT,
+                        value: msg.value
+                    });
+
+                    console.log("response", response);
                     if (response && response.action === ActionType.TO_EXTENSION_PAGE) {
-                        chrome.runtime.sendMessage(response)
+                        await chrome.runtime.sendMessage(response);
                     }
-                })
-            }).catch(err => {
-                console.error('Script injection failed:', err);
-            });
+                } catch (err) {
+                    console.error('Script or CSS injection failed:', err);
+                }
+            })();
             break
-        case ActionType.ECHO:
-            console.log("Echo ", msg.result)
     }
 
 })
