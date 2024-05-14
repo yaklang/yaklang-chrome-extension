@@ -122,18 +122,6 @@ function log(message) {
     return console.log(message);
 }
 
-export const getTabId = () => {
-    return new Promise((resolve, reject) => {
-        chrome.tabs.query({active: true, lastFocusedWindow: true}, (tabs) => {
-            if (tabs.length) {
-                resolve(tabs[0].id);
-            } else {
-                reject('No active tab found');
-            }
-        });
-    });
-}
-
 // chrome.tabs.query({}, (tabs) => {
 //     tabs.forEach(function (tab) {
 //         console.log(tab.id); // 输出每个标签页的ID
