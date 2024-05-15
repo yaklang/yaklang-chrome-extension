@@ -43,7 +43,10 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
             await chrome.runtime.sendMessage({
                 action: wsc.ActionType.INJECT_SCRIPT,
                 tabId: tab.id,
-                value: {mode: "CONTENT_EVAL_CODE", code: code},
+                value: {
+                    mode: "CONTENT_EVAL_CODE",
+                    code: code,
+                },
             });
         } catch (error) {
         }
@@ -59,7 +62,7 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
             <TextArea
                 value={inputArgsData}
                 onChange={handleInputChange}
-                placeholder="Enter your expression (e.g., 22 * 33)"
+                placeholder="Enter function args"
             />
             <Button onClick={handleClick}>eval func in tab</Button>
 
