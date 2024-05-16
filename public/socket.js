@@ -92,49 +92,42 @@ export class WebSocketManager {
         return this.socket && this.socket.readyState === WebSocket.OPEN;
     }
 
-    async handleMessage(message) {
-        console.log("message", message)
+    handleMessage(message) {
         message = JSON.parse(message);
         if (message && message.type === "eval") {
-            console.log("msg ", message)
-            const code = message.code;
-            // try {
-            //     const [tab] = await getTab();
-            //     chrome.runtime.sendMessage({
-            //         action: ActionType.INJECT_SCRIPT, tabId: tab.id, value: {
-            //             mode: "CONTENT_EVAL_CODE", code: code,
-            //         },
-            //     });
-            // } catch (error) {
-            //     console.log(error.toString())
-            // }
-            try {
+            (async () => {
                 const [tab] = await getTab();
-                // 注入 JS 脚本
-                await chrome.scripting.executeScript({
-                    target: {tabId: tab.id},
-                    files: ['content.js']
-                });
-
-                // 发送消息
-                const response = await chrome.tabs.sendMessage(tab.id, {
+                await injectScriptAndSendMessage(tab.id, {
                     type: ActionType.INJECT_SCRIPT,
                     value: {
-                        mode: "CONTENT_EVAL_CODE", code: code,
+                        mode: "CONTENT_EVAL_CODE", code: message.code,
                     }
                 });
-
-                console.log("response", response);
-                if (response && response.action === ActionType.TO_EXTENSION_PAGE) {
-                    await chrome.runtime.sendMessage(response);
-                }
-            } catch (err) {
-                console.error('Script or CSS injection failed:', err);
-            }
+            })();
         }
     }
 }
 
-function getTab() {
+const getTab = async () => {
     return chrome.tabs.query({active: true, lastFocusedWindow: true})
+}
+
+export const injectScriptAndSendMessage = async (tabId, message) => {
+    try {
+        // 注入 JS 脚本
+        await chrome.scripting.executeScript({
+            target: {tabId: tabId},
+            files: ['content.js']
+        });
+
+        // 发送消息
+        const response = await chrome.tabs.sendMessage(tabId, message);
+
+        console.log("response", response);
+        if (response && response.action === ActionType.TO_EXTENSION_PAGE) {
+            await chrome.runtime.sendMessage(response);
+        }
+    } catch (err) {
+        console.error('Script or CSS injection failed:', err);
+    }
 }
