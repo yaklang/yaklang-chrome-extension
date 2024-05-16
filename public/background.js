@@ -13,7 +13,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             console.info("Start to connect websocket")
             const host = msg['host'] || "127.0.0.1"
             const port = msg['port'] || 11212
-            websocketManager.connectWebsocket(`ws://${host}:${port}/?token=${"a"}`, port)
+            websocketManager.connectWebsocket(`ws://${host}:${port}/?token=chrome`, port)
+            break;
+        case ActionType.SEND_MESSAGE:
+            websocketManager.sendMessage(msg.message);
             break;
         case ActionType.DISCONNECT:
             websocketManager.disconnectWebsocket();
@@ -27,7 +30,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                             scheme: msg.scheme,
                             host: msg.host,
                             port: parseInt(`${msg.port}`)
-                        }
+                        },
+                        // enable 127.0.0.1 && localhost to mitmproxy
+                        bypassList: ["<-loopback>"]
                     }
                 },
                 scope: 'regular',

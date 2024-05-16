@@ -13,9 +13,12 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
 
     useEffect(() => {
         wsc.onWSCMessage((message) => {
+            console.log("message from content script:", message)
             if (message.action === wsc.ActionType.TO_EXTENSION_PAGE) {
-                console.log("res:", message.result);
-                alert("from content script: " + JSON.stringify(message.result));
+                console.log("eval in tab:", message.result);
+                // alert("from content script: " + JSON.stringify(message.result));
+                // 发送结果
+                wsc.sendMessage({"type": "chrome-extension", res: message.result})
             }
         });
     }, []);
