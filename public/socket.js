@@ -22,7 +22,7 @@ export class WebSocketManager {
 
         this.socket.onopen = () => {
             chrome.runtime.sendMessage({action: ActionType.STATUS, connected: true, port: port});
-            this.startHeartbeat();
+            // this.startHeartbeat();
         };
 
         this.socket.onmessage = (event) => {
@@ -42,6 +42,7 @@ export class WebSocketManager {
     sendMessage(message) {
         if (this.isConnected()) {
             try {
+                console.log("发射", message)
                 this.socket.send(JSON.stringify(message));
             } catch (e) {
                 console.error("Error sending message:", e);
