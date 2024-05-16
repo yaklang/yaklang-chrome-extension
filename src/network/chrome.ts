@@ -1,6 +1,8 @@
 export namespace wsc {
     export enum ActionType {
         CONNECT = 'connect',
+        SEND_MESSAGE = 'send_message',
+
         DISCONNECT = 'disconnect',
         STATUS = 'status',
         PROXY_STATUS = 'proxy_status',
@@ -16,6 +18,13 @@ export namespace wsc {
             action: ActionType.CONNECT,
             host: host || '127.0.0.1',
             port: port,
+        });
+    }
+
+    export function sendMessage(message: any) {
+        chrome.runtime.sendMessage({
+            action: ActionType.SEND_MESSAGE,
+            message: message,
         });
     }
 
