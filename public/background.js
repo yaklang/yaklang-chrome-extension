@@ -1,4 +1,4 @@
-import {ActionType, WebSocketManager} from './socket.js';
+import {ActionType, injectScriptAndSendMessage, WebSocketManager} from './socket.js';
 
 
 console.info("Chrome Extenstion Background is loaded")
@@ -56,38 +56,12 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             break;
         case ActionType.INJECT_SCRIPT:
             (async () => {
-                try {
-                    // 注入 JS 脚本
-                    await chrome.scripting.executeScript({
-                        target: {tabId: msg.tabId},
-                        files: ['content.js']
-                    });
-
-                    // 发送消息
-                    const response = await chrome.tabs.sendMessage(msg.tabId, {
-                        type: ActionType.INJECT_SCRIPT,
-                        value: msg.value
-                    });
-
-                    console.log("response", response);
-                    if (response && response.action === ActionType.TO_EXTENSION_PAGE) {
-                        await chrome.runtime.sendMessage(response);
-                    }
-                } catch (err) {
-                    console.error('Script or CSS injection failed:', err);
-                }
+                await injectScriptAndSendMessage(msg.tabId, {
+                    type: ActionType.INJECT_SCRIPT,
+                    value: msg.value
+                });
             })();
             break
     }
-
 })
 
-const pageFunction = (code) => {
-    chrome.runtime.sendMessage({code}, response => {
-        if (response && response.success) {
-            console.log('Result:', response.result);
-        } else {
-            console.error('Error:', response.error);
-        }
-    });
-}
