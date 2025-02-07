@@ -1,0 +1,68 @@
+.proxy-switch {
+  padding: 16px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.proxy-switch-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.proxy-switch .ant-select {
+  margin-right: 8px;
+}
+
+.proxy-switch .ant-space {
+  gap: 8px;
+}
+
+.proxy-switch-title {
+  display: flex;
+  align-items: center;
+}
+
+.proxy-switch-title-text {
+  color: #31343F;
+  font-size: 14px;
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.proxy-switch-content {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: #F8F8F8;
+  border-radius: 4px;
+}
+
+.proxy-switch-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.proxy-switch-status {
+  color: #85899E;
+  font-size: 12px;
+}
+
+.proxy-switch-proxy {
+  color: #31343F;
+  font-size: 13px;
+}
+
+.proxy-switch-status-active {
+  color: var(--yakit-primary);
+}
+
+.proxy-switch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+} 
