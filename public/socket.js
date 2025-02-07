@@ -8,6 +8,7 @@ export const ActionType = {
     CLEAR_PROXY: 'clear_proxy',
     INJECT_SCRIPT: 'yakit_inject_script',
     TO_EXTENSION_PAGE: "yakit_to_extension_page",
+    BADGE_COUNT: "yakit_badge",
 }
 
 export class WebSocketManager {
@@ -22,7 +23,7 @@ export class WebSocketManager {
 
         this.socket.onopen = () => {
             chrome.runtime.sendMessage({action: ActionType.STATUS, connected: true, port: port});
-            // this.startHeartbeat();
+            this.startHeartbeat();
         };
 
         this.socket.onmessage = (event) => {
@@ -66,7 +67,7 @@ export class WebSocketManager {
     }
 
     startHeartbeat() {
-        this.intervalId = setInterval(() => this.heartbeat(), 3000);
+        this.intervalId = setInterval(() => this.heartbeat(), 25000);
     }
 
     stopHeartbeat() {

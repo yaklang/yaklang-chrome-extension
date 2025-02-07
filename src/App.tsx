@@ -4,6 +4,7 @@ import {ConfigProvider} from "antd";
 import {Contro} from "@components/Contro";
 import {Proxifier} from "@components/Proxifier";
 import {EvalInTab} from "@components/EvalInTab";
+import {ProxySwitch} from "@components/ProxySwitch";
 
 function App() {
     return (
@@ -15,10 +16,11 @@ function App() {
             }}
         >
             <div className="App">
-                <Contro/>
-                {/*<Proxifier/>*/}
+                {/*<Contro/>*/}
+                {/* <Proxifier/> */}
+                <ProxySwitch/>
 
-                <EvalInTab/>
+                {/* <EvalInTab/> */}
             </div>
         </ConfigProvider>
     );
