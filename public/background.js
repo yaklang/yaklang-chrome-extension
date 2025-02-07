@@ -1,10 +1,13 @@
 import {ActionType, injectScriptAndSendMessage, WebSocketManager} from './socket.js';
-
+import { setupProxyHandlers } from './proxy.js';
+import { ProxyActionType } from './types/action.js';
 
 console.info("Chrome Extenstion Background is loaded")
 
 const websocketManager = new WebSocketManager();
 
+// 设置代理处理器
+setupProxyHandlers();
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     console.log("msg", msg)

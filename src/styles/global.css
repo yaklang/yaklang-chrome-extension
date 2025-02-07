@@ -1,0 +1,37 @@
+:root {
+    --yakit-primary: #F28B44;
+    --yakit-primary-hover: #f4a061;
+    --yakit-primary-active: #e87633;
+    --yakit-primary-5: rgba(242, 139, 68, 0.05);
+    --yakit-primary-10: rgba(242, 139, 68, 0.1);
+}
+
+.ant-btn-primary {
+    background-color: var(--yakit-primary) !important;
+}
+
+.ant-btn-primary:hover {
+    background-color: var(--yakit-primary-hover) !important;
+}
+
+.ant-btn-primary:active {
+    background-color: var(--yakit-primary-active) !important;
+}
+
+.ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+    background-color: var(--yakit-primary-5) !important;
+}
+
+.ant-select-focused .ant-select-selector,
+.ant-input-focused,
+.ant-input:focus,
+.ant-input-number-focused,
+.ant-input-number:focus {
+    border-color: var(--yakit-primary) !important;
+    box-shadow: 0 0 0 2px var(--yakit-primary-10) !important;
+}
+
+.ant-btn:not(.ant-btn-primary):hover {
+    color: var(--yakit-primary) !important;
+    border-color: var(--yakit-primary) !important;
+} 

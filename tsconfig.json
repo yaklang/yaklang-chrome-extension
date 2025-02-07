@@ -10,7 +10,11 @@
     "moduleResolution": "node",
     "baseUrl": "./",
     "paths": {
-      "@*": ["src/*"]
+      "@/*": ["./src/*"],
+      "@components/*": ["./src/components/*"],
+      "@assets/*": ["./src/assets/*"],
+      "@network/*": ["./src/network/*"],
+      "@types/*": ["./src/types/*"]
     } 
   },
   "include": [

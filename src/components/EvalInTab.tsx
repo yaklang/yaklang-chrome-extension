@@ -32,6 +32,7 @@ export const EvalInTab: React.FC<EvalInTabProps> = () => {
                 value: {mode: "CONTENT_CALL_FUNCTION", fn_name: funcName, args: inputArgsData},
             });
         } catch (error) {
+            console.log("error:", error)
         }
     };
 
