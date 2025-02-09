@@ -103,17 +103,21 @@ export const OptionsPage: React.FC = () => {
     }, []);
 
     useEffect(() => {
+        // 加载日志
         const loadLogs = async () => {
             const result = await chrome.storage.local.get('proxyLogs');
             setProxyLogs(result.proxyLogs || []);
         };
+        
         loadLogs();
 
+        // 监听存储变化
         const handleStorageChange = (changes: StorageChanges) => {
             if (changes.proxyLogs) {
-                setProxyLogs(changes.proxyLogs.newValue);
+                setProxyLogs(changes.proxyLogs.newValue || []);
             }
         };
+        
         chrome.storage.onChanged.addListener(handleStorageChange);
         return () => chrome.storage.onChanged.removeListener(handleStorageChange);
     }, []);
@@ -233,6 +237,22 @@ export const OptionsPage: React.FC = () => {
             console.error('Error clearing proxy:', error);
             message.error('操作失败');
         }
+    };
+
+    const handleClearLogs = () => {
+        chrome.runtime.sendMessage({
+            action: ProxyActionType.CLEAR_PROXY_LOGS
+        }, (response) => {
+            if (chrome.runtime.lastError) {
+                message.error(chrome.runtime.lastError.message || '清除日志失败');
+                return;
+            }
+            if (response?.success) {
+                message.success('日志已清除');
+            } else {
+                message.error(response?.error || '清除日志失败');
+            }
+        });
     };
 
     return (
@@ -370,11 +390,33 @@ export const OptionsPage: React.FC = () => {
                             key: 'logs',
                             label: '代理日志',
                             children: (
-                                <Table 
-                                    dataSource={proxyLogs}
-                                    columns={columns}
-                                    pagination={{ pageSize: 50 }}
-                                />
+                                <>
+                                    <div style={{ 
+                                        marginBottom: 16, 
+                                        display: 'flex', 
+                                        justifyContent: 'flex-end' 
+                                    }}>
+                                        <Button 
+                                            danger 
+                                            onClick={handleClearLogs}
+                                            icon={<DeleteOutlined />}
+                                        >
+                                            清除日志
+                                        </Button>
+                                    </div>
+                                    <Table 
+                                        dataSource={proxyLogs}
+                                        columns={columns}
+                                        pagination={{ 
+                                            pageSize: 10,
+                                            showSizeChanger: true,
+                                            showQuickJumper: true,
+                                            showTotal: (total) => `共 ${total} 条`,
+                                            pageSizeOptions: ['10', '20', '50', '100']
+                                        }}
+                                        rowKey="id"
+                                    />
+                                </>
                             )
                         }
                     ]}
