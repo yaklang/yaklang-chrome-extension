@@ -1,5 +1,6 @@
 .options-page {
-    min-height: 100vh;
+    height: 100vh;
+    overflow: auto;
     background: #f0f2f5;
 }
 
@@ -97,4 +98,14 @@
 
 .options-page .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
     background-color: var(--yakit-primary-5);
+}
+
+/* 防止 Modal 出现时页面跳动 */
+.ant-modal-wrap {
+    overflow: hidden;
+}
+
+.ant-modal-content {
+    max-height: 90vh;
+    overflow: auto;
 } 

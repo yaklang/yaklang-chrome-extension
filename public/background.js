@@ -9,6 +9,18 @@ const websocketManager = new WebSocketManager();
 // 设置代理处理器
 setupProxyHandlers();
 
+// 添加点击事件处理
+chrome.action.onClicked.addListener((tab) => {
+    // 打开侧边栏
+    chrome.sidePanel.open({ windowId: tab.windowId });
+});
+
+// 可选：设置默认打开状态
+chrome.sidePanel.setOptions({
+    enabled: true,
+    path: 'index.html'
+});
+
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     console.log("msg", msg)
     switch (msg.action) {
