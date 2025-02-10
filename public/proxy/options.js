@@ -163,7 +163,5 @@ function showError(message) {
     // 5秒后自动移除错误信息
     setTimeout(() => {
         errorDiv.remove();
-    }, 5000);
+    }, 3000);
 }
-
-// ... 其他代码保持不变 

@@ -2,33 +2,6 @@ import { proxyStore } from '../db/proxy-store.js';
 
 // 日志数据库管理
 class ProxyLogs {
-    constructor() {
-        this.DB_NAME = 'proxy_extension';
-        this.STORE_NAME = 'proxy_logs';
-        this.DB_VERSION = 1;
-        this.MAX_LOGS = 1000; // 最多保存1000条日志
-    }
-
-    async initDB() {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.DB_NAME, this.DB_VERSION);
-
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => resolve(request.result);
-
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                if (!db.objectStoreNames.contains(this.STORE_NAME)) {
-                    const store = db.createObjectStore(this.STORE_NAME, { keyPath: 'id' });
-                    // 创建索引
-                    store.createIndex('timestamp', 'timestamp');
-                    store.createIndex('resourceType', 'resourceType');
-                    store.createIndex('status', 'status');
-                }
-            };
-        });
-    }
-
     async getResourceType(details) {
         try {
             // 首先检查请求类型
@@ -174,9 +147,4 @@ class ProxyLogs {
     }
 }
 
-// 导出实例而不是直接使用顶层 await
 export const proxyLogs = new ProxyLogs();
-
-// 移除这些顶层 await 语句
-// await proxyStore.addLog({...});
-// const logs = await proxyStore.getLogs(); 
