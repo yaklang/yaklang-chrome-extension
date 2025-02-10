@@ -1,7 +1,6 @@
 console.log('Options page script loaded');
 
 import { ProxySettings } from './proxy-settings.js';
-import { ProxyManager } from './proxy-manager.js';
 
 let currentConfigs = [];
 
