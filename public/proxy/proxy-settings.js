@@ -1,41 +1,43 @@
+import { proxyStore } from '../db/proxy-store.js';
+
 // 代理配置存储和管理
-export const ProxySettings = {
-    async importSettings(settings) {
+export class ProxySettings {
+    static async importSettings(settings) {
         try {
             if (Array.isArray(settings) && settings.every(s => s.proxyType)) {
-                await chrome.storage.local.set({proxyConfigs: settings});
+                await proxyStore.saveProxyConfigs(settings);
                 return {success: true};
             }
             return {success: false, error: "Invalid settings format"};
         } catch (error) {
             return {success: false, error: error.message};
         }
-    },
+    }
 
-    async exportSettings() {
+    static async exportSettings() {
         try {
-            const {proxyConfigs} = await chrome.storage.local.get('proxyConfigs');
-            return {success: true, settings: proxyConfigs || []};
+            const configs = await proxyStore.getProxyConfigs();
+            return {success: true, settings: configs || []};
         } catch (error) {
             return {success: false, error: error.message};
         }
-    },
+    }
 
-    async setDefaultConfigs() {
-        const result = await chrome.storage.local.get('proxyConfigs');
-        if (!result.proxyConfigs) {
-            const defaultConfigs = [{
+    static async setDefaultConfigs() {
+        const configs = await proxyStore.getProxyConfigs();
+        if (!configs || configs.length === 0) {
+            // 设置默认的直接连接配置
+            await proxyStore.saveProxyConfigs([{
                 id: 'direct',
                 name: '直接连接',
                 proxyType: 'direct',
                 enabled: false
-            }];
-            await chrome.storage.local.set({ proxyConfigs: defaultConfigs });
+            }]);
         }
-        // 确保 proxyLogs 存在
-        const logsResult = await chrome.storage.local.get('proxyLogs');
-        if (!logsResult.proxyLogs) {
-            await chrome.storage.local.set({ proxyLogs: [] });
+        // 确保日志存储已初始化
+        const logs = await proxyStore.getLogs();  // 使用 getLogs 而不是 getProxyLogs
+        if (!logs || logs.length === 0) {
+            await proxyStore.clearLogs();  // 初始化日志存储
         }
     }
-}; 
+} 

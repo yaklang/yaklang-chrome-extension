@@ -16,7 +16,7 @@
     }
   },
   "side_panel": {
-    "default_path" : "index.html"
+    "default_path": "index.html"
   },
   "background": {
     "service_worker": "background.js",
@@ -26,7 +26,8 @@
     "proxy",
     "storage",
     "sidePanel",
-    "webRequest"
+    "webRequest",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "<all_urls>"

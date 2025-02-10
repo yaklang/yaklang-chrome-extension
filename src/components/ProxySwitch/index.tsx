@@ -1,17 +1,24 @@
 import React, {useEffect, useState} from "react";
-import {Select, Button, Tooltip, Modal, Form, Input, Radio, Space, message} from "antd";
+import {Select, Button, Tooltip, Modal, Form, Input, Radio, Space, message, Switch} from "antd";
 import {PlusOutlined, SettingOutlined} from "@ant-design/icons";
 import {ProxyConfig} from "@/types/proxy";
 import {StorageChanges} from "@/types/chrome";
+import {ProxyActionType} from '@/types/action';
 import "./index.css";
 
-export const ProxySwitch: React.FC = () => {
+interface ProxySwitchProps {
+    onChange?: (checked: boolean) => void;
+}
+
+export const ProxySwitch: React.FC<ProxySwitchProps> = ({ onChange }) => {
     const [currentMode, setCurrentMode] = useState<string>("direct");
     const [proxyConfigs, setProxyConfigs] = useState<ProxyConfig[]>([]);
     const [isModalVisible, setIsModalVisible] = useState(false);
     const [form] = Form.useForm();
     const [proxyHost, setProxyHost] = useState('');
     const [proxyPort, setProxyPort] = useState('');
+    const [enabled, setEnabled] = useState(false);
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadConfigs().catch(error => {
@@ -43,6 +50,10 @@ export const ProxySwitch: React.FC = () => {
         chrome.storage.onChanged.addListener(handleStorageChange);
         return () => chrome.storage.onChanged.removeListener(handleStorageChange);
     }, [currentMode]);
+
+    useEffect(() => {
+        loadProxyStatus();
+    }, []);
 
     const loadConfigs = async () => {
         try {
@@ -188,6 +199,65 @@ export const ProxySwitch: React.FC = () => {
         }
     };
 
+    const proxyType: ProxyConfig['proxyType'] = proxyConfigs.find((c: ProxyConfig) => c.id === currentMode)?.proxyType || 'direct';
+
+    const loadProxyStatus = async () => {
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: ProxyActionType.GET_PROXY_STATUS
+            });
+            
+            if (response.success) {
+                setEnabled(response.data.enabled);
+            }
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading proxy status:', error);
+            setLoading(false);
+        }
+    };
+
+    const handleChange = async (checked: boolean) => {
+        try {
+            if (checked) {
+                // 获取配置列表
+                const configResponse = await chrome.runtime.sendMessage({
+                    action: ProxyActionType.GET_PROXY_CONFIGS
+                });
+                
+                if (!configResponse.success) {
+                    throw new Error(configResponse.error || '获取代理配置失败');
+                }
+
+                const configs = configResponse.data || [];
+                const defaultConfig = configs.find((c: ProxyConfig) => c.id === 'direct');
+                
+                if (defaultConfig) {
+                    const response = await chrome.runtime.sendMessage({
+                        action: ProxyActionType.SET_PROXY_CONFIG,
+                        config: defaultConfig
+                    });
+                    
+                    if (response.success) {
+                        setEnabled(true);
+                        onChange?.(true);
+                    }
+                }
+            } else {
+                const response = await chrome.runtime.sendMessage({
+                    action: ProxyActionType.CLEAR_PROXY_CONFIG
+                });
+                
+                if (response.success) {
+                    setEnabled(false);
+                    onChange?.(false);
+                }
+            }
+        } catch (error) {
+            console.error('Error toggling proxy:', error);
+        }
+    };
+
     return (
         <div className="proxy-switch">
             <div className="proxy-switch-header">
@@ -283,6 +353,12 @@ export const ProxySwitch: React.FC = () => {
                     </Form.Item>
                 </Form>
             </Modal>
+
+            <Switch
+                checked={enabled}
+                onChange={handleChange}
+                loading={loading}
+            />
         </div>
     );
 };
