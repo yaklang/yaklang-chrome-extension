@@ -7,7 +7,7 @@ const webpack = require('webpack');
 module.exports = {
   mode: 'development', // 设置模式为开发模式
   entry: {
-    main: './src/index.jsx',
+    main: './src/index.tsx',
     options: './src/pages/options.tsx'
   },
   output: {
@@ -52,9 +52,16 @@ module.exports = {
         use: ['style-loader', 'css-loader']
       },
       {
-        test: /\.tsx?$/, // 匹配TS和TSX文件
-        use: 'ts-loader',
-        exclude: /node_modules/,
+        test: /\.tsx?$/,
+        use: [
+          {
+            loader: 'ts-loader',
+            options: {
+              transpileOnly: true  // 添加这个选项可以加快编译速度
+            }
+          }
+        ],
+        exclude: /node_modules/
       },
       {
         test: /\.(js|jsx)$/, // 匹配JS和JSX文件

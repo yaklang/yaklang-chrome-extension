@@ -1,8 +1,8 @@
-import { ProxySettings } from './proxy/proxy-settings.js';
-import { ProxyAuth } from './proxy/proxy-auth.js';
-import { ProxyActionType } from './types/action.js';
-import { proxyLogs } from './proxy/proxy-logs.js';
-import { proxyStore } from './db/proxy-store.js';
+import {ProxySettings} from './proxy/proxy-settings.js';
+import {ProxyAuth} from './proxy/proxy-auth.js';
+import {ProxyActionType} from './types/action.js';
+import {proxyLogs} from './proxy/proxy-logs.js';
+import {proxyStore} from './db/proxy-store.js';
 
 // 修改代理状态获取函数为 Promise 形式
 function getProxySettings() {
@@ -17,7 +17,7 @@ async function handleSetProxyConfig(config, sendResponse) {
         if (config.proxyType === 'direct') {
             await new Promise((resolve) => {
                 chrome.proxy.settings.set({
-                    value: { mode: "direct" },
+                    value: {mode: "direct"},
                     scope: 'regular'
                 }, resolve);
             });
@@ -41,12 +41,12 @@ async function handleSetProxyConfig(config, sendResponse) {
                 await proxyStore.saveProxyConfigs(updatedConfigs);
 
                 console.log('Direct connection set successfully');
-                sendResponse({ success: true });
+                sendResponse({success: true});
             } else {
                 console.error('Failed to set direct connection');
-                sendResponse({ 
-                    success: false, 
-                    error: '无法设置直接连接' 
+                sendResponse({
+                    success: false,
+                    error: '无法设置直接连接'
                 });
             }
             return;
@@ -54,9 +54,9 @@ async function handleSetProxyConfig(config, sendResponse) {
 
         // 处理代理服务器的情况
         if (!config || !config.host || !config.port) {
-            sendResponse({ 
-                success: false, 
-                error: '无效的代理配置' 
+            sendResponse({
+                success: false,
+                error: '无效的代理配置'
             });
             return;
         }
@@ -81,9 +81,9 @@ async function handleSetProxyConfig(config, sendResponse) {
         });
 
         const settings = await getProxySettings();
-        const isSuccess = settings.value.mode === "fixed_servers" && 
-                         settings.value.rules.singleProxy.host === config.host &&
-                         settings.value.rules.singleProxy.port === parseInt(config.port);
+        const isSuccess = settings.value.mode === "fixed_servers" &&
+            settings.value.rules.singleProxy.host === config.host &&
+            settings.value.rules.singleProxy.port === parseInt(config.port);
 
         if (isSuccess) {
             await proxyStore.setCurrentProxy({
@@ -99,19 +99,19 @@ async function handleSetProxyConfig(config, sendResponse) {
             await proxyStore.saveProxyConfigs(updatedConfigs);
 
             console.log('Proxy successfully set:', settings.value);
-            sendResponse({ success: true });
+            sendResponse({success: true});
         } else {
             console.error('Proxy settings verification failed');
-            sendResponse({ 
-                success: false, 
-                error: '代理设置验证失败' 
+            sendResponse({
+                success: false,
+                error: '代理设置验证失败'
             });
         }
     } catch (error) {
         console.error('Error setting proxy:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message || '设置代理时发生错误' 
+        sendResponse({
+            success: false,
+            error: error.message || '设置代理时发生错误'
         });
     }
 }
@@ -126,7 +126,7 @@ async function handleClearProxyConfig(sendResponse) {
 
         await new Promise((resolve) => {
             chrome.proxy.settings.set({
-                value: { mode: "system" },
+                value: {mode: "system"},
                 scope: 'regular'
             }, resolve);
         });
@@ -147,19 +147,19 @@ async function handleClearProxyConfig(sendResponse) {
 
         if (isSuccess) {
             console.log('Proxy successfully cleared');
-            sendResponse({ success: true });
+            sendResponse({success: true});
         } else {
             console.error('Failed to clear proxy settings');
-            sendResponse({ 
-                success: false, 
-                error: '无法清除代理设置' 
+            sendResponse({
+                success: false,
+                error: '无法清除代理设置'
             });
         }
     } catch (error) {
         console.error('Error clearing proxy:', error);
-        sendResponse({ 
-            success: false, 
-            error: error.message || '清除代理时发生错误' 
+        sendResponse({
+            success: false,
+            error: error.message || '清除代理时发生错误'
         });
     }
 }
@@ -168,7 +168,7 @@ async function handleGetProxyStatus(sendResponse) {
     try {
         const settings = await getProxySettings();
         const currentProxy = await proxyStore.getCurrentProxy();
-        
+
         const status = {
             enabled: settings.value.mode === "fixed_servers",
             config: currentProxy || null,
@@ -200,7 +200,7 @@ function setupProxyRequestListener() {
             });
             // 不需要返回值
         },
-        { urls: ["<all_urls>"] }
+        {urls: ["<all_urls>"]}
     );
 
     // 监听请求错误
@@ -211,7 +211,7 @@ function setupProxyRequestListener() {
                 console.error('Error in proxy error listener:', error);
             });
         },
-        { urls: ["<all_urls>"] }
+        {urls: ["<all_urls>"]}
     );
 }
 
@@ -249,55 +249,55 @@ export function setupProxyHandlers() {
     // 消息监听器
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         console.log("Proxy message:", msg);
-        
+
         switch (msg.action) {
             case ProxyActionType.SET_PROXY_CONFIG:
                 handleSetProxyConfig(msg.config, sendResponse);
                 return true;
-                
+
             case ProxyActionType.CLEAR_PROXY_CONFIG:
                 handleClearProxyConfig(sendResponse);
                 return true;
-                
+
             case ProxyActionType.GET_PROXY_STATUS:
                 handleGetProxyStatus(sendResponse);
                 return true;
 
             case ProxyActionType.GET_PROXY_LOGS:
                 proxyLogs.getLogs().then(logs => {
-                    sendResponse({ 
+                    sendResponse({
                         success: true,
-                        data: logs 
+                        data: logs
                     });
                 }).catch(error => {
-                    sendResponse({ 
-                        success: false, 
-                        error: error.message 
+                    sendResponse({
+                        success: false,
+                        error: error.message
                     });
                 });
                 return true;
 
             case ProxyActionType.CLEAR_PROXY_LOGS:
                 proxyLogs.clearLogs().then(() => {
-                    sendResponse({ success: true });
+                    sendResponse({success: true});
                 }).catch(error => {
-                    sendResponse({ 
-                        success: false, 
-                        error: error.message 
+                    sendResponse({
+                        success: false,
+                        error: error.message
                     });
                 });
                 return true;
 
             case ProxyActionType.GET_PROXY_CONFIGS:
                 proxyStore.getProxyConfigs().then(configs => {
-                    sendResponse({ 
+                    sendResponse({
                         success: true,
-                        data: configs 
+                        data: configs
                     });
                 }).catch(error => {
-                    sendResponse({ 
-                        success: false, 
-                        error: error.message 
+                    sendResponse({
+                        success: false,
+                        error: error.message
                     });
                 });
                 return true;
@@ -305,12 +305,13 @@ export function setupProxyHandlers() {
             case ProxyActionType.ADD_PROXY_CONFIG:
                 proxyStore.getProxyConfigs().then(async configs => {
                     const newConfigs = [...configs, msg.config];
-                    await proxyStore.saveProxyConfigs(newConfigs);
-                    sendResponse({ success: true });
+                    ProxyActionType
+                    proxyStore.saveProxyConfigs(newConfigs);
+                    sendResponse({success: true});
                 }).catch(error => {
-                    sendResponse({ 
-                        success: false, 
-                        error: error.message 
+                    sendResponse({
+                        success: false,
+                        error: error.message
                     });
                 });
                 return true;
@@ -321,23 +322,23 @@ export function setupProxyHandlers() {
                         if (!msg.configs || !Array.isArray(msg.configs)) {
                             throw new Error('无效的配置数据');
                         }
-                        
+
                         console.log('Updating proxy configs:', msg.configs);
                         await proxyStore.saveProxyConfigs(msg.configs);
-                        
+
                         // 获取最新的配置
                         const updatedConfigs = await proxyStore.getProxyConfigs();
                         console.log('Configs updated successfully:', updatedConfigs);
-                        
+
                         // 发送响应
-                        sendResponse({ 
+                        sendResponse({
                             success: true,
                             data: updatedConfigs
                         });
                     } catch (error) {
                         console.error('Error updating proxy configs:', error);
-                        sendResponse({ 
-                            success: false, 
+                        sendResponse({
+                            success: false,
                             error: error.message || '更新代理配置失败'
                         });
                     }
@@ -351,10 +352,11 @@ export function setupProxyHandlers() {
         try {
             // 确保默认配置存在
             await ProxySettings.setDefaultConfigs();
-            
+
             // 清除之前的代理设置
-            await handleClearProxyConfig(() => {});
-            
+            await handleClearProxyConfig(() => {
+            });
+
             // 设置认证监听
             await ProxyAuth.setupAuthListener();
         } catch (error) {
