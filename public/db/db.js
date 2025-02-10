@@ -3,9 +3,13 @@ class Database {
         this.DB_NAME = 'yaklang_extension';
         this.DB_VERSION = 1;
         this.stores = {
+            // 代理日志存储
             PROXY_LOGS: 'proxy_logs',
+            // 代理配置列表存储
             PROXY_CONFIGS: 'proxy_configs',
+            // 当前代理配置存储
             CURRENT_PROXY: 'current_proxy',
+            // 代理认证信息存储
             PROXY_AUTH: 'proxy_auth'
         };
     }
@@ -55,7 +59,7 @@ class Database {
         return tx.objectStore(storeName);
     }
 
-    // 通用的 CRUD 操作
+    // CRUD 操作
     async get(storeName, key) {
         const store = await this.getStore(storeName);
         return new Promise((resolve, reject) => {

@@ -1,5 +1,5 @@
-import React from 'react';
-import { Card, Input, Space, Button, Select, InputNumber, Form, Table } from 'antd';
+import React, { useRef } from 'react';
+import { Card, Input, Space, Button, Select, InputNumber, Form, Table, Tooltip, Popover } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons';
 import { ProxyConfig } from '@/types/proxy';
@@ -143,16 +143,16 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
         }
     ];
 
+    const buttonRef = useRef(null);
+
     return (
         <div>
             <Space style={{ marginBottom: 16, justifyContent: 'flex-end', width: '100%' }}>
-                <Button 
-                    type="primary" 
-                    icon={<PlusOutlined />} 
-                    onClick={onAdd}
-                >
-                    添加代理
-                </Button>
+                <Popover content="添加代理" trigger="hover">
+                    <Button ref={buttonRef} onClick={onAdd}>
+                        添加代理
+                    </Button>
+                </Popover>
             </Space>
             <Table 
                 dataSource={proxyConfigs}

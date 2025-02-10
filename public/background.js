@@ -2,7 +2,7 @@ import {ActionType, injectScriptAndSendMessage, WebSocketManager} from './socket
 import { setupProxyHandlers } from './proxy.js';
 import { ProxyActionType } from './types/action.js';
 
-console.info("Chrome Extenstion Background is loaded")
+console.info("Chrome Extension Background is loaded");
 
 const websocketManager = new WebSocketManager();
 
@@ -12,13 +12,17 @@ setupProxyHandlers();
 // 添加点击事件处理
 chrome.action.onClicked.addListener((tab) => {
     // 打开侧边栏
-    chrome.sidePanel.open({ windowId: tab.windowId });
+    chrome.sidePanel.open({windowId: tab.windowId}).catch(error => {
+        console.error('Error opening side panel:', error);
+    });
 });
 
-// 可选：设置默认打开状态
+// 设置默认打开状态
 chrome.sidePanel.setOptions({
     enabled: true,
     path: 'index.html'
+}).catch(error => {
+    console.error('Error setting side panel options:', error);
 });
 
 chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
