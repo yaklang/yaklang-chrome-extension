@@ -2,8 +2,18 @@
     --yakit-primary: #F28B44;
     --yakit-primary-hover: #f4a061;
     --yakit-primary-active: #e87633;
-    --yakit-primary-5: rgba(242, 139, 68, 0.05);
+    --yakit-primary-5: #fff5eb;
     --yakit-primary-10: rgba(242, 139, 68, 0.1);
+    
+    /* 添加其他全局变量 */
+    --border-color: #f0f0f0;
+    --text-color: #333;
+    --icon-color: #666;
+    
+    /* 菜单相关变量 */
+    --menu-item-height: 28px;
+    --menu-padding: 4px;
+    --menu-width: 180px;
 }
 
 .ant-btn-primary {
@@ -34,4 +44,15 @@
 .ant-btn:not(.ant-btn-primary):hover {
     color: var(--yakit-primary) !important;
     border-color: var(--yakit-primary) !important;
+}
+
+/* 移除所有滚动条 */
+::-webkit-scrollbar {
+    display: none;
+}
+
+/* 确保所有内容都在视口内 */
+html, body {
+    overflow: hidden;
+    height: fit-content;
 } 

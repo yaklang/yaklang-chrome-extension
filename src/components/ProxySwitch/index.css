@@ -1,68 +1,180 @@
-.proxy-switch {
-  padding: 16px;
-  background: #fff;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+.proxy-container {
+    min-width: 200px;
+    background: white;
 }
 
-.proxy-switch-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
+.proxy-menu {
+    border: none !important;
+    box-shadow: none !important;
 }
 
-.proxy-switch .ant-select {
-  margin-right: 8px;
+.menu-item {
+    height: 40px !important;
+    line-height: 40px !important;
+    margin: 0 !important;
+    padding: 0 16px !important;
 }
 
-.proxy-switch .ant-space {
-  gap: 8px;
+.menu-item .anticon {
+    font-size: 16px;
+    color: var(--yakit-primary);
+    margin-right: 8px;
 }
 
-.proxy-switch-title {
-  display: flex;
-  align-items: center;
+.menu-item-label {
+    font-size: 14px;
+    color: #333;
 }
 
-.proxy-switch-title-text {
-  color: #31343F;
-  font-size: 14px;
-  font-weight: 600;
-  margin-right: 8px;
+.menu-item:hover {
+    background-color: var(--yakit-primary-5) !important;
 }
 
-.proxy-switch-content {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: #F8F8F8;
-  border-radius: 4px;
+.menu-item:hover .anticon,
+.menu-item:hover .menu-item-label {
+    color: var(--yakit-primary) !important;
 }
 
-.proxy-switch-info {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+/* 选中状态 */
+.menu-item.ant-menu-item-selected {
+    background-color: var(--yakit-primary) !important;
 }
 
-.proxy-switch-status {
-  color: #85899E;
-  font-size: 12px;
+.menu-item.ant-menu-item-selected .anticon,
+.menu-item.ant-menu-item-selected .menu-item-label {
+    color: white !important;
 }
 
-.proxy-switch-proxy {
-  color: #31343F;
-  font-size: 13px;
+.menu-item.ant-menu-item-selected:hover {
+    background-color: var(--yakit-primary-hover) !important;
 }
 
-.proxy-switch-status-active {
-  color: var(--yakit-primary);
+/* 分隔线 */
+.ant-menu-item-divider {
+    margin: 4px 0 !important;
+    border-color: #EAECF3 !important;
 }
 
-.proxy-switch-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* 设置选项 */
+.menu-item-setting {
+    border-top: 1px solid #EAECF3;
+    margin-top: 4px !important;
+}
+
+.menu-item-setting .anticon {
+    color: #666;
+}
+
+.menu-item-setting:hover {
+    background-color: var(--yakit-primary-5) !important;
+}
+
+.menu-item-setting:hover .anticon,
+.menu-item-setting:hover .menu-item-label {
+    color: var(--yakit-primary) !important;
+}
+
+/* 调整图标大小和对齐 */
+.anticon {
+    font-size: 16px;
+}
+
+/* 添加以下样式来确保下拉菜单显示在正确的位置 */
+.ant-dropdown {
+    position: absolute !important;
+    top: 100% !important;
+    left: 0 !important;
+    width: 100% !important;
+    min-width: 200px !important;
+}
+
+.dropdown-content {
+    background: white;
+    border-radius: 4px;
+    box-shadow: 0 3px 6px -4px rgba(0,0,0,0.12),
+                0 6px 16px 0 rgba(0,0,0,0.08),
+                0 9px 28px 8px rgba(0,0,0,0.05);
+    padding: 4px;
+}
+
+/* 确保容器不会限制弹出层 */
+.proxy-container {
+    min-width: 200px;
+    background: white;
+    border-radius: 4px;
+    position: static;
+}
+
+/* 添加这个样式来确保下拉菜单显示在正确的位置 */
+body {
+    position: relative;
+}
+
+.ant-menu {
+    border: none !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15) !important;
+    padding: 4px 0 !important;
+    width: 180px !important;
+    background: white !important;
+}
+
+.ant-menu-item {
+    height: 28px !important;
+    line-height: 28px !important;
+    margin: 0 !important;
+    padding: 0 16px !important;
+}
+
+.ant-menu-item:hover {
+    background-color: #f5f5f5 !important;
+}
+
+.menu-icon {
+    margin-right: 8px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.menu-item-selected {
+    background-color: #e6f7ff !important;
+}
+
+.ant-menu-item-divider {
+    margin: 4px 0 !important;
+    height: 1px !important;
+    background-color: #f0f0f0 !important;
+}
+
+.ant-menu-item:last-child {
+    margin-top: 4px !important;
+    border-top: 1px solid #f0f0f0;
+}
+
+/* 移除多余的样式 */
+.ant-menu-root {
+    background: transparent !important;
+}
+
+/* 调整整体容器大小 */
+.ant-menu-root {
+    width: 180px !important;
+    min-height: auto !important;
+}
+
+/* 添加代理按钮样式 */
+.menu-item-add {
+    color: #666 !important;
+}
+
+.menu-item-add:hover {
+    background-color: #f5f5f5 !important;
+    color: var(--yakit-primary) !important;
+}
+
+.menu-item-add .anticon {
+    color: #666;
+}
+
+.menu-item-add:hover .anticon {
+    color: var(--yakit-primary);
 } 
