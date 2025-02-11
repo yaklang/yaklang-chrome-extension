@@ -27,12 +27,20 @@ export class ProxySettings {
         const configs = await proxyStore.getProxyConfigs();
         if (!configs || configs.length === 0) {
             // 设置默认的直接连接配置
-            await proxyStore.saveProxyConfigs([{
-                id: 'direct',
-                name: '直接连接',
-                proxyType: 'direct',
-                enabled: false
-            }]);
+            await proxyStore.saveProxyConfigs([
+                {
+                    id: 'direct',
+                    name: '直接连接',
+                    proxyType: 'direct',
+                    enabled: false
+                },
+                {
+                    id: 'system',
+                    name: '系统代理',
+                    proxyType: 'system',
+                    enabled: false
+                }
+            ]);
         }
         // 确保日志存储已初始化
         const logs = await proxyStore.getLogs();  // 使用 getLogs 而不是 getProxyLogs

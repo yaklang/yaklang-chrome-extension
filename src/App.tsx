@@ -1,10 +1,11 @@
 import React from "react";
-import "./App.css";
+// import "./App.css";
 import {ConfigProvider} from "antd";
 import {Contro} from "@components/Contro";
 import {Proxifier} from "@components/Proxifier";
 import {EvalInTab} from "@components/EvalInTab";
 import {ProxySwitch} from "@components/ProxySwitch";
+import './styles/global.css';
 
 function App() {
     return (
