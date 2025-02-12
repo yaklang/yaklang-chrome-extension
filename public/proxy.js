@@ -52,6 +52,61 @@ async function handleSetProxyConfig(config, sendResponse) {
             return;
         }
 
+        // 添加系统代理的处理
+        if (config.proxyType === 'system') {
+            try {
+                // 先清除当前的代理设置
+                await new Promise((resolve) => {
+                    chrome.proxy.settings.clear({
+                        scope: 'regular'
+                    }, resolve);
+                });
+
+                // 然后设置为系统代理
+                await new Promise((resolve) => {
+                    chrome.proxy.settings.set({
+                        value: {mode: "system"},
+                        scope: 'regular'
+                    }, resolve);
+                });
+
+                const settings = await getProxySettings();
+                const isSuccess = settings.value.mode === "system";
+
+                if (isSuccess) {
+                    // 更新存储
+                    await proxyStore.setCurrentProxy({
+                        ...config,
+                        timestamp: Date.now()
+                    });
+
+                    // 更新代理列表状态
+                    const configs = await proxyStore.getProxyConfigs();
+                    const updatedConfigs = configs.map(c => ({
+                        ...c,
+                        enabled: c.id === config.id
+                    }));
+                    await proxyStore.saveProxyConfigs(updatedConfigs);
+
+                    console.log('System proxy set successfully');
+                    sendResponse({success: true});
+                } else {
+                    console.error('Failed to set system proxy');
+                    sendResponse({
+                        success: false,
+                        error: '无法设置系统代理'
+                    });
+                }
+            } catch (error) {
+                console.error('Error setting system proxy:', error);
+                sendResponse({
+                    success: false,
+                    error: error.message || '设置系统代理时发生错误'
+                });
+            }
+            return;
+        }
+
         // 处理代理服务器的情况
         if (!config || !config.host || !config.port) {
             sendResponse({
