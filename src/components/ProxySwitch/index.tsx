@@ -16,7 +16,8 @@ const FIXED_MODES = [
         config: {
             id: 'direct',
             name: '[直接连接]',
-            proxyType: 'direct'
+            proxyType: 'direct',
+            enabled: false
         }
     },
     {
@@ -27,7 +28,8 @@ const FIXED_MODES = [
         config: {
             id: 'system',
             name: '[系统代理]',
-            proxyType: 'system'
+            proxyType: 'system',
+            enabled: false
         }
     }
 ];
