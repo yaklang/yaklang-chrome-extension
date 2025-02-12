@@ -23,7 +23,7 @@ export const OptionsPage: React.FC = () => {
         const newConfig: ProxyConfig = {
             id: Date.now().toString(),
             name: '新建代理',
-            proxyType: 'fixed_server',
+            proxyType: 'fixed_servers',
             scheme: 'http',
             host: '127.0.0.1',
             port: 8080,

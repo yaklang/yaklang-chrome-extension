@@ -11,7 +11,7 @@ export interface ProxyConfig {
     host: string;
     port: number;
     scheme: 'http' | 'https' | 'socks5';
-    proxyType: 'fixed_server';
+    proxyType: 'fixed_servers';
     enabled?: boolean;
     id?: string;
     name?: string;

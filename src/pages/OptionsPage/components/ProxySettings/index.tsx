@@ -46,7 +46,7 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
                     disabled={record.id === 'direct'}
                     options={[
                         { label: '直接连接', value: 'direct' },
-                        { label: '代理服务器', value: 'fixed_server' },
+                        { label: '代理服务器', value: 'fixed_servers' },
                         { label: 'PAC 脚本', value: 'pac_script' }
                     ]}
                 />
@@ -57,7 +57,7 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
             dataIndex: 'scheme',
             key: 'scheme',
             render: (text: string, record: ProxyConfig) => (
-                record.proxyType === 'fixed_server' && (
+                record.proxyType === 'fixed_servers' && (
                     <Select
                         value={text}
                         onChange={value => onChange(record.id, 'scheme', value)}
@@ -77,7 +77,7 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
             dataIndex: 'host',
             key: 'host',
             render: (text: string, record: ProxyConfig) => (
-                record.proxyType === 'fixed_server' && (
+                record.proxyType === 'fixed_servers' && (
                     <Input
                         value={text}
                         onChange={e => onChange(record.id, 'host', e.target.value)}
@@ -91,7 +91,7 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
             dataIndex: 'port',
             key: 'port',
             render: (text: number, record: ProxyConfig) => (
-                record.proxyType === 'fixed_server' && (
+                record.proxyType === 'fixed_servers' && (
                     <InputNumber
                         value={text}
                         onChange={value => onChange(record.id, 'port', value)}
