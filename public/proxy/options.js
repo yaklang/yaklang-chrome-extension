@@ -48,7 +48,7 @@ function updateProxyTypeSettings(proxyItem, config) {
     const serverSettings = proxyItem.querySelector('.proxy-server-settings');
     const pacSettings = proxyItem.querySelector('.pac-script-settings');
 
-    if (config.proxyType === 'fixed_server') {
+    if (config.proxyType === 'fixed_servers') {
         serverSettings.style.display = 'block';
         pacSettings.style.display = 'none';
         
@@ -83,7 +83,7 @@ async function addNewProxy() {
     const newConfig = {
         id: Date.now().toString(),
         name: '新建代理',
-        proxyType: 'fixed_server',
+        proxyType: 'fixed_servers',
         scheme: 'http',
         host: '127.0.0.1',
         port: 8080
@@ -109,7 +109,7 @@ async function handleProxyChange(e) {
     } else if (e.target.classList.contains('proxy-type-select')) {
         updatedConfig.proxyType = e.target.value;
         // 如果切换到固定服务器模式，设置默认值
-        if (updatedConfig.proxyType === 'fixed_server' && !updatedConfig.scheme) {
+        if (updatedConfig.proxyType === 'fixed_servers' && !updatedConfig.scheme) {
             updatedConfig.scheme = 'http';
             updatedConfig.host = '127.0.0.1';
             updatedConfig.port = 8080;
