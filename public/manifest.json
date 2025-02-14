@@ -27,7 +27,8 @@
     "storage",
     "sidePanel",
     "webRequest",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"

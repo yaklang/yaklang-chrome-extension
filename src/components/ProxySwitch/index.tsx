@@ -42,7 +42,17 @@ interface CustomProxy {
     enabled?: boolean;
 }
 
-export const ProxySwitch: React.FC = () => {
+interface ProxySwitchProps {
+    proxyConfigs: ProxyConfig[];
+    currentProxy: ProxyConfig | null;
+    onProxyChange: (config: ProxyConfig) => void;
+}
+
+export const ProxySwitch: React.FC<ProxySwitchProps> = ({
+    proxyConfigs,
+    currentProxy,
+    onProxyChange,
+}) => {
     const [currentMode, setCurrentMode] = useState<string>('direct');
     const [customProxies, setCustomProxies] = useState<CustomProxy[]>([]);
 
@@ -126,12 +136,48 @@ export const ProxySwitch: React.FC = () => {
 
     const handleModeChange = async (mode: string) => {
         if (mode === 'setting') {
-            chrome.runtime.openOptionsPage?.();
+            await chrome.runtime.openOptionsPage?.();
             return;
         }
 
         if (mode === 'add') {
-            chrome.runtime.openOptionsPage?.();
+            try {
+                // 获取当前活动标签页
+                const [activeTab] = await chrome.tabs.query({ 
+                    active: true,
+                    currentWindow: true
+                });
+                const optionsUrl = chrome.runtime.getURL('/proxy/options.html');
+                
+                if (activeTab?.url === optionsUrl) {
+                    // 如果当前就在 options 页面，直接发消息触发添加代理
+                    chrome.tabs.sendMessage(activeTab.id!, {
+                        action: 'TRIGGER_ADD_PROXY'
+                    });
+                } else {
+                    // 如果不在 options 页面，创建新的
+                    const tab = await chrome.tabs.create({
+                        url: optionsUrl
+                    });
+
+                    // 等待页面加载完成
+                    const listener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+                        if (tabId === tab.id && changeInfo.status === 'complete') {
+                            chrome.tabs.onUpdated.removeListener(listener);
+                            // 给页面一点时间完全初始化
+                            // setTimeout(() => {
+                                chrome.tabs.sendMessage(tab.id!, {
+                                    action: 'TRIGGER_ADD_PROXY'
+                                });
+                            // }, 500); // 减少延迟时间
+                        }
+                    };
+                    
+                    chrome.tabs.onUpdated.addListener(listener);
+                }
+            } catch (error) {
+                console.error('Failed to get current tab:', error);
+            }
             return;
         }
 

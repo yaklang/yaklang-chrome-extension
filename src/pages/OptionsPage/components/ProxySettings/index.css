@@ -1,0 +1,65 @@
+/* 表格样式 */
+.proxy-table {
+    background: white;
+    border-radius: 8px;
+}
+
+/* 表头样式 */
+.proxy-table .ant-table-thead > tr > th {
+    background: white !important;
+    color: #333;
+    font-weight: 500;
+    border-bottom: 1px solid var(--border-color);
+    padding: 12px 16px;
+}
+
+/* 斑马纹样式 */
+.proxy-table .ant-table-tbody > tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+/* 单元格样式 */
+.proxy-table .ant-table-tbody > tr > td {
+    border-bottom: 1px solid var(--border-color);
+    padding: 12px 16px;
+}
+
+/* 操作列图标样式 */
+.action-icon {
+    font-size: 16px;
+    cursor: pointer;
+    color: #666;
+    transition: all 0.3s;
+}
+
+.action-icon:hover {
+    color: var(--yakit-primary);
+    transform: scale(1.1);
+}
+
+.action-icon.enabled {
+    color: var(--yakit-primary);
+}
+
+.action-icon.delete:hover {
+    color: #ff4d4f;
+}
+
+/* 间距调整 */
+.ant-space-middle {
+    gap: 16px !important;
+}
+
+/* 添加按钮样式 */
+.add-proxy-btn {
+    background-color: var(--yakit-primary);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    margin-bottom: 16px;
+}
+
+.add-proxy-btn:hover {
+    background-color: var(--yakit-primary-hover) !important;
+    color: white !important;
+} 
