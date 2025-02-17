@@ -132,6 +132,44 @@ class ProxyStore {
             // 忽略接收者不存在的错误
         });
     }
+
+    async addAndEnableProxy(config) {
+        try {
+            // 先禁用所有其他代理
+            const existingConfigs = await this.getProxyConfigs();
+            for (const existingConfig of existingConfigs) {
+                if (existingConfig.enabled) {
+                    await this.saveProxyConfigs([{
+                        ...existingConfig,
+                        enabled: false
+                    }]);
+                }
+            }
+
+            // 添加并启用新代理
+            await this.saveProxyConfigs([config]);
+
+            // 应用新代理
+            await chrome.proxy.settings.set({
+                value: {
+                    mode: config.proxyType,
+                    rules: {
+                        singleProxy: {
+                            scheme: config.scheme,
+                            host: config.host,
+                            port: config.port
+                        }
+                    }
+                },
+                scope: 'regular'
+            });
+
+            return { success: true };
+        } catch (error) {
+            console.error('Error in addAndEnableProxy:', error);
+            return { success: false, error };
+        }
+    }
 }
 
 export const proxyStore = new ProxyStore();

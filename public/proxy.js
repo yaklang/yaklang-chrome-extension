@@ -292,7 +292,54 @@ async function queueProxyLog(details, error = null) {
     }
 }
 
-// 导出代理处理器设置函数
+// 添加 URL 拦截处理
+function setupUrlInterceptor() {
+    chrome.webNavigation.onBeforeNavigate.addListener(async (details) => {
+        try {
+            const url = new URL(details.url);
+            
+            if (url.hostname === 'mitm') {
+                // 解析参数
+                const host = url.searchParams.get('host');
+                const port = parseInt(url.searchParams.get('port') || '0');
+                const scheme = url.searchParams.get('scheme');
+
+                if (host && port && scheme) {
+                    // 创建新的代理配置
+                    const newConfig = {
+                        id: Date.now().toString(),
+                        name: "Yakit MITM",
+                        proxyType: 'fixed_servers',
+                        scheme: scheme,
+                        host: host,
+                        port: port,
+                        enabled: true
+                    };
+
+                    // 直接使用 proxyStore 实例的方法
+                    const result = await proxyStore.addAndEnableProxy(newConfig);
+                    
+                    if (result.success) {
+                        // 重定向回 mitm 页面
+                        chrome.tabs.update(details.tabId, {
+                            url: "http://mitm/"
+                        });
+                    } else {
+                        console.error('Failed to add and enable proxy:', result.error);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error handling proxy URL:', error);
+        }
+    }, {
+        url: [{
+            hostEquals: 'mitm'
+        }]
+    });
+}
+
+// 修改 setupProxyHandlers 函数
 export function setupProxyHandlers() {
     // 设置代理错误处理和认证
     ProxyAuth.setupErrorHandler();
@@ -300,6 +347,9 @@ export function setupProxyHandlers() {
 
     // 设置代理请求监听器
     setupProxyRequestListener();
+    
+    // 设置 URL 拦截器
+    setupUrlInterceptor();
 
     // 消息监听器
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
