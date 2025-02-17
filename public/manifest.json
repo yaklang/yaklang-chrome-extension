@@ -28,10 +28,12 @@
     "sidePanel",
     "webRequest",
     "declarativeNetRequest",
+    "webNavigation",
     "tabs"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "*://mitm/*"
   ],
 
   "web_accessible_resources": [
