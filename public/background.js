@@ -1,6 +1,5 @@
 import {ActionType, injectScriptAndSendMessage, WebSocketManager} from './socket.js';
 import { setupProxyHandlers } from './proxy.js';
-import { ProxyActionType } from './types/action.js';
 
 console.info("Chrome Extension Background is loaded");
 
@@ -25,7 +24,7 @@ chrome.sidePanel.setOptions({
     console.error('Error setting side panel options:', error);
 });
 
-chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     console.log("msg", msg)
     switch (msg.action) {
         case ActionType.CONNECT:
