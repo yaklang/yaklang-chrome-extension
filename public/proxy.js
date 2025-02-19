@@ -437,7 +437,7 @@ export function setupProxyHandlers() {
                 })();
                 return true;
 
-            case 'OPEN_OPTIONS_PAGE':
+            case ProxyActionType.OPEN_OPTIONS_PAGE:
                 // 打开选项页
                 chrome.tabs.create({ 
                     url: chrome.runtime.getURL('/proxy/options.html')
@@ -458,26 +458,6 @@ export function setupProxyHandlers() {
                 });
                 sendResponse({ success: true });
                 return true;
-
-            case 'PROXY_GET_STATUS':
-                return handleGetProxyStatus(sendResponse);
-
-            case 'PROXY_GET_CONFIGS':
-                (async () => {
-                    try {
-                        const configs = await proxyStore.getProxyConfigs();
-                        sendResponse({ success: true, data: configs });
-                    } catch (error) {
-                        console.error('Error getting proxy configs:', error);
-                        sendResponse({ success: false, error: error.message });
-                    }
-                })();
-                return true;
-
-            case 'PROXY_SET_CONFIG':
-                return handleSetProxyConfig(msg.config, sendResponse);
-
-            case 'PROXY_CLEAR_CONFIG':
                 return handleClearProxyConfig(sendResponse);
         }
     });
