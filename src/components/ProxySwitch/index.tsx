@@ -55,6 +55,7 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = ({
 }) => {
     const [currentMode, setCurrentMode] = useState<string>('direct');
     const [customProxies, setCustomProxies] = useState<CustomProxy[]>([]);
+    const [isLoading, setIsLoading] = useState<boolean>(false);
 
     useEffect(() => {
         loadProxyStatus();
@@ -110,6 +111,7 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = ({
 
     const handleApplyConfig = async (mode: string) => {
         try {
+            setIsLoading(true);
             const fixedMode = FIXED_MODES.find(fixed => fixed.key === mode);
             const customProxy = customProxies.find(proxy => proxy.key === mode);
             
@@ -120,17 +122,30 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = ({
                 return;
             }
 
+            setCurrentMode(mode);
+            
+            if (customProxy) {
+                setCustomProxies(prev => prev.map(p => ({
+                    ...p,
+                    enabled: p.key === mode
+                })));
+            }
+
             const response = await chrome.runtime.sendMessage({
                 action: ProxyActionType.SET_PROXY_CONFIG,
                 config
             });
             
-            if (response.success) {
-                setCurrentMode(mode);
-                await loadCustomProxies();
+            if (response?.success === false) {
+                throw new Error(response.error || '设置代理失败');
             }
+
+            await loadCustomProxies();
         } catch (error) {
-            console.error('Failed to apply proxy config:', error);
+            console.error('Error applying proxy config:', error);
+            throw error;
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -164,12 +179,9 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = ({
                     const listener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
                         if (tabId === tab.id && changeInfo.status === 'complete') {
                             chrome.tabs.onUpdated.removeListener(listener);
-                            // 给页面一点时间完全初始化
-                            // setTimeout(() => {
                                 chrome.tabs.sendMessage(tab.id!, {
                                     action: 'TRIGGER_ADD_PROXY'
                                 });
-                            // }, 500); // 减少延迟时间
                         }
                     };
                     
@@ -193,14 +205,17 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = ({
             key: mode.key,
             icon: <span className="menu-icon" style={{ color: mode.color }}>{mode.icon}</span>,
             label: mode.name,
-            className: currentMode === mode.key ? 'menu-item-selected' : ''
+            className: `${currentMode === mode.key ? 'menu-item-selected' : ''} ${isLoading ? 'menu-item-loading' : ''}`
         })),
         { type: 'divider' },
         ...customProxies.map(proxy => ({
             key: proxy.key,
             icon: <span className="menu-icon" style={{ color: proxy.color }}><GlobalOutlined /></span>,
-            label: <span style={{ color: proxy.enabled ? 'var(--yakit-primary)' : 'inherit' }}>{proxy.name}</span>,
-            className: proxy.enabled ? 'menu-item-selected' : ''
+            label: <span style={{ 
+                color: currentMode === proxy.key ? 'var(--yakit-primary)' : 'inherit',
+                opacity: isLoading ? 0.7 : 1
+            }}>{proxy.name}</span>,
+            className: `${currentMode === proxy.key ? 'menu-item-selected' : ''} ${isLoading ? 'menu-item-loading' : ''}`
         })),
         {
             key: 'add',
@@ -220,8 +235,9 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = ({
         <Menu
             items={menuItems}
             selectedKeys={[currentMode]}
-            onClick={({ key }) => handleModeChange(key)}
+            onClick={({ key }) => !isLoading && handleModeChange(key)}
             style={{ width: 180 }}
+            className={isLoading ? 'menu-loading' : ''}
         />
     );
 };

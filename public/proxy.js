@@ -42,6 +42,9 @@ async function handleSetProxyConfig(config, sendResponse) {
 
                 console.log('Direct connection set successfully');
                 sendResponse({success: true});
+                
+                // 通知所有 content scripts 更新
+                await notifyProxyStatusChanged();
             } else {
                 console.error('Failed to set direct connection');
                 sendResponse({
@@ -90,6 +93,9 @@ async function handleSetProxyConfig(config, sendResponse) {
 
                     console.log('System proxy set successfully');
                     sendResponse({success: true});
+                    
+                    // 通知所有 content scripts 更新
+                    await notifyProxyStatusChanged();
                 } else {
                     console.error('Failed to set system proxy');
                     sendResponse({
@@ -155,6 +161,9 @@ async function handleSetProxyConfig(config, sendResponse) {
 
             console.log('Proxy successfully set:', settings.value);
             sendResponse({success: true});
+            
+            // 通知所有 content scripts 更新
+            await notifyProxyStatusChanged();
         } else {
             console.error('Proxy settings verification failed');
             sendResponse({
@@ -173,49 +182,24 @@ async function handleSetProxyConfig(config, sendResponse) {
 
 async function handleClearProxyConfig(sendResponse) {
     try {
-        await new Promise((resolve) => {
-            chrome.proxy.settings.clear({
-                scope: 'regular'
-            }, resolve);
+        await chrome.proxy.settings.clear({
+            scope: 'regular'
         });
-
-        await new Promise((resolve) => {
-            chrome.proxy.settings.set({
-                value: {mode: "system"},
-                scope: 'regular'
-            }, resolve);
-        });
-
-        // 只移除当前代理配置，保留代理列表
-        await proxyStore.clearCurrentProxy();
-
-        // 更新所有代理的启用状态
+        // 获取所有配置并禁用
         const configs = await proxyStore.getProxyConfigs();
         const updatedConfigs = configs.map(config => ({
             ...config,
             enabled: false
         }));
         await proxyStore.saveProxyConfigs(updatedConfigs);
-
-        const settings = await getProxySettings();
-        const isSuccess = settings.value.mode === "system";
-
-        if (isSuccess) {
-            console.log('Proxy successfully cleared');
-            sendResponse({success: true});
-        } else {
-            console.error('Failed to clear proxy settings');
-            sendResponse({
-                success: false,
-                error: '无法清除代理设置'
-            });
-        }
+        
+        sendResponse({ success: true });
+        
+        // 通知所有 content scripts 更新
+        await notifyProxyStatusChanged();
     } catch (error) {
-        console.error('Error clearing proxy:', error);
-        sendResponse({
-            success: false,
-            error: error.message || '清除代理时发生错误'
-        });
+        console.error('Error clearing proxy config:', error);
+        sendResponse({ success: false, error: error.message });
     }
 }
 
@@ -361,7 +345,9 @@ export function setupProxyHandlers() {
                 return true;
 
             case ProxyActionType.CLEAR_PROXY_CONFIG:
-                handleClearProxyConfig(sendResponse);
+                (async () => {
+                    await handleClearProxyConfig(sendResponse);
+                })();
                 return true;
 
             case ProxyActionType.GET_PROXY_STATUS:
@@ -394,17 +380,15 @@ export function setupProxyHandlers() {
                 return true;
 
             case ProxyActionType.GET_PROXY_CONFIGS:
-                proxyStore.getProxyConfigs().then(configs => {
-                    sendResponse({
-                        success: true,
-                        data: configs
-                    });
-                }).catch(error => {
-                    sendResponse({
-                        success: false,
-                        error: error.message
-                    });
-                });
+                (async () => {
+                    try {
+                        const configs = await proxyStore.getProxyConfigs();
+                        sendResponse({ success: true, data: configs });
+                    } catch (error) {
+                        console.error('Error getting proxy configs:', error);
+                        sendResponse({ success: false, error: error.message });
+                    }
+                })();
                 return true;
 
             case ProxyActionType.ADD_PROXY_CONFIG:
@@ -422,7 +406,7 @@ export function setupProxyHandlers() {
                 return true;
 
             case ProxyActionType.UPDATE_PROXY_CONFIG:
-                (async () => {  // 使用立即执行的异步函数
+                (async () => {
                     try {
                         if (!msg.configs || !Array.isArray(msg.configs)) {
                             throw new Error('无效的配置数据');
@@ -440,6 +424,9 @@ export function setupProxyHandlers() {
                             success: true,
                             data: updatedConfigs
                         });
+
+                        // 通知所有 content scripts 更新
+                        await notifyProxyStatusChanged();
                     } catch (error) {
                         console.error('Error updating proxy configs:', error);
                         sendResponse({
@@ -448,7 +435,50 @@ export function setupProxyHandlers() {
                         });
                     }
                 })();
-                return true;  // 保持消息端口打开
+                return true;
+
+            case 'OPEN_OPTIONS_PAGE':
+                // 打开选项页
+                chrome.tabs.create({ 
+                    url: chrome.runtime.getURL('/proxy/options.html')
+                }).then(tab => {
+                    if (msg.triggerAdd) {
+                        // 如果需要触发添加代理，等待页面加载完成
+                        const listener = (tabId, changeInfo) => {
+                            if (tabId === tab.id && changeInfo.status === 'complete') {
+                                chrome.tabs.onUpdated.removeListener(listener);
+                                // 向选项页发送消息触发添加代理
+                                chrome.tabs.sendMessage(tab.id, {
+                                    action: 'TRIGGER_ADD_PROXY'
+                                });
+                            }
+                        };
+                        chrome.tabs.onUpdated.addListener(listener);
+                    }
+                });
+                sendResponse({ success: true });
+                return true;
+
+            case 'PROXY_GET_STATUS':
+                return handleGetProxyStatus(sendResponse);
+
+            case 'PROXY_GET_CONFIGS':
+                (async () => {
+                    try {
+                        const configs = await proxyStore.getProxyConfigs();
+                        sendResponse({ success: true, data: configs });
+                    } catch (error) {
+                        console.error('Error getting proxy configs:', error);
+                        sendResponse({ success: false, error: error.message });
+                    }
+                })();
+                return true;
+
+            case 'PROXY_SET_CONFIG':
+                return handleSetProxyConfig(msg.config, sendResponse);
+
+            case 'PROXY_CLEAR_CONFIG':
+                return handleClearProxyConfig(sendResponse);
         }
     });
 
@@ -458,9 +488,13 @@ export function setupProxyHandlers() {
             // 确保默认配置存在
             await ProxySettings.setDefaultConfigs();
 
-            // 清除之前的代理设置
-            await handleClearProxyConfig(() => {
-            });
+            // 设置为系统代理
+            await handleSetProxyConfig({
+                id: 'system',
+                name: '[系统代理]',
+                proxyType: 'system',
+                enabled: true
+            }, () => {});
 
             // 设置认证监听
             await ProxyAuth.setupAuthListener();
@@ -468,4 +502,31 @@ export function setupProxyHandlers() {
             console.error('Error during installation:', error);
         }
     });
+
+    // 添加启动时的初始化
+    chrome.runtime.onStartup.addListener(async () => {
+        try {
+            // 设置为系统代理
+            await handleSetProxyConfig({
+                id: 'system',
+                name: '[系统代理]',
+                proxyType: 'system',
+                enabled: true
+            }, () => {});
+        } catch (error) {
+            console.error('Error during startup:', error);
+        }
+    });
+}
+
+// 当代理状态改变时通知所有内容脚本
+async function notifyProxyStatusChanged() {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+        try {
+            chrome.tabs.sendMessage(tab.id, { action: 'PROXY_STATUS_CHANGED' });
+        } catch (error) {
+            // 忽略不支持的标签页
+        }
+    }
 }
