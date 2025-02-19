@@ -9,19 +9,16 @@ export const useProxyConfigs = () => {
     useEffect(() => {
         loadConfigs();
         
-        // 监听配置更新
-        const handleConfigUpdate = () => {
-            loadConfigs();
+        const messageListener = (message: any) => {
+            if (message.action === 'PROXY_CONFIGS_UPDATED') {
+                loadConfigs();
+            }
         };
         
-        chrome.runtime.onMessage.addListener((message) => {
-            if (message.action === 'PROXY_CONFIGS_UPDATED') {
-                handleConfigUpdate();
-            }
-        });
+        chrome.runtime.onMessage.addListener(messageListener);
 
         return () => {
-            chrome.runtime.onMessage.removeListener(handleConfigUpdate);
+            chrome.runtime.onMessage.removeListener(messageListener);
         };
     }, []);
 
@@ -70,6 +67,9 @@ export const useProxyConfigs = () => {
             
             if (response?.success) {
                 setProxyConfigs(response.data || updatedConfigs);
+                await chrome.runtime.sendMessage({
+                    action: 'PROXY_CONFIGS_UPDATED'
+                });
                 message.success('更新配置成功');
             } else {
                 message.error(response?.error || '更新配置失败');
@@ -88,7 +88,6 @@ export const useProxyConfigs = () => {
             const updatedConfigs = proxyConfigs.filter(config => config.id !== configId);
             console.log('Updated configs after delete:', updatedConfigs);
             
-            // 使用 Promise 包装消息发送
             const response = await new Promise<any>((resolve) => {
                 chrome.runtime.sendMessage({
                     action: ProxyActionType.UPDATE_PROXY_CONFIG,
@@ -121,24 +120,15 @@ export const useProxyConfigs = () => {
             const config = proxyConfigs.find(c => c.id === configId);
             if (!config) return;
 
-            // 先取消当前启用的代理
-            const currentEnabled = proxyConfigs.find(c => c.enabled);
-            if (currentEnabled && currentEnabled.id !== configId) {
-                // 如果当前启用的不是直接连接，需要先清除代理设置
-                if (currentEnabled.id !== 'direct') {
-                    await chrome.runtime.sendMessage({
-                        action: ProxyActionType.CLEAR_PROXY_CONFIG
-                    });
-                }
-            }
-
-            // 应用新的代理设置
             const response = await chrome.runtime.sendMessage({
                 action: ProxyActionType.SET_PROXY_CONFIG,
                 config: config
             });
 
             if (response.success) {
+                await chrome.runtime.sendMessage({
+                    action: 'PROXY_STATUS_CHANGED'
+                });
                 message.success('代理设置已应用');
             } else {
                 message.error(response.error || '应用代理设置失败');

@@ -25,7 +25,6 @@ chrome.sidePanel.setOptions({
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    console.log("msg", msg)
     switch (msg.action) {
         case ActionType.CONNECT:
             console.info("Start to connect websocket")

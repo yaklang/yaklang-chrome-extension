@@ -24,7 +24,7 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://github.com/*"],
+      "matches": ["http://mitm/"],
       "run_at": "document_start",
       "js": ["proxy/content.js"]
     }
