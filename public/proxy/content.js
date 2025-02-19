@@ -9,6 +9,9 @@ const ProxyActionType = {
     UPDATE_PROXY_CONFIG: 'UPDATE_PROXY_CONFIG'
 };
 
+// 在文件顶部添加常量声明
+const YAK_ICON_URL = chrome.runtime.getURL('/images/yak.svg');
+
 // 添加一个通用的消息发送函数
 async function sendMessageWithRetry(message, maxRetries = 3) {
     for (let i = 0; i < maxRetries; i++) {
@@ -139,26 +142,39 @@ async function updatePanel() {
     
     // 修改这里的判断逻辑
     let html = `
-        <div class="proxy-item ${currentProxy.proxy === '' ? 'active' : ''}" data-id="direct">
-            <span style="color: ${currentProxy.proxy === '' ? '#ff6b00' : '#666'}">🔴</span>
+        <div class="proxy-item ${!currentProxy.enable && currentProxy.proxy === '' ? 'active' : ''}" 
+             data-id="direct"
+             title="直接连接">
+            <span style="color: ${!currentProxy.enable && currentProxy.proxy === '' ? '#ff6b00' : '#666'}">🟢</span>
             <span>[直接连接]</span>
+            <img src="${YAK_ICON_URL}" class="watermark-icon" alt="" />
         </div>
-        <div class="proxy-item ${currentProxy.proxy === 'system' ? 'active' : ''}" data-id="system">
+        <div class="proxy-item ${currentProxy.proxy === 'system' ? 'active' : ''}" 
+             data-id="system"
+             title="系统代理">
             <span style="color: ${currentProxy.proxy === 'system' ? '#ff6b00' : '#666'}">⚙️</span>
             <span>[系统代理]</span>
+            <img src="${YAK_ICON_URL}" class="watermark-icon" alt="" />
         </div>
+        <div class="divider"></div>
     `;
 
-    // 添加自定义代理配置
+    // 修改自定义代理配置的判断逻辑
     configs.forEach(config => {
         if (config.id !== 'direct' && config.id !== 'system') {
-            // 检查当前代理是否与配置匹配
-            const isActive = currentProxy.enable && 
-                           currentProxy.proxy === `${config.scheme}://${config.host}:${config.port}`;
+            const proxyUrl = `${config.scheme}://${config.host}:${config.port}`;
+            const isActive = currentProxy.enable && currentProxy.proxy === proxyUrl && config.enabled;
+            
+            // 添加 title 属性显示详细信息
+            const tooltipText = `${config.scheme.toUpperCase()} ${config.host}:${config.port}`;
+            
             html += `
-                <div class="proxy-item ${isActive ? 'active' : ''}" data-id="${config.id}">
+                <div class="proxy-item ${isActive ? 'active' : ''}" 
+                     data-id="${config.id}"
+                     title="${tooltipText}">
                     <span style="color: ${isActive ? '#ff6b00' : '#666'}">🌐</span>
                     <span>${config.name}</span>
+                    <img src="${YAK_ICON_URL}" class="watermark-icon" alt="" />
                 </div>
             `;
         }
@@ -247,7 +263,7 @@ function createFloatingPanel() {
             position: fixed;
             top: 20px;
             right: 0;
-            width: 200px;
+            width: 180px;
             background: white;
             border-radius: 8px 0 0 8px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
@@ -299,21 +315,41 @@ function createFloatingPanel() {
         }
 
         .panel-content {
-            padding: 12px;
+            padding: 4px;
         }
 
         .proxy-item {
+            position: relative;
             display: flex;
             align-items: center;
-            padding: 8px 12px;
+            padding: 4px 10px;
             cursor: pointer;
             transition: all 0.2s;
             color: #666;
             border-left: 3px solid transparent;
+            overflow: hidden;
         }
 
-        .proxy-item:hover {
-            background: #f5f5f5;
+        .proxy-item > span {
+            position: relative;
+            z-index: 1;
+        }
+
+        .watermark-icon {
+            position: absolute;
+            right: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.3;
+            pointer-events: none;
+            display: none;
+            object-fit: contain;
+            object-position: right center;
+            padding: 4px;
+        }
+
+        .proxy-item.active .watermark-icon {
+            display: block;
         }
 
         .proxy-item.active {
@@ -333,6 +369,10 @@ function createFloatingPanel() {
             transition: color 0.2s;
         }
 
+        .proxy-item:hover {
+            background: #f5f5f5;
+        }
+
         .proxy-item:hover span:first-child {
             color: #ff6b00;
         }
@@ -340,7 +380,7 @@ function createFloatingPanel() {
         .add-proxy {
             display: flex;
             align-items: center;
-            padding: 8px 12px;
+            padding: 4px 10px;
             color: #1890ff;
             cursor: pointer;
             border-top: 1px solid #eee;
@@ -352,7 +392,7 @@ function createFloatingPanel() {
         }
 
         .settings {
-            padding: 8px 12px;
+            padding: 4px 10px;
             color: #666;
             cursor: pointer;
             border-top: 1px solid #eee;
@@ -362,6 +402,25 @@ function createFloatingPanel() {
         .settings:hover {
             background: #f5f5f5;
         }
+
+        .panel-header .header-content {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0 4px;
+        }
+
+        .yak-icon {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
+        }
+
+        .divider {
+            height: 1px;
+            background-color: #eee;
+            margin: 4px 0;
+        }
     `;
 
     // 创建面板内容
@@ -370,20 +429,24 @@ function createFloatingPanel() {
     panel.innerHTML = `
         <div class="collapse-trigger"></div>
         <div class="panel-header">
-            <span>代理设置</span>
+            <div class="header-content">
+                <img src="${YAK_ICON_URL}" class="yak-icon" alt="Yak" />
+                <span>代理设置</span>
+            </div>
         </div>
         <div class="panel-content">
             <div class="proxy-item active">
-                <span>🔴</span>
+                <span>🟢</span>
                 <span>[直接连接]</span>
             </div>
             <div class="proxy-item">
                 <span>⚙️</span>
                 <span>[系统代理]</span>
             </div>
+            <div class="divider"></div>
             <div class="add-proxy">
                 <span>➕</span>
-                <span>添加代理...</span>
+                <span>[添加代理...]</span>
             </div>
             <div class="settings">
                 <span>👨‍💻</span>

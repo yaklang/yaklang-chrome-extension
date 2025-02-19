@@ -201,3 +201,35 @@ body {
 .ant-menu-item .menu-icon {
     transition: color 0.3s ease;
 }
+
+.proxy-switch-container {
+    position: relative;
+    width: 180px;
+    overflow: hidden;
+}
+
+.panel-watermark {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0.03;
+    pointer-events: none;
+    object-fit: contain;
+    object-position: right bottom;
+    z-index: 0;
+}
+
+/* 确保菜单项在水印上层 */
+.ant-menu-item {
+    position: relative;
+    z-index: 1;
+    background: transparent !important;
+}
+
+/* 确保分割线在水印上层 */
+.ant-menu-item-divider {
+    position: relative;
+    z-index: 1;
+}

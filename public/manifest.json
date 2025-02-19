@@ -39,18 +39,20 @@
     "tabs"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "*://mitm/*"
+    "<all_urls>"
   ],
 
   "web_accessible_resources": [
     {
       "resources": [
-        "types/*.js",
-        "proxy/*.js",
-        "socket.js",
-        "proxy.js",
-        "proxy/content.js"
+        "images/*",
+        "proxy/*"
+      ],
+      "matches": ["<all_urls>"]
+    },
+    {
+      "resources": [
+        "/images/yak.svg"
       ],
       "matches": ["<all_urls>"]
     }
