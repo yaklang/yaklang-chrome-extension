@@ -57,12 +57,25 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
     const [customProxies, setCustomProxies] = useState<CustomProxy[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
 
+    // 修改存储变化监听
+    useEffect(() => {
+        const handleMessage = (message: any) => {
+            if (message.action === 'PROXY_CONFIGS_UPDATED' && message.source !== 'proxy_switch') {
+                loadCustomProxies();
+            }
+        };
+
+        chrome.runtime.onMessage.addListener(handleMessage);
+        return () => {
+            chrome.runtime.onMessage.removeListener(handleMessage);
+        };
+    }, []);
+
     useEffect(() => {
         const init = async () => {
-            await Promise.all([
-                loadProxyStatus(),
-                loadCustomProxies()
-            ]);
+            // 修改初始化逻辑，避免并行请求
+            await loadProxyStatus();
+            await loadCustomProxies();
             setInitialized(true);
         };
         init();
@@ -93,39 +106,6 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
 
     const loadCustomProxies = async () => {
         try {
-            // 首先检查当前是否在 options 页面的上下文中
-            const currentUrl = window.location.href;
-            const isInOptionsContext = currentUrl.includes('chrome-extension://') && currentUrl.includes('options.html');
-
-            if (isInOptionsContext) {
-                // 如果在 options 页面上下文中，直接使用消息通信
-                const response = await chrome.runtime.sendMessage({
-                    action: ProxyActionType.GET_PROXY_CONFIGS
-                });
-                
-                if (response?.success && response.data) {
-                    const proxies = response.data
-                        .filter((proxy: ProxyConfig) => !FIXED_MODES.some(mode => mode.key === proxy.id))
-                        .map((proxy: ProxyConfig): CustomProxy => ({
-                            key: proxy.id,
-                            name: proxy.name,
-                            color: '#1890ff',
-                            config: proxy,
-                            enabled: proxy.enabled
-                        }));
-                    setCustomProxies(proxies);
-
-                    const enabledProxy = response.data.find((proxy: ProxyConfig) => proxy.enabled);
-                    if (enabledProxy) {
-                        setCurrentMode(enabledProxy.id);
-                    } else {
-                        setCurrentMode('direct');
-                    }
-                    return;
-                }
-            }
-
-            // 如果不在 options 页面上下文中，使用 IndexedDB
             const DB_NAME = 'yaklang_extension';
             const STORE_NAME = 'proxy_configs';
 
@@ -165,53 +145,49 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
             const enabledProxy = configs.find((proxy: ProxyConfig) => proxy.enabled);
             if (enabledProxy) {
                 setCurrentMode(enabledProxy.id);
-            } else {
-                setCurrentMode('direct');
             }
-
         } catch (error) {
             console.error('Error loading custom proxies:', error);
             setCustomProxies([]);
-            setCurrentMode('direct');
         }
     };
 
     const handleModeChange = async (mode: string) => {
-        if (mode === 'setting') {
-            await chrome.runtime.openOptionsPage?.();
-            return;
-        }
-
-        if (mode === 'add') {
-            try {
-                const [activeTab] = await chrome.tabs.query({ 
-                    active: true,
-                    currentWindow: true
-                });
-                const optionsUrl = chrome.runtime.getURL('/proxy/options.html');
-                
-                if (activeTab?.url === optionsUrl) {
-                    chrome.tabs.sendMessage(activeTab.id!, {
-                        action: 'TRIGGER_ADD_PROXY'
+        if (mode === 'setting' || mode === 'add') {
+            if (mode === 'setting') {
+                await chrome.runtime.openOptionsPage?.();
+            }
+            if (mode === 'add') {
+                try {
+                    const [activeTab] = await chrome.tabs.query({ 
+                        active: true,
+                        currentWindow: true
                     });
-                } else {
-                    const tab = await chrome.tabs.create({
-                        url: optionsUrl
-                    });
-
-                    const listener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
-                        if (tabId === tab.id && changeInfo.status === 'complete') {
-                            chrome.tabs.onUpdated.removeListener(listener);
-                            chrome.tabs.sendMessage(tab.id!, {
-                                action: 'TRIGGER_ADD_PROXY'
-                            });
-                        }
-                    };
+                    const optionsUrl = chrome.runtime.getURL('/proxy/options.html');
                     
-                    chrome.tabs.onUpdated.addListener(listener);
+                    if (activeTab?.url === optionsUrl) {
+                        chrome.tabs.sendMessage(activeTab.id!, {
+                            action: 'TRIGGER_ADD_PROXY'
+                        });
+                    } else {
+                        const tab = await chrome.tabs.create({
+                            url: optionsUrl
+                        });
+
+                        const listener = (tabId: number, changeInfo: chrome.tabs.TabChangeInfo) => {
+                            if (tabId === tab.id && changeInfo.status === 'complete') {
+                                chrome.tabs.onUpdated.removeListener(listener);
+                                chrome.tabs.sendMessage(tab.id!, {
+                                    action: 'TRIGGER_ADD_PROXY'
+                                });
+                            }
+                        };
+                        
+                        chrome.tabs.onUpdated.addListener(listener);
+                    }
+                } catch (error) {
+                    console.error('Failed to get current tab:', error);
                 }
-            } catch (error) {
-                console.error('Failed to get current tab:', error);
             }
             return;
         }
@@ -227,8 +203,8 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
                 return;
             }
 
+            // 立即更新UI状态
             setCurrentMode(mode);
-            
             if (customProxy) {
                 setCustomProxies(prev => prev.map(p => ({
                     ...p,
@@ -238,16 +214,20 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
 
             const response = await chrome.runtime.sendMessage({
                 action: ProxyActionType.SET_PROXY_CONFIG,
-                config
+                config,
+                // 添加一个标志，表示这是从 ProxySwitch 发起的更改
+                source: 'proxy_switch'
             });
             
             if (response?.success === false) {
                 throw new Error(response.error || '设置代理失败');
             }
 
-            await loadCustomProxies();
+            // 不需要重新加载，因为我们已经更新了本地状态
         } catch (error) {
             console.error('Error applying proxy config:', error);
+            // 发生错误时才重新加载以确保状态正确
+            await loadCustomProxies();
             throw error;
         } finally {
             setIsLoading(false);
@@ -265,13 +245,17 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
         { type: 'divider' },
         ...customProxies.map(proxy => ({
             key: proxy.key,
-            icon: <span className="menu-icon" style={{ color: proxy.color }}><GlobalOutlined /></span>,
+            icon: <span className="menu-icon" style={{ color: proxy.color }}>
+                {proxy.config.proxyType === 'pac_script' ? '📜' : <GlobalOutlined />}
+            </span>,
             label: <span style={{ 
                 color: currentMode === proxy.key ? 'var(--yakit-primary)' : 'inherit',
                 opacity: isLoading ? 0.7 : 1
             }}>{proxy.name}</span>,
             className: `${currentMode === proxy.key ? 'menu-item-selected' : ''} ${isLoading ? 'menu-item-loading' : ''}`,
-            title: `${proxy.config.scheme.toUpperCase()} ${proxy.config.host}:${proxy.config.port}`
+            title: proxy.config.scheme 
+                ? `${proxy.config.scheme.toUpperCase()} ${proxy.config.host}:${proxy.config.port}`
+                : `${proxy.config.host}:${proxy.config.port}`
         })),
         {
             key: 'add',

@@ -1,12 +1,21 @@
+export interface PacScript {
+    data?: string;
+    url?: string;
+    mandatory?: boolean;
+}
+
 export interface ProxyConfig {
     id: string;
     name: string;
     enabled: boolean;
     proxyType: "direct" | "system" | "fixed_servers" | "pac_script" | "auto_detect";
+    mode?: string;
     host?: string;
     port?: number;
     scheme?: "http" | "https" | "socks4" | "socks5";
-    pacScript?: string;
+    pacScript?: PacScript;
+    bypassList?: string[];    
+    matchList?: string[];
 }
 
 export interface ProxyLog {

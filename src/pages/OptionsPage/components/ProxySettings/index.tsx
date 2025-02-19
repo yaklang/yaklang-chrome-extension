@@ -4,6 +4,7 @@ import type { ColumnsType } from 'antd/es/table';
 import { DeleteOutlined, PlusOutlined, EditOutlined, CheckOutlined } from '@ant-design/icons';
 import { ProxyConfig } from '@/types/proxy';
 import './index.css';
+import punycode from 'punycode';
 
 interface ProxySettingsProps {
     proxyConfigs: ProxyConfig[];
@@ -14,7 +15,7 @@ interface ProxySettingsProps {
     onClear: (configId: string) => Promise<void>;
 }
 
-// 添加编辑表单的接口
+// 修改 EditFormData 接口
 interface EditFormData {
     name: string;
     proxyType: "direct" | "system" | "fixed_servers" | "pac_script" | "auto_detect";
@@ -22,6 +23,9 @@ interface EditFormData {
     host?: string;
     port?: number;
     pacScript?: string;
+    bypassList?: string;
+    matchList?: string;  // 仅用于 UI 编辑
+    proxyServer?: string;  // 添加 proxyServer 字段，用于 PAC 脚本模式选择代理服务器
 }
 
 // 或者更好的方式是创建一个专门的类型
@@ -48,7 +52,11 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
                 scheme: editingConfig.scheme,
                 host: editingConfig.host,
                 port: editingConfig.port,
-                pacScript: editingConfig.pacScript
+                bypassList: editingConfig.bypassList?.join('\n') || '',
+                matchList: editingConfig.matchList?.join('\n') || '',
+                proxyServer: editingConfig.host && editingConfig.port 
+                    ? `${editingConfig.host}:${editingConfig.port}`
+                    : undefined
             });
         }
     }, [editModalVisible, editingConfig, form]);
@@ -73,6 +81,17 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
         setEditModalVisible(true);
     };
 
+    // 添加一个函数来获取可用的代理服务器列表
+    const getAvailableProxies = (configs: ProxyConfig[]) => {
+        return configs
+            .filter(config => config.proxyType === 'fixed_servers')
+            .map(config => ({
+                label: `${config.name} (${config.scheme}://${config.host}:${config.port})`,
+                value: `${config.host}:${config.port}`,
+                config
+            }));
+    };
+
     // 处理编辑保存
     const handleEditSave = async () => {
         try {
@@ -81,13 +100,108 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
                 if (editingConfig.enabled) {
                     await onClear(editingConfig.id);
                 }
-                
-                const updatedConfig: ProxyConfig = {
-                    ...editingConfig,
-                    ...values,
-                    proxyType: values.proxyType as "direct" | "system" | "fixed_servers" | "pac_script" | "auto_detect",
-                    scheme: values.scheme as "http" | "https" | "socks4" | "socks5"
-                };
+
+                let updatedConfig: ProxyConfig;
+
+                if (values.proxyType === 'fixed_servers') {
+                    // 处理固定代理服务器模式
+                    const bypassList = values.bypassList
+                        ? values.bypassList.split('\n').map(line => line.trim()).filter(line => line.length > 0)
+                        : ["localhost", "127.0.0.1"];
+
+                    updatedConfig = {
+                        id: editingConfig.id,
+                        name: values.name,
+                        enabled: editingConfig.enabled,
+                        proxyType: 'fixed_servers',
+                        scheme: values.scheme,
+                        host: values.host,
+                        port: values.port,
+                        bypassList,
+                    };
+                } else if (values.proxyType === 'pac_script') {
+                    const domains = values.matchList
+                        ? values.matchList.split('\n')
+                            .map(line => line.trim())
+                            .filter(line => line.length > 0)
+                            .map(domain => {
+                                try {
+                                    // 如果域名包含非 ASCII 字符，转换为 Punycode
+                                    if (/[^\x00-\x7F]/.test(domain)) {
+                                        if (domain.startsWith('*.')) {
+                                            const suffix = domain.substring(2);
+                                            return '*.' + suffix.split('.').map(part => {
+                                                return /[^\x00-\x7F]/.test(part) ? 'xn--' + punycode.encode(part) : part;
+                                            }).join('.');
+                                        } else {
+                                            return domain.split('.').map(part => {
+                                                return /[^\x00-\x7F]/.test(part) ? 'xn--' + punycode.encode(part) : part;
+                                            }).join('.');
+                                        }
+                                    }
+                                    return domain;
+                                } catch (error) {
+                                    console.error('Error encoding domain:', domain, error);
+                                    return domain;
+                                }
+                            })
+                        : [];
+
+                    // 从选择的代理服务器中获取配置
+                    const [host, port] = values.proxyServer.split(':');
+
+                    // 生成 PAC 脚本
+                    const pacScriptContent = `
+function FindProxyForURL(url, host) {
+    // Convert host to lowercase for case-insensitive matching
+    host = host.toLowerCase();
+    
+    // Define domain patterns
+    var domains = ${JSON.stringify(domains)};
+    
+    // Check each domain pattern
+    for (var i = 0; i < domains.length; i++) {
+        var pattern = domains[i].toLowerCase();
+        
+        if (pattern.startsWith('*.')) {
+            var suffix = pattern.substring(2);
+            if (host === suffix || host.endsWith('.' + suffix)) {
+                return 'PROXY ${host}:${port}';
+            }
+        } else if (host === pattern) {
+            return 'PROXY ${host}:${port}';
+        }
+    }
+    
+    return 'DIRECT';
+}`;
+
+                    updatedConfig = {
+                        id: editingConfig.id,
+                        name: values.name,
+                        enabled: editingConfig.enabled,
+                        proxyType: 'pac_script',
+                        mode: 'pac_script',
+                        // 保存代理服务器信息
+                        host,
+                        port: parseInt(port),
+                        // 保存匹配域名列表
+                        matchList: domains,
+                        pacScript: {
+                            data: pacScriptContent,
+                            mandatory: true
+                        }
+                    };
+                } else {
+                    // 处理其他模式
+                    updatedConfig = {
+                        id: editingConfig.id,
+                        name: values.name,
+                        enabled: editingConfig.enabled,
+                        proxyType: values.proxyType,
+                        bypassList: [], // 其他模式下设置为空数组
+                    };
+                }
 
                 if (!proxyConfigs.find(config => config.id === editingConfig.id)) {
                     await onAdd(updatedConfig);
@@ -232,7 +346,7 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
                     >
                         <Select
                             options={[
-                                { label: '直接连接', value: 'direct' },
+                                // { label: '直接连接', value: 'direct' },
                                 { label: '代理服务器', value: 'fixed_servers' },
                                 { label: 'PAC 脚本', value: 'pac_script' }
                             ]}
@@ -254,51 +368,90 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
                     >
                         {({ getFieldValue }) => {
                             const proxyType = getFieldValue('proxyType');
-                            return proxyType === 'fixed_servers' ? (
-                                <>
-                                    <Form.Item
-                                        name="scheme"
-                                        label="协议"
-                                        rules={[{ required: true, message: '请选择协议' }]}
-                                    >
-                                        <Select
-                                            options={[
-                                                { label: 'HTTP', value: 'http' },
-                                                { label: 'HTTPS', value: 'https' },
-                                                { label: 'SOCKS4', value: 'socks4' },
-                                                { label: 'SOCKS5', value: 'socks5' }
-                                            ]}
-                                        />
-                                    </Form.Item>
-                                    <Form.Item
-                                        name="host"
-                                        label="主机"
-                                        rules={[{ required: true, message: '请输入主机地址' }]}
-                                    >
-                                        <Input placeholder="127.0.0.1" />
-                                    </Form.Item>
-                                    <Form.Item
-                                        name="port"
-                                        label="端口"
-                                        rules={[{ required: true, message: '请输入端口号' }]}
-                                    >
-                                        <InputNumber 
-                                            min={1} 
-                                            max={65535} 
-                                            placeholder="8080"
-                                            style={{ width: '100%' }}
-                                        />
-                                    </Form.Item>
-                                </>
-                            ) : proxyType === 'pac_script' ? (
-                                <Form.Item
-                                    name="pacScript"
-                                    label="PAC 脚本"
-                                    rules={[{ required: true, message: '请输入 PAC 脚本' }]}
-                                >
-                                    <Input.TextArea rows={4} />
-                                </Form.Item>
-                            ) : null;
+                            if (proxyType === 'fixed_servers') {
+                                return (
+                                    <>
+                                        <Form.Item
+                                            name="scheme"
+                                            label="协议"
+                                            rules={[{ required: true, message: '请选择协议' }]}
+                                        >
+                                            <Select
+                                                options={[
+                                                    { label: 'HTTP', value: 'http' },
+                                                    { label: 'HTTPS', value: 'https' },
+                                                    { label: 'SOCKS4', value: 'socks4' },
+                                                    { label: 'SOCKS5', value: 'socks5' }
+                                                ]}
+                                            />
+                                        </Form.Item>
+                                        <Form.Item
+                                            name="host"
+                                            label="主机"
+                                            rules={[{ required: true, message: '请输入主机地址' }]}
+                                        >
+                                            <Input placeholder="127.0.0.1" />
+                                        </Form.Item>
+                                        <Form.Item
+                                            name="port"
+                                            label="端口"
+                                            rules={[{ required: true, message: '请输入端口号' }]}
+                                        >
+                                            <InputNumber 
+                                                min={1} 
+                                                max={65535} 
+                                                placeholder="8080"
+                                                style={{ width: '100%' }}
+                                            />
+                                        </Form.Item>
+                                        <Form.Item
+                                            name="bypassList"
+                                            label="不经过代理的地址"
+                                            help="每行一个地址，支持通配符 *"
+                                        >
+                                            <Input.TextArea
+                                                rows={4}
+                                                placeholder={`例如：
+localhost
+127.0.0.1
+*.example.com`}
+                                            />
+                                        </Form.Item>
+                                    </>
+                                );
+                            } else if (proxyType === 'pac_script') {
+                                const availableProxies = getAvailableProxies(proxyConfigs);
+                                
+                                return (
+                                    <>
+                                        <Form.Item
+                                            name="matchList"
+                                            label="匹配域名"
+                                            help="每行一个域名，支持通配符 *"
+                                            rules={[{ required: true, message: '请输入至少一个匹配域名' }]}
+                                        >
+                                            <Input.TextArea
+                                                rows={4}
+                                                placeholder={`例如：
+*.example.com
+google.com
+github.com`}
+                                            />
+                                        </Form.Item>
+                                        <Form.Item
+                                            name="proxyServer"
+                                            label="选择代理服务器"
+                                            rules={[{ required: true, message: '请选择代理服务器' }]}
+                                        >
+                                            <Select
+                                                placeholder="选择一个代理服务器"
+                                                options={availableProxies}
+                                            />
+                                        </Form.Item>
+                                    </>
+                                );
+                            }
+                            return null;
                         }}
                     </Form.Item>
                 </Form>
