@@ -32,7 +32,7 @@ async function handleSetProxyConfig(config, sendResponse) {
                         host: config.host,
                         port: parseInt(config.port)
                     },
-                    bypassList: config.bypassList || ["localhost", "127.0.0.1"]
+                    bypassList: config.bypassList || []
                 }
             };
 
@@ -321,7 +321,8 @@ async function checkAndSetInitialProxy() {
                     host: proxy.host,
                     port: proxy.port,
                     enabled: true,
-                    bypassList: ["localhost", "127.0.0.1"],
+                    // https://bugs.chromium.org/p/chromium/issues/detail?id=899126#c17
+                    bypassList: ["<-loopback>"],
                     matchList: []
                 };
 
