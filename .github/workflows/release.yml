@@ -24,7 +24,7 @@ jobs:
 
       - name: Zip build artifacts
         run: |
-          cd dist
+          cd build
           zip -r ../extension.zip .
 
       - name: Generate version number
