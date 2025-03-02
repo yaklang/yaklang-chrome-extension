@@ -1,0 +1,69 @@
+name: Build and Release
+
+on:
+  # 只保留手动触发工作流
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '选择要构建的分支'
+        required: true
+        default: 'main'
+        type: string
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'yarn'  # 改为 yarn 缓存
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Build project
+        run: yarn build
+
+      - name: Zip build artifacts
+        run: |
+          cd dist
+          zip -r ../extension.zip .
+
+      - name: Generate version number
+        id: version
+        run: |
+          echo "version=1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
+          echo "build_time=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          release_name: Release v${{ steps.version.outputs.version }}
+          body: |
+            Branch: ${{ github.event.inputs.branch }}
+            Commit: ${{ github.sha }}
+            Build Time: ${{ steps.version.outputs.build_time }}
+          draft: false
+          prerelease: false
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./extension.zip
+          asset_name: yakit-chrome-extension-v${{ steps.version.outputs.version }}.zip
+          asset_content_type: application/zip 
