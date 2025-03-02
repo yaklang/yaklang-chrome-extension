@@ -1,14 +1,6 @@
 name: Build and Release
 
-on:
-  # 只保留手动触发工作流
-  workflow_dispatch:
-    inputs:
-      branch:
-        description: '选择要构建的分支'
-        required: true
-        default: 'main'
-        type: string
+on: workflow_dispatch
 
 jobs:
   build-and-release:
@@ -17,14 +9,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.branch }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
-          cache: 'yarn'  # 改为 yarn 缓存
+          cache: 'yarn'
 
       - name: Install dependencies
         run: yarn install --frozen-lockfile
@@ -52,7 +42,7 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           release_name: Release v${{ steps.version.outputs.version }}
           body: |
-            Branch: ${{ github.event.inputs.branch }}
+            Branch: ${{ github.ref_name }}
             Commit: ${{ github.sha }}
             Build Time: ${{ steps.version.outputs.build_time }}
           draft: false
