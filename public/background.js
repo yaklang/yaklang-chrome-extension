@@ -1,19 +1,39 @@
-import {ActionType, WebSocketManager} from './socket.js';
+import {ActionType, injectScriptAndSendMessage, WebSocketManager} from './socket.js';
+import { setupProxyHandlers } from './proxy.js';
 
-
-console.info("Chrome Extenstion Background is loaded")
+console.info("Chrome Extension Background is loaded");
 
 const websocketManager = new WebSocketManager();
 
+// 设置代理处理器
+setupProxyHandlers();
 
-chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
-    console.log("msg", msg)
+// 添加点击事件处理
+chrome.action.onClicked.addListener((tab) => {
+    // 打开侧边栏
+    chrome.sidePanel.open({windowId: tab.windowId}).catch(error => {
+        console.error('Error opening side panel:', error);
+    });
+});
+
+// 设置默认打开状态
+chrome.sidePanel.setOptions({
+    enabled: true,
+    path: 'index.html'
+}).catch(error => {
+    console.error('Error setting side panel options:', error);
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     switch (msg.action) {
         case ActionType.CONNECT:
             console.info("Start to connect websocket")
             const host = msg['host'] || "127.0.0.1"
             const port = msg['port'] || 11212
-            websocketManager.connectWebsocket(`ws://${host}:${port}/?token=${"a"}`, port)
+            websocketManager.connectWebsocket(`ws://${host}:${port}/?token=chrome`, port)
+            break;
+        case ActionType.SEND_MESSAGE:
+            websocketManager.sendMessage(msg.message);
             break;
         case ActionType.DISCONNECT:
             websocketManager.disconnectWebsocket();
@@ -27,7 +47,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
                             scheme: msg.scheme,
                             host: msg.host,
                             port: parseInt(`${msg.port}`)
-                        }
+                        },
+                        // enable 127.0.0.1 && localhost to mitmproxy
+                        bypassList: ["<-loopback>"]
                     }
                 },
                 scope: 'regular',
@@ -51,38 +73,12 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
             break;
         case ActionType.INJECT_SCRIPT:
             (async () => {
-                try {
-                    // 注入 JS 脚本
-                    await chrome.scripting.executeScript({
-                        target: {tabId: msg.tabId},
-                        files: ['content.js']
-                    });
-
-                    // 发送消息
-                    const response = await chrome.tabs.sendMessage(msg.tabId, {
-                        type: ActionType.INJECT_SCRIPT,
-                        value: msg.value
-                    });
-
-                    console.log("response", response);
-                    if (response && response.action === ActionType.TO_EXTENSION_PAGE) {
-                        await chrome.runtime.sendMessage(response);
-                    }
-                } catch (err) {
-                    console.error('Script or CSS injection failed:', err);
-                }
+                await injectScriptAndSendMessage(msg.tabId, {
+                    type: ActionType.INJECT_SCRIPT,
+                    value: msg.value
+                });
             })();
             break
     }
-
 })
 
-const pageFunction = (code) => {
-    chrome.runtime.sendMessage({code}, response => {
-        if (response && response.success) {
-            console.log('Result:', response.result);
-        } else {
-            console.error('Error:', response.error);
-        }
-    });
-}

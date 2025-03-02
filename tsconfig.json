@@ -10,11 +10,21 @@
     "moduleResolution": "node",
     "baseUrl": "./",
     "paths": {
-      "@*": ["src/*"]
-    } 
+      "@/*": ["./src/*"],
+      "@components/*": ["./src/components/*"],
+      "@assets/*": ["./src/assets/*"],
+      "@network/*": ["./src/network/*"],
+      "@types/*": ["./src/types/*"]
+    },
+    "typeRoots": [
+      "./node_modules/@types",
+      "./src/types"
+    ],
+    "skipLibCheck": true,
+    "lib": ["dom", "dom.iterable", "esnext"]
   },
   "include": [
-    "./src/**/*",
+    "./src/**/*"
   ],
   "exclude": [
     "node_modules"
