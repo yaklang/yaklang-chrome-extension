@@ -3,9 +3,8 @@ name: Build and Release
 on: workflow_dispatch
 
 jobs:
-  build-and-release:
+  build-and-publish:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,16 +21,17 @@ jobs:
       - name: Build project
         run: yarn build
 
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(jq -r '.version' build/manifest.json)
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "build_time=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
+
       - name: Zip build artifacts
         run: |
           cd build
           zip -r ../extension.zip .
-
-      - name: Generate version number
-        id: version
-        run: |
-          echo "version=1.0.${{ github.run_number }}" >> $GITHUB_OUTPUT
-          echo "build_time=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Create Release
         id: create_release
@@ -57,3 +57,27 @@ jobs:
           asset_path: ./extension.zip
           asset_name: yakit-chrome-extension-v${{ steps.version.outputs.version }}.zip
           asset_content_type: application/zip 
+
+      - name: Upload Extension To OSS
+        uses: tvrcgo/upload-to-oss@master
+        with:
+          key-id: ${{ secrets.OSS_KEY_ID }}
+          key-secret: ${{ secrets.OSS_KEY_SECRET }}
+          region: oss-accelerate
+          bucket: yaklang
+          assets: |
+            extension.zip:/chrome-extension/yakit-chrome-extension-v${{ steps.version.outputs.version }}.zip
+
+      - name: Update OSS latest version file
+        run: echo ${{ steps.version.outputs.version }} > ./extension-version.txt
+      
+      - name: Upload Version File to OSS
+        uses: tvrcgo/upload-to-oss@master
+        with:
+          key-id: ${{ secrets.OSS_KEY_ID }}
+          key-secret: ${{ secrets.OSS_KEY_SECRET }}
+          region: oss-accelerate
+          bucket: yaklang
+          assets: |
+            ./extension-version.txt:/chrome-extension/latest-version.txt
+
