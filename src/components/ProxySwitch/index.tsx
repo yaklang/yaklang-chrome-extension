@@ -237,21 +237,25 @@ export const ProxySwitch: React.FC<ProxySwitchProps> = () => {
     const menuItems: MenuProps['items'] = [
         ...FIXED_MODES.map(mode => ({
             key: mode.key,
-            icon: <span className="menu-icon" style={{ color: mode.color }}>{mode.icon}</span>,
-            label: mode.name,
+            icon: <span className="menu-icon" style={{ 
+                color: currentMode === mode.key ? 'var(--yakit-primary)' : mode.color
+            }}>{mode.icon}</span>,
+            label: `${mode.name}${currentMode === mode.key ? '  ✅' : ''}`,
             className: `${currentMode === mode.key ? 'menu-item-selected' : ''} ${isLoading ? 'menu-item-loading' : ''}`,
             title: mode.name.replace(/[\[\]]/g, '')
         })),
         { type: 'divider' },
         ...customProxies.map(proxy => ({
             key: proxy.key,
-            icon: <span className="menu-icon" style={{ color: proxy.color }}>
+            icon: <span className="menu-icon" style={{ 
+                color: currentMode === proxy.key ? 'var(--yakit-primary)' : proxy.color
+            }}>
                 {proxy.config.proxyType === 'pac_script' ? '📜' : <GlobalOutlined />}
             </span>,
             label: <span style={{ 
                 color: currentMode === proxy.key ? 'var(--yakit-primary)' : 'inherit',
                 opacity: isLoading ? 0.7 : 1
-            }}>{proxy.name}</span>,
+            }}>{proxy.name}{currentMode === proxy.key ? '  ✅' : ''}</span>,
             className: `${currentMode === proxy.key ? 'menu-item-selected' : ''} ${isLoading ? 'menu-item-loading' : ''}`,
             title: proxy.config.scheme 
                 ? `${proxy.config.scheme.toUpperCase()} ${proxy.config.host}:${proxy.config.port}`
