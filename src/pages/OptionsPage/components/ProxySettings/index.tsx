@@ -107,7 +107,7 @@ export const ProxySettings: React.FC<ProxySettingsProps> = ({
                     // 处理固定代理服务器模式
                     const bypassList = values.bypassList
                         ? values.bypassList.split('\n').map(line => line.trim()).filter(line => line.length > 0)
-                        : ["localhost", "127.0.0.1"];
+                        : [""];
 
                     updatedConfig = {
                         id: editingConfig.id,
