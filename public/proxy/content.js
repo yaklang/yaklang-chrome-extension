@@ -148,6 +148,9 @@ const PanelManager = {
     _lastUpdate: null,  // 添加最后更新时间戳
     _lastState: null,
     _pollingInterval: null,
+    isDragging: false,
+    startY: 0,
+    currentY: 0,
     
     init() {
         // 确保 document.body 存在
@@ -207,165 +210,232 @@ const PanelManager = {
         style.textContent = `
             .floating-panel {
                 position: fixed;
-                top: 20px;
+                top: 30%;
                 right: 0;
-                width: 180px;
+                transform: translateY(-30%);
                 background: white;
-                border-radius: 8px 0 0 8px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.1);
                 z-index: 2147483647;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                transition: transform 0.3s ease;
+                width: 50px;
+                height: 40px;
+                overflow: hidden;
+                transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                            height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                            background-color 0.2s ease;
             }
 
-            .floating-panel.collapsed {
-                transform: translateX(100%);
+            /* 吸附状态 */
+            .floating-panel:not(.expanded):not(.dragging) {
+                border-radius: 50px 0 0 50px;
+                box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+                border: 1px solid #eee;
+                border-right: none;
+            }
+
+            /* 拖动状态 */
+            .floating-panel.dragging {
+                cursor: grabbing !important;
+                user-select: none;
+                opacity: 0.95;
+                transition: none;
+            }
+
+            .floating-panel.dragging * {
+                cursor: grabbing !important;
+            }
+
+            .floating-panel:active {
+                cursor: grabbing;
+            }
+
+            .floating-panel .panel-header {
+                cursor: grab;
+            }
+
+            .floating-panel .panel-header:active {
+                cursor: grabbing;
+            }
+
+            /* 吸附状态悬浮时 */
+            .floating-panel:not(.expanded):hover {
+                width: 120px;
+                background: #fff7e6;
+                border-color: #ffd591;
+            }
+
+            /* 展开状态 - 立即应用圆角变化 */
+            .floating-panel.expanded {
+                width: 180px;
+                height: auto;
+                max-height: 400px;
+                border-radius: 8px 0 0 8px;
+                box-shadow: -2px 0 10px rgba(0,0,0,0.1);
+                border: 1px solid #eee;
+                border-right: none;
+                /* 展开时立即应用新的圆角 */
+                transition: 
+                    width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                    height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+                    border-radius 0s,
+                    background-color 0.2s ease;
             }
 
             .panel-header {
-                padding: 4px;
+                height: 40px;
+                min-height: 40px;
+                display: flex;
+                align-items: center;
+                padding: 0 8px;
+                cursor: pointer;
+                user-select: none;
+            }
+
+            /* 吸附状态的头部 */
+            .floating-panel:not(.expanded) .panel-header {
+                background: transparent;
+            }
+
+            /* 展开状态的头部 */
+            .floating-panel.expanded .panel-header {
+                background: #f8f9fa;
                 border-bottom: 1px solid #eee;
-                border-radius: 8px 0 0 0;
-                background: #f8f9fa;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
             }
 
-            .collapse-trigger {
-                position: absolute;
-                left: -20px;
-                top: 0;
-                width: 20px;
-                height: 100%;
-                background: #f8f9fa;
-                border-radius: 8px 0 0 8px;
-                cursor: pointer;
+            .header-content {
                 display: flex;
                 align-items: center;
-                justify-content: center;
-                box-shadow: -2px 0 5px rgba(0,0,0,0.1);
-            }
-
-            .collapse-trigger:hover {
-                background: #e9ecef;
-            }
-
-            .collapse-trigger::after {
-                content: '◀';
-                transition: transform 0.3s ease;
-            }
-
-            .floating-panel.collapsed .collapse-trigger::after {
-                transform: rotate(180deg);
-            }
-
-            .panel-content {
-                padding: 4px;
-            }
-
-            .proxy-item {
-                position: relative;
-                display: flex;
-                align-items: center;
-                padding: 4px 10px;
-                cursor: pointer;
-                transition: all 0.2s;
-                color: #666;
-                border-left: 3px solid transparent;
+                flex: 1;
                 overflow: hidden;
             }
 
-            .proxy-item > span {
-                position: relative;
-                z-index: 1;
-            }
-
-            .watermark-icon {
-                position: absolute;
-                right: 0;
-                width: 100%;
-                height: 100%;
-                opacity: 0.3;
-                pointer-events: none;
-                display: none;
+            /* 优化图标大小过渡 */
+            .yak-icon {
+                width: 36px;
+                height: 36px;
+                min-width: 36px;
                 object-fit: contain;
-                object-position: right center;
-                padding: 4px;
+                filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
+                transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             }
 
-            .proxy-item.active .watermark-icon {
+            .floating-panel.expanded .yak-icon {
+                width: 24px;
+                height: 24px;
+                min-width: 24px;
+            }
+
+            .active-proxy-info {
+                display: flex;
+                align-items: center;
+                margin-left: 8px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                color: #ff6b00;
+                font-size: 13px;
+                font-weight: 500;
+            }
+
+            .active-proxy-info span:first-child {
+                margin-right: 6px;
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+            }
+
+            .panel-content {
+                display: none;
+                background: white;
+                overflow-y: auto;
+                max-height: 360px;
+                opacity: 0;
+                transition: opacity 0.2s ease;
+            }
+
+            .floating-panel.expanded .panel-content {
                 display: block;
+                opacity: 1;
+            }
+
+            .panel-content::-webkit-scrollbar {
+                width: 4px;
+            }
+
+            .panel-content::-webkit-scrollbar-track {
+                background: #f5f5f5;
+            }
+
+            .panel-content::-webkit-scrollbar-thumb {
+                background: #ddd;
+                border-radius: 4px;
+            }
+
+            .panel-content::-webkit-scrollbar-thumb:hover {
+                background: #ccc;
+            }
+
+            .proxy-item {
+                display: flex;
+                align-items: center;
+                padding: 8px 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+                white-space: nowrap;
+                position: relative;
+            }
+
+            .proxy-item:hover {
+                background: #fff7e6;
             }
 
             .proxy-item.active {
-                color: #ff6b00 !important;
                 background: #fff7e6;
-                border-left: 3px solid #ff6b00;
-            }
-
-            .proxy-item.active span:first-child {
-                color: #ff6b00 !important;
+                color: #ff6b00;
             }
 
             .proxy-item span:first-child {
                 margin-right: 8px;
                 font-size: 16px;
-                color: #666;
-                transition: color 0.2s;
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
             }
 
-            .proxy-item:hover {
-                background: #f5f5f5;
+            .proxy-status {
+                position: absolute;
+                right: 12px;
+                width: 6px;
+                height: 6px;
+                border-radius: 50%;
+                background: #52c41a;
+                box-shadow: 0 0 4px rgba(82,196,26,0.3);
             }
 
-            .proxy-item:hover span:first-child {
-                color: #ff6b00;
-            }
-
-            .add-proxy {
-                display: flex;
-                align-items: center;
-                padding: 4px 10px;
-                color: #1890ff;
-                cursor: pointer;
-                border-top: 1px solid #eee;
-                transition: all 0.2s;
-            }
-
-            .add-proxy:hover {
-                background: #f5f5f5;
-            }
-
-            .settings {
-                padding: 4px 10px;
-                color: #666;
-                cursor: pointer;
-                border-top: 1px solid #eee;
-                transition: all 0.2s;
-            }
-
-            .settings:hover {
-                background: #f5f5f5;
-            }
-
-            .panel-header .header-content {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                padding: 0 4px;
-            }
-
-            .yak-icon {
-                width: 24px;
-                height: 24px;
-                object-fit: contain;
+            .proxy-item.active .proxy-status {
+                background: #ff6b00;
+                box-shadow: 0 0 4px rgba(255,107,0,0.3);
             }
 
             .divider {
                 height: 1px;
-                background-color: #eee;
+                background: #f0f0f0;
                 margin: 4px 0;
+            }
+
+            .action-button {
+                display: flex;
+                align-items: center;
+                padding: 8px 12px;
+                cursor: pointer;
+                transition: all 0.2s;
+                white-space: nowrap;
+                color: #666;
+            }
+
+            .action-button:hover {
+                background: #fff7e6;
+                color: #ff6b00;
+            }
+
+            .action-button span:first-child {
+                margin-right: 8px;
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
             }
         `;
 
@@ -373,31 +443,16 @@ const PanelManager = {
         const panel = document.createElement('div');
         panel.className = 'floating-panel';
         panel.innerHTML = `
-            <div class="collapse-trigger"></div>
             <div class="panel-header">
                 <div class="header-content">
                     <img src="${YAK_ICON_URL}" class="yak-icon" alt="Yak" />
-                    <span>代理设置</span>
+                    <div class="active-proxy-info">
+                        <!-- 当前代理信息将动态更新 -->
+                    </div>
                 </div>
             </div>
             <div class="panel-content">
-                <div class="proxy-item active">
-                    <span>🟢</span>
-                    <span>[直接连接]</span>
-                </div>
-                <div class="proxy-item">
-                    <span>⚙️</span>
-                    <span>[系统代理]</span>
-                </div>
-                <div class="divider"></div>
-                <div class="add-proxy">
-                    <span>➕</span>
-                    <span>[添加代理...]</span>
-                </div>
-                <div class="settings">
-                    <span>👨‍💻</span>
-                    <span>选项</span>
-                </div>
+                <!-- 内容将由 _buildPanelHtml 方法动态生成 -->
             </div>
         `;
 
@@ -410,12 +465,20 @@ const PanelManager = {
             document.body.appendChild(container);
             this.panel = container;
             
-            // 添加折叠触发器的点击事件
             const floatingPanel = shadow.querySelector('.floating-panel');
-            const collapseTrigger = shadow.querySelector('.collapse-trigger');
+            const header = shadow.querySelector('.panel-header');
             
-            collapseTrigger.addEventListener('click', () => {
-                floatingPanel.classList.toggle('collapsed');
+            // 添加拖拽功能
+            this._initDragFeature(header, floatingPanel);
+            
+            // 添加自动收起功能
+            this._initAutoCollapse(floatingPanel);
+            
+            // 添加点击展开/收起功能
+            header.addEventListener('click', (e) => {
+                if (!this.isDragging) {
+                    floatingPanel.classList.toggle('expanded');
+                }
             });
             
             // 设置消息监听和开始轮询
@@ -533,6 +596,29 @@ const PanelManager = {
                         }
                     });
                 }
+
+                // 更新当前代理信息显示
+                const activeProxyInfo = this.panel.shadowRoot?.querySelector('.active-proxy-info');
+                if (activeProxyInfo) {
+                    let proxyIcon = '🟢';
+                    let proxyName = '直接连接';
+                    
+                    if (currentProxy.currentMode === 'system') {
+                        proxyIcon = '⚙️';
+                        proxyName = '系统代理';
+                    } else if (currentProxy.currentMode === 'fixed_servers') {
+                        const activeConfig = configs.find(c => c.enabled);
+                        if (activeConfig) {
+                            proxyIcon = activeConfig.proxyType === 'pac_script' ? '📜' : '🌐';
+                            proxyName = activeConfig.name || '未命名代理';
+                        }
+                    }
+                    
+                    activeProxyInfo.innerHTML = `
+                        <span>${proxyIcon}</span>
+                        <span>${proxyName}</span>
+                    `;
+                }
             } catch (error) {
                 console.error('Error updating panel:', error);
             } finally {
@@ -552,16 +638,16 @@ const PanelManager = {
             <div class="proxy-item ${currentProxy.currentMode === 'direct' ? 'active' : ''}" 
                  data-id="direct"
                  title="直接连接">
-                <span style="color: ${currentProxy.currentMode === 'direct' ? '#ff6b00' : '#666'}">🟢</span>
-                <span>[直接连接]</span>
-                <img src="${YAK_ICON_URL}" class="watermark-icon" alt="" />
+                <span>🟢</span>
+                <span>直接连接</span>
+                ${currentProxy.currentMode === 'direct' ? '<div class="proxy-status"></div>' : ''}
             </div>
             <div class="proxy-item ${currentProxy.currentMode === 'system' ? 'active' : ''}" 
                  data-id="system"
                  title="系统代理">
-                <span style="color: ${currentProxy.currentMode === 'system' ? '#ff6b00' : '#666'}">⚙️</span>
-                <span>[系统代理]</span>
-                <img src="${YAK_ICON_URL}" class="watermark-icon" alt="" />
+                <span>⚙️</span>
+                <span>系统代理</span>
+                ${currentProxy.currentMode === 'system' ? '<div class="proxy-status"></div>' : ''}
             </div>
             <div class="divider"></div>
         `;
@@ -569,37 +655,39 @@ const PanelManager = {
         // 添加自定义代理配置
         configs.forEach(config => {
             if (config.proxyType !== 'direct' && config.proxyType !== 'system') {
-                // 判断是否激活：当前模式为 fixed_servers 且配置已启用
-                const isActive = currentProxy.currentMode === 'fixed_servers' && 
-                               config.enabled;
-                
-                const tooltipText = config.proxyType === 'pac_script' 
-                    ? 'PAC Script'
-                    : `${(config.proxyType || 'HTTP').toUpperCase()} ${config.host || ''}:${config.port || ''}`;
-                
+                const isActive = currentProxy.currentMode === 'fixed_servers' && config.enabled;
                 const proxyIcon = config.proxyType === 'pac_script' ? '📜' : '🌐';
+                
+                // 构建 title 提示信息
+                let tooltipText;
+                if (config.proxyType === 'pac_script') {
+                    tooltipText = 'PAC Script';
+                } else {
+                    const scheme = config.scheme ? `${config.scheme.toUpperCase()} ` : '';
+                    tooltipText = `${scheme}${config.host}:${config.port}`;
+                }
                 
                 html += `
                     <div class="proxy-item ${isActive ? 'active' : ''}" 
                          data-id="${config.id}"
                          title="${tooltipText}">
-                        <span style="color: ${isActive ? '#ff6b00' : '#666'}">${proxyIcon}</span>
+                        <span>${proxyIcon}</span>
                         <span>${config.name || '未命名代理'}</span>
-                        <img src="${YAK_ICON_URL}" class="watermark-icon" alt="" />
+                        ${isActive ? '<div class="proxy-status"></div>' : ''}
                     </div>
                 `;
             }
         });
 
-        // 添加操作按钮
         html += `
-            <div class="add-proxy">
+            <div class="divider"></div>
+            <div class="action-button add-proxy">
                 <span>➕</span>
-                <span>添加代理...</span>
+                <span>添加代理</span>
             </div>
-            <div class="settings">
-                <span>👨‍💻</span>
-                <span>选项</span>
+            <div class="action-button settings">
+                <span>⚙️</span>
+                <span>设置</span>
             </div>
         `;
 
@@ -682,6 +770,119 @@ const PanelManager = {
                 console.error('Error opening options page:', error);
             }
         });
+    },
+    
+    _initDragFeature(header, panel) {
+        let isDragging = false;
+        let startY = 0;
+        let startTop = 0;
+        let rafId = null;
+
+        const updatePosition = (e) => {
+            if (!isDragging) return;
+            
+            const deltaY = e.clientY - startY;
+            const newTop = startTop + deltaY;
+            
+            // 限制拖动范围在视窗内
+            const maxTop = window.innerHeight - panel.offsetHeight;
+            const boundedTop = Math.max(0, Math.min(newTop, maxTop));
+            
+            // 保持水平位置不变，只改变垂直位置
+            panel.style.top = `${boundedTop}px`;
+            panel.style.transform = 'translateY(0)'; // 移除默认的 translateY(-50%)
+        };
+
+        const onMouseDown = (e) => {
+            // 如果点击时是展开状态，则处理展开/收起
+            if (panel.classList.contains('expanded')) {
+                panel.classList.remove('expanded');
+                return;
+            }
+
+            if (e.button !== 0) return; // 只响应左键
+            
+            isDragging = true;
+            startY = e.clientY;
+            
+            // 获取当前实际位置
+            const rect = panel.getBoundingClientRect();
+            startTop = rect.top;
+            
+            // 开始拖动时固定当前位置
+            panel.style.top = `${startTop}px`;
+            panel.style.transform = 'translateY(0)';
+            
+            // 添加拖动时的视觉反馈
+            panel.style.transition = 'none';
+            panel.classList.add('dragging');
+            
+            // 防止文本选择
+            e.preventDefault();
+        };
+        
+        const onMouseMove = (e) => {
+            if (!isDragging) return;
+            
+            // 使用 requestAnimationFrame 优化性能
+            if (rafId) cancelAnimationFrame(rafId);
+            rafId = requestAnimationFrame(() => updatePosition(e));
+        };
+        
+        const onMouseUp = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            
+            // 清理
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = null;
+            }
+            
+            panel.classList.remove('dragging');
+            panel.style.transition = '';
+            
+            // 保存位置
+            const top = panel.getBoundingClientRect().top;
+            const viewportHeight = window.innerHeight;
+            const percentage = (top / viewportHeight) * 100;
+            localStorage.setItem('yakitProxyPanelPosition', percentage.toString());
+        };
+
+        // 修改事件监听
+        header.addEventListener('mousedown', onMouseDown);
+        document.addEventListener('mousemove', onMouseMove, { passive: true });
+        document.addEventListener('mouseup', onMouseUp);
+
+        // 恢复保存的位置
+        const savedPosition = localStorage.getItem('yakitProxyPanelPosition');
+        if (savedPosition) {
+            const top = (parseFloat(savedPosition) / 100) * window.innerHeight;
+            panel.style.top = `${top}px`;
+            panel.style.transform = 'translateY(0)';
+        }
+    },
+    
+    _initAutoCollapse(panel) {
+        let leaveTimer = null;
+        
+        const onMouseLeave = () => {
+            if (panel.classList.contains('expanded')) {
+                leaveTimer = setTimeout(() => {
+                    panel.classList.remove('expanded');
+                }, 300); // 300ms 延迟，避免意外触发
+            }
+        };
+        
+        const onMouseEnter = () => {
+            if (leaveTimer) {
+                clearTimeout(leaveTimer);
+                leaveTimer = null;
+            }
+        };
+        
+        panel.addEventListener('mouseleave', onMouseLeave);
+        panel.addEventListener('mouseenter', onMouseEnter);
     }
 };
 
@@ -712,3 +913,4 @@ window.addEventListener('load', () => {
 console.log("Document readyState:", document.readyState);
 console.log("Document body exists:", !!document.body);
 console.log("Document documentElement exists:", !!document.documentElement);
+
