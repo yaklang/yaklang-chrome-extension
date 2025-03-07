@@ -105,6 +105,7 @@ async function switchProxy(config) {
             };
         }
 
+        // 发送配置更改消息
         await sendMessageWithRetry({
             action: ProxyActionType.SET_PROXY_CONFIG,
             config: proxyConfig

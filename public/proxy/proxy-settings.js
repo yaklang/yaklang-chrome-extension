@@ -43,9 +43,9 @@ export class ProxySettings {
             ]);
         }
         // 确保日志存储已初始化
-        const logs = await proxyStore.getLogs();  // 使用 getLogs 而不是 getProxyLogs
+        const logs = await proxyStore.getLogs();
         if (!logs || logs.length === 0) {
-            await proxyStore.clearLogs();  // 初始化日志存储
+            await proxyStore.clearLogs();
         }
     }
 } 

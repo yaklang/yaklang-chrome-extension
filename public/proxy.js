@@ -290,6 +290,16 @@ async function checkAndSetInitialProxy() {
         // 确保默认配置存在
         await ProxySettings.setDefaultConfigs();
 
+        // 获取上次保存的代理配置
+        const lastProxy = await proxyStore.getCurrentProxy();
+        
+        if (lastProxy) {
+            // 如果有上次的配置，恢复它
+            console.log('Restoring last proxy configuration:', lastProxy);
+            await handleSetProxyConfig(lastProxy, () => {});
+            return;
+        }
+
         // 获取当前的代理设置
         const settings = await getProxySettings();
         console.log('Current proxy settings:', settings);
@@ -338,16 +348,13 @@ async function checkAndSetInitialProxy() {
             }
         }
 
-        // 如果没有检测到代理或已存在配置，则设置为系统代理
+        // 如果没有之前的配置也没有检测到代理，才设置为系统代理
         await handleSetProxyConfig({
             id: 'system',
             name: '[系统代理]',
             proxyType: 'system',
             enabled: true
         }, () => {});
-
-        // 设置认证监听
-        await ProxyAuth.setupAuthListener();
 
     } catch (error) {
         console.error('Error during initialization:', error);
@@ -356,10 +363,10 @@ async function checkAndSetInitialProxy() {
 
 // 修改 setupProxyHandlers 函数
 export function setupProxyHandlers() {
-    // 设置代理错误处理和认证
+    // 设置代理错误处理
     ProxyAuth.setupErrorHandler();
+    // 设置认证监听
     ProxyAuth.setupAuthListener();
-
     // 设置代理请求监听器
     setupProxyRequestListener();
 
