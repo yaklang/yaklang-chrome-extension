@@ -1,0 +1,160 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background-color: #f5f5f5;
+}
+
+.container {
+    max-width: 800px;
+    margin: 0 auto;
+    background: white;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid #eee;
+}
+
+.header h1 {
+    margin: 0;
+    font-size: 24px;
+    color: #333;
+}
+
+.proxy-item {
+    background: white;
+    border: 1px solid #e8e8e8;
+    border-radius: 4px;
+    margin-bottom: 16px;
+    padding: 16px;
+    transition: all 0.3s;
+}
+
+.proxy-item:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.09);
+}
+
+.proxy-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 16px;
+}
+
+.proxy-name {
+    font-size: 14px;
+    padding: 4px 8px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    width: 200px;
+}
+
+.proxy-name:focus {
+    border-color: #40a9ff;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(24,144,255,0.2);
+}
+
+.proxy-type-select,
+.proxy-scheme,
+.proxy-host,
+.proxy-port {
+    width: 100%;
+    height: 32px;
+    padding: 4px 11px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    transition: all 0.3s;
+}
+
+.proxy-type-select:focus,
+.proxy-scheme:focus,
+.proxy-host:focus,
+.proxy-port:focus {
+    border-color: #40a9ff;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(24,144,255,0.2);
+}
+
+.proxy-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.proxy-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: #666;
+}
+
+.btn-primary {
+    background: #1890ff;
+    border: none;
+    color: white;
+    padding: 4px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-primary:hover {
+    background: #40a9ff;
+}
+
+.btn-secondary {
+    background: white;
+    border: 1px solid #d9d9d9;
+    color: rgba(0,0,0,0.85);
+    padding: 4px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-left: 8px;
+}
+
+.btn-secondary:hover {
+    border-color: #40a9ff;
+    color: #40a9ff;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+}
+
+.delete-btn {
+    padding: 4px 8px;
+    background: #ff4d4f;
+}
+
+.delete-btn:hover {
+    background: #ff7875;
+}
+
+.pac-script {
+    font-family: monospace;
+    min-height: 200px;
+}
+
+.options-page {
+    min-height: 100vh;
+} 

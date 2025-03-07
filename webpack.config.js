@@ -6,10 +6,15 @@ const webpack = require('webpack');
 
 module.exports = {
   mode: 'development', // 设置模式为开发模式
-  entry: './src/index.jsx', // 指定入口文件
+  entry: {
+    main: './src/index.tsx',
+    options: './src/pages/options.tsx'
+  },
   output: {
     path: path.resolve(__dirname, 'build'), // 输出目录
-    filename: 'bundle.js', // 输出文件名
+    filename: '[name].bundle.js', // 输出文件名
+    publicPath: '/',
+    clean: true
   },
   plugins: [
     new webpack.DefinePlugin({
@@ -18,16 +23,22 @@ module.exports = {
     }),
     new HtmlWebpackPlugin({
       template: './public/index.html',
-      filename: 'index.html'
+      filename: 'index.html',
+      chunks: ['main']
+    }),
+    new HtmlWebpackPlugin({
+      template: './public/proxy/options.html',
+      filename: 'proxy/options.html',
+      chunks: ['options'],
+      publicPath: '../'
     }),
     new CopyWebpackPlugin({
       patterns: [
-        // copy public assets exclude index.html
         {
           from: path.resolve(__dirname, 'public'),
           to: path.resolve(__dirname, 'build'),
           globOptions: {
-            ignore: ['**/index.html']
+            ignore: ['**/index.html', '**/proxy/options.html']
           }
         }
       ]
@@ -37,13 +48,20 @@ module.exports = {
   module: {
     rules: [
       {
-        test: /\.css$/, // 匹配所有的 css 文件
-        use: ['style-loader', 'css-loader'] // 对匹配到的文件使用这两个 loader
+        test: /\.css$/,
+        use: ['style-loader', 'css-loader']
       },
       {
-        test: /\.tsx?$/, // 匹配TS和TSX文件
-        use: 'ts-loader',
-        exclude: /node_modules/,
+        test: /\.tsx?$/,
+        use: [
+          {
+            loader: 'ts-loader',
+            options: {
+              transpileOnly: true  // 添加这个选项可以加快编译速度
+            }
+          }
+        ],
+        exclude: /node_modules/
       },
       {
         test: /\.(js|jsx)$/, // 匹配JS和JSX文件
@@ -60,9 +78,11 @@ module.exports = {
   resolve: {
     extensions: ['.tsx', '.ts', '.js', '.jsx'], // 解析扩展（确保能够解析JS和JSX文件）
     alias: {
+      '@': path.resolve(__dirname, './src'),
       '@assets': path.resolve(__dirname, './src/assets'),
       '@components': path.resolve(__dirname, './src/components'),
       '@network': path.resolve(__dirname, './src/network'),
+      '@types': path.resolve(__dirname, './src/types'),
     }
   },
   devtool: 'inline-source-map', // 生成内联源映射，便于调试

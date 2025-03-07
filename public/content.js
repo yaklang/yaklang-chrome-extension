@@ -3,6 +3,7 @@
         return;
     }
     window.contentScriptInjected = true;
+    window.badgeCount = 0;
     // 检查并插入 CSS 样式
     const styleId = 'injected-css-style';
     if (!document.getElementById(styleId)) {
@@ -38,18 +39,21 @@
                 script.remove();
             };
             (document.head || document.documentElement).appendChild(script);
-            window.addEventListener('message', function onMessage(event) {
+            window.addEventListener('message', async function onMessage(event) {
                 if (event.source !== window || event.data.type !== 'FROM_INJECT_JS') {
                     return;
                 }
                 window.removeEventListener('message', onMessage);
-                // Send the result to the background script
-                // chrome.runtime.sendMessage({ action: 'yakit_to_extension_page', result: event.data.result });
+                window.badgeCount += 1;
                 // 直接向向发送端返回结果
                 sendResponse({action: 'yakit_to_extension_page', result: event.data.result});
+                // Send updated badge count to background script
+                await chrome.runtime.sendMessage({action: 'yakit_badge', data: window.badgeCount.toString()});
             });
             return true;
         }
     });
+
+
 })()
 
