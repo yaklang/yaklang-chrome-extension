@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Yakit Chrome Endpoint",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "A Endpoint for Yakit MITM or more",
   "options_ui": {
     "page": "proxy/options.html",
