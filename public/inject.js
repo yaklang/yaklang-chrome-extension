@@ -18,6 +18,7 @@
                 break;
             case 'CONTENT_EVAL_CODE':
                 const code = event.data.value.code;
+                console.log(code)
                 result = (() => {
                     try {
                         return eval(code);

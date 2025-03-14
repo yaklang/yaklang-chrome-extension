@@ -1,0 +1,111 @@
+.options-page {
+    height: 100vh;
+    overflow: auto;
+    background: #f0f2f5;
+}
+
+.options-page .ant-layout-content {
+    padding: 24px;
+}
+
+.proxy-tabs {
+    background: #fff;
+    padding: 24px;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.options-page .ant-tabs-nav::before {
+    border-bottom-color: #f0f0f0;
+}
+
+.options-page .ant-tabs-tab.ant-tabs-tab-active .ant-tabs-tab-btn {
+    color: var(--yakit-primary);
+}
+
+.options-page .ant-tabs-ink-bar {
+    background: var(--yakit-primary);
+}
+
+.options-page .ant-card {
+    margin-bottom: 16px;
+    border-radius: 4px;
+    border: 1px solid #f0f0f0;
+}
+
+.options-page .ant-card-head {
+    border-bottom: none;
+    min-height: 48px;
+}
+
+.options-page .ant-card-body {
+    padding: 16px;
+}
+
+.options-page .ant-btn-primary {
+    background: var(--yakit-primary);
+    border-color: var(--yakit-primary);
+}
+
+.options-page .ant-btn-primary:hover {
+    background: var(--yakit-primary-hover);
+    border-color: var(--yakit-primary-hover);
+}
+
+.proxy-action-btn.ant-btn-default {
+    color: rgba(0, 0, 0, 0.65);
+    border-color: #d9d9d9;
+    background: #fff;
+}
+
+.proxy-action-btn.ant-btn-default:hover {
+    color: var(--yakit-primary);
+    border-color: var(--yakit-primary);
+}
+
+.proxy-action-btn.ant-btn-primary {
+    color: #fff;
+    background: var(--yakit-primary);
+    border-color: var(--yakit-primary);
+}
+
+.proxy-action-btn.ant-btn-primary.ant-btn-dangerous {
+    background: #ff4d4f;
+    border-color: #ff4d4f;
+}
+
+.proxy-action-btn.ant-btn-primary.ant-btn-dangerous:hover {
+    background: #ff7875;
+    border-color: #ff7875;
+}
+
+.options-page .ant-table-wrapper {
+    background: #fff;
+    padding: 24px;
+    border-radius: 8px;
+}
+
+.options-page .ant-input:focus,
+.options-page .ant-input-focused {
+    border-color: var(--yakit-primary);
+    box-shadow: 0 0 0 2px var(--yakit-primary-5);
+}
+
+.options-page .ant-select-focused .ant-select-selector {
+    border-color: var(--yakit-primary) !important;
+    box-shadow: 0 0 0 2px var(--yakit-primary-5) !important;
+}
+
+.options-page .ant-select-item-option-selected:not(.ant-select-item-option-disabled) {
+    background-color: var(--yakit-primary-5);
+}
+
+/* 防止 Modal 出现时页面跳动 */
+.ant-modal-wrap {
+    overflow: hidden;
+}
+
+.ant-modal-content {
+    max-height: 90vh;
+    overflow: auto;
+} 
