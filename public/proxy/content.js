@@ -208,6 +208,8 @@ console.log("Content script starting...");
             // 创建容器
             const container = document.createElement("div");
             container.id = "yakit-proxy-panel";
+            // 添加高z-index确保在页面最上层
+            container.style.zIndex = "2147483647";
 
             // 创建 shadow DOM
             const shadow = container.attachShadow({mode: "open"});
@@ -215,36 +217,59 @@ console.log("Content script starting...");
             // 添加样式
             const style = document.createElement("style");
             style.textContent = `
+            /* 重置所有样式以避免宿主页面的CSS影响 */
+            .yak-proxy-root * {
+                all: initial;
+                box-sizing: border-box !important;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+                line-height: normal !important;
+                color: initial !important;
+                font-size: 14px !important;
+                text-align: left !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+                outline: none !important;
+                text-decoration: none !important;
+                width: auto !important;
+                height: auto !important;
+                min-width: auto !important;
+                min-height: auto !important;
+                max-width: none !important;
+                max-height: none !important;
+                background: none !important;
+            }
+            
             .floating-panel {
-                position: fixed;
-                top: 30%;
-                right: 0;
-                transform: translateY(-30%);
-                background: white;
-                z-index: 2147483647;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-                width: 50px;
-                height: 40px;
-                overflow: hidden;
+                position: fixed !important;
+                top: 30% !important;
+                right: 0 !important;
+                transform: translateY(-30%) !important;
+                background: white !important;
+                z-index: 2147483647 !important;
+                width: 50px !important;
+                height: 40px !important;
+                overflow: hidden !important;
                 transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
                             height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
-                            background-color 0.2s ease;
+                            background-color 0.2s ease !important;
+                box-sizing: border-box !important;
             }
 
             /* 吸附状态 */
             .floating-panel:not(.expanded):not(.dragging) {
-                border-radius: 50px 0 0 50px;
-                box-shadow: -4px 0 20px rgba(0,0,0,0.15);
-                border: 1px solid #eee;
-                border-right: none;
+                border-radius: 50px 0 0 50px !important;
+                box-shadow: -4px 0 20px rgba(0,0,0,0.15) !important;
+                border: 1px solid #eee !important;
+                border-right: none !important;
             }
 
             /* 拖动状态 */
             .floating-panel.dragging {
                 cursor: grabbing !important;
-                user-select: none;
-                opacity: 0.95;
-                transition: none;
+                user-select: none !important;
+                opacity: 0.95 !important;
+                transition: none !important;
             }
 
             .floating-panel.dragging * {
@@ -252,203 +277,219 @@ console.log("Content script starting...");
             }
 
             .floating-panel:active {
-                cursor: grabbing;
+                cursor: grabbing !important;
             }
 
             .floating-panel .panel-header {
-                cursor: grab;
+                cursor: grab !important;
             }
 
             .floating-panel .panel-header:active {
-                cursor: grabbing;
+                cursor: grabbing !important;
             }
 
             /* 吸附状态悬浮时 */
             .floating-panel:not(.expanded):hover {
-                width: 120px;
-                background: #fff7e6;
-                border-color: #ffd591;
+                width: 120px !important;
+                background: #fff7e6 !important;
+                border-color: #ffd591 !important;
             }
 
             /* 展开状态 - 立即应用圆角变化 */
             .floating-panel.expanded {
-                width: 180px;
-                height: auto;
-                max-height: 400px;
-                border-radius: 8px 0 0 8px;
-                box-shadow: -2px 0 10px rgba(0,0,0,0.1);
-                border: 1px solid #eee;
-                border-right: none;
+                width: 180px !important;
+                height: auto !important;
+                max-height: 400px !important;
+                border-radius: 8px 0 0 8px !important;
+                box-shadow: -2px 0 10px rgba(0,0,0,0.1) !important;
+                border: 1px solid #eee !important;
+                border-right: none !important;
                 /* 展开时立即应用新的圆角 */
                 transition: 
                     width 0.2s cubic-bezier(0.4, 0, 0.2, 1),
                     height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
                     border-radius 0s,
-                    background-color 0.2s ease;
+                    background-color 0.2s ease !important;
             }
 
             .panel-header {
-                height: 40px;
-                min-height: 40px;
-                display: flex;
-                align-items: center;
-                padding: 0 8px;
-                cursor: pointer;
-                user-select: none;
+                height: 40px !important;
+                min-height: 40px !important;
+                display: flex !important;
+                align-items: center !important;
+                padding: 0 8px !important;
+                cursor: pointer !important;
+                user-select: none !important;
             }
 
             /* 吸附状态的头部 */
             .floating-panel:not(.expanded) .panel-header {
-                background: transparent;
+                background: transparent !important;
             }
 
             /* 展开状态的头部 */
             .floating-panel.expanded .panel-header {
-                background: #f8f9fa;
-                border-bottom: 1px solid #eee;
+                background: #f8f9fa !important;
+                border-bottom: 1px solid #eee !important;
             }
 
             .header-content {
-                display: flex;
-                align-items: center;
-                flex: 1;
-                overflow: hidden;
+                display: flex !important;
+                align-items: center !important;
+                flex: 1 !important;
+                overflow: hidden !important;
             }
 
             /* 优化图标大小过渡 */
             .yak-icon {
-                width: 36px;
-                height: 36px;
-                min-width: 36px;
-                object-fit: contain;
-                filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
-                transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+                width: 36px !important;
+                height: 36px !important;
+                min-width: 36px !important;
+                object-fit: contain !important;
+                filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1)) !important;
+                transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
             }
 
             .floating-panel.expanded .yak-icon {
-                width: 24px;
-                height: 24px;
-                min-width: 24px;
+                width: 24px !important;
+                height: 24px !important;
+                min-width: 24px !important;
             }
 
             .active-proxy-info {
-                display: flex;
-                align-items: center;
-                margin-left: 8px;
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                color: #ff6b00;
-                font-size: 13px;
-                font-weight: 500;
+                display: flex !important;
+                align-items: center !important;
+                margin-left: 8px !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+                color: #ff6b00 !important;
+                font-size: 13px !important;
+                font-weight: 500 !important;
             }
 
             .active-proxy-info span:first-child {
-                margin-right: 6px;
-                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+                margin-right: 6px !important;
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1)) !important;
             }
 
             .panel-content {
-                display: none;
-                background: white;
-                overflow-y: auto;
-                max-height: 360px;
-                opacity: 0;
-                transition: opacity 0.2s ease;
+                display: none !important;
+                background: white !important;
+                overflow-y: auto !important;
+                max-height: 360px !important;
+                opacity: 0 !important;
+                transition: opacity 0.2s ease !important;
             }
 
             .floating-panel.expanded .panel-content {
-                display: block;
-                opacity: 1;
+                display: block !important;
+                opacity: 1 !important;
             }
 
             .panel-content::-webkit-scrollbar {
-                width: 4px;
+                width: 4px !important;
             }
 
             .panel-content::-webkit-scrollbar-track {
-                background: #f5f5f5;
+                background: #f5f5f5 !important;
             }
 
             .panel-content::-webkit-scrollbar-thumb {
-                background: #ddd;
-                border-radius: 4px;
+                background: #ddd !important;
+                border-radius: 4px !important;
             }
 
             .panel-content::-webkit-scrollbar-thumb:hover {
-                background: #ccc;
+                background: #ccc !important;
             }
 
             .proxy-item {
-                display: flex;
-                align-items: center;
-                padding: 8px 12px;
-                cursor: pointer;
-                transition: all 0.2s;
-                white-space: nowrap;
-                position: relative;
+                display: flex !important;
+                align-items: center !important;
+                padding: 8px 12px !important;
+                cursor: pointer !important;
+                transition: all 0.2s !important;
+                white-space: nowrap !important;
+                position: relative !important;
             }
 
             .proxy-item:hover {
-                background: #fff7e6;
+                background: #fff7e6 !important;
             }
 
             .proxy-item.active {
-                background: #fff7e6;
-                color: #ff6b00;
+                background: #fff7e6 !important;
+                color: #ff6b00 !important;
+            }
+
+            .proxy-item.active span {
+                color: #ff6b00 !important;
             }
 
             .proxy-item span:first-child {
-                margin-right: 8px;
-                font-size: 16px;
-                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+                margin-right: 8px !important;
+                font-size: 16px !important;
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1)) !important;
+            }
+
+            .proxy-item span {
+                color: #333 !important;
             }
 
             .proxy-status {
-                position: absolute;
-                right: 12px;
-                width: 6px;
-                height: 6px;
-                border-radius: 50%;
-                background: #52c41a;
-                box-shadow: 0 0 4px rgba(82,196,26,0.3);
+                position: absolute !important;
+                right: 12px !important;
+                width: 6px !important;
+                height: 6px !important;
+                border-radius: 50% !important;
+                background: #52c41a !important;
+                box-shadow: 0 0 4px rgba(82,196,26,0.3) !important;
             }
 
             .proxy-item.active .proxy-status {
-                background: #ff6b00;
-                box-shadow: 0 0 4px rgba(255,107,0,0.3);
+                background: #ff6b00 !important;
+                box-shadow: 0 0 4px rgba(255,107,0,0.3) !important;
             }
 
             .divider {
-                height: 1px;
-                background: #f0f0f0;
-                margin: 4px 0;
+                height: 1px !important;
+                background: #f0f0f0 !important;
+                margin: 4px 0 !important;
             }
 
             .action-button {
-                display: flex;
-                align-items: center;
-                padding: 8px 12px;
-                cursor: pointer;
-                transition: all 0.2s;
-                white-space: nowrap;
-                color: #666;
+                display: flex !important;
+                align-items: center !important;
+                padding: 8px 12px !important;
+                cursor: pointer !important;
+                transition: all 0.2s !important;
+                white-space: nowrap !important;
+                color: #666 !important;
             }
 
             .action-button:hover {
-                background: #fff7e6;
-                color: #ff6b00;
+                background: #fff7e6 !important;
+                color: #ff6b00 !important;
+            }
+
+            .action-button:hover span {
+                color: #ff6b00 !important;
             }
 
             .action-button span:first-child {
-                margin-right: 8px;
-                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1));
+                margin-right: 8px !important;
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1)) !important;
+            }
+            
+            .action-button span {
+                color: #666 !important;
             }
         `;
 
             // 创建面板内容
             const panel = document.createElement("div");
-            panel.className = "floating-panel";
+            panel.className = "floating-panel yak-proxy-root";
             panel.innerHTML = `
             <div class="panel-header">
                 <div class="header-content">
