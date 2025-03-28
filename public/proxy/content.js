@@ -860,8 +860,9 @@ console.log("Content script starting...");
                 const boundedTop = Math.max(0, Math.min(newTop, maxTop));
 
                 // 保持水平位置不变，只改变垂直位置
-                panel.style.top = `${boundedTop}px`;
-                panel.style.transform = "translateY(0)"; // 移除默认的 translateY(-50%)
+                // 使用setProperty方法添加!important标记确保样式生效
+                panel.style.setProperty('top', `${boundedTop}px`, 'important');
+                panel.style.setProperty('transform', 'translateY(0)', 'important'); // 移除默认的 translateY(-50%)
             };
 
             const onMouseDown = (e) => {
@@ -881,11 +882,11 @@ console.log("Content script starting...");
                 startTop = rect.top;
 
                 // 开始拖动时固定当前位置
-                panel.style.top = `${startTop}px`;
-                panel.style.transform = "translateY(0)";
+                panel.style.setProperty('top', `${startTop}px`, 'important');
+                panel.style.setProperty('transform', 'translateY(0)', 'important');
 
                 // 添加拖动时的视觉反馈
-                panel.style.transition = "none";
+                panel.style.setProperty('transition', 'none', 'important');
                 panel.classList.add("dragging");
 
                 // 防止文本选择
@@ -911,7 +912,7 @@ console.log("Content script starting...");
                 }
 
                 panel.classList.remove("dragging");
-                panel.style.transition = "";
+                panel.style.setProperty('transition', '', 'important');
 
                 // 保存位置
                 const top = panel.getBoundingClientRect().top;
@@ -929,8 +930,8 @@ console.log("Content script starting...");
             const savedPosition = localStorage.getItem("yakitProxyPanelPosition");
             if (savedPosition) {
                 const top = (parseFloat(savedPosition) / 100) * window.innerHeight;
-                panel.style.top = `${top}px`;
-                panel.style.transform = "translateY(0)";
+                panel.style.setProperty('top', `${top}px`, 'important');
+                panel.style.setProperty('transform', 'translateY(0)', 'important');
             }
         },
 
