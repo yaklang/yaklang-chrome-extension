@@ -372,6 +372,9 @@ console.log("Content script starting...");
                 margin-right: 6px !important;
                 filter: drop-shadow(0 1px 2px rgba(0,0,0,0.1)) !important;
             }
+            .active-proxy-info span:nth-child(2) {
+                color: #333 !important;
+            }
 
             .panel-content {
                 display: none !important;
