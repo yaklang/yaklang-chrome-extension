@@ -26,7 +26,16 @@
     {
       "matches": ["<all_urls>","http://mitm/"],
       "run_at": "document_start",
-      "js": ["proxy/content.js"]
+      "js": [
+        "proxy/links_finder.js"
+      ]
+    },
+    {
+      "matches": ["<all_urls>","http://mitm/"],
+      "run_at": "document_end",
+      "js": [
+        "proxy/content.js"
+      ]
     }
   ],
   "permissions": [
