@@ -201,7 +201,7 @@ console.log("Content script starting...");
 
         createPanel() {
             if (!document.body) {
-                console.log("Body not available during panel creation");
+                console.log("Body not ready, waiting...");
                 return;
             }
 
@@ -310,6 +310,12 @@ console.log("Content script starting...");
                     height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
                     border-radius 0s,
                     background-color 0.2s ease !important;
+            }
+
+            /* 链接面板展开状态 */
+            .floating-panel.expanded[data-active-tab="links"] {
+                width: 280px !important;
+                max-height: 600px !important;
             }
 
             .panel-header {
@@ -488,24 +494,215 @@ console.log("Content script starting...");
             .action-button span {
                 color: #666 !important;
             }
+
+            /* 添加垂直标签样式 */
+            .tabs-container {
+                display: flex !important;
+                height: 100% !important;
+                min-height: 200px !important;
+            }
+
+            .tab-list {
+                width: 40px !important;
+                background: #f8f9fa !important;
+                border-right: 1px solid #eee !important;
+                display: flex !important;
+                flex-direction: column !important;
+                align-items: center !important;
+                padding-top: 8px !important;
+                position: sticky !important;
+                top: 0 !important;
+                align-self: flex-start !important;
+                height: 100% !important;
+                flex-shrink: 0 !important;
+            }
+
+            .tab-button {
+                width: 32px !important;
+                height: 32px !important;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                margin-bottom: 4px !important;
+                border-radius: 4px !important;
+                cursor: pointer !important;
+                transition: all 0.2s !important;
+                background: transparent !important;
+                border: none !important;
+                padding: 0 !important;
+            }
+
+            .tab-button:hover {
+                background: #fff7e6 !important;
+            }
+
+            .tab-button.active {
+                background: #fff7e6 !important;
+                color: #ff6b00 !important;
+            }
+
+            .tab-content {
+                flex: 1 !important;
+                display: flex !important;
+                flex-direction: column !important;
+                min-width: 0 !important;
+                height: 100% !important;
+            }
+
+            .tab-panel {
+                display: none !important;
+                height: 100% !important;
+                overflow: hidden !important;
+                flex-direction: column !important;
+            }
+
+            .tab-panel.active {
+                display: flex !important;
+            }
+
+            /* Links Panel Styles */
+            .links-stats {
+                position: sticky !important;
+                top: 0 !important;
+                background: white !important;
+                z-index: 1 !important;
+                padding: 12px !important;
+                border-bottom: 1px solid #eee !important;
+                flex-shrink: 0 !important;
+            }
+
+            .stats-item {
+                display: flex !important;
+                align-items: center !important;
+                gap: 8px !important;
+            }
+
+            .links-filters {
+                position: sticky !important;
+                top: 43px !important;
+                background: white !important;
+                z-index: 1 !important;
+                padding: 12px !important;
+                display: flex !important;
+                flex-wrap: wrap !important;
+                gap: 8px !important;
+                border-bottom: 1px solid #eee !important;
+                flex-shrink: 0 !important;
+            }
+
+            .filter-btn {
+                padding: 4px 8px !important;
+                border-radius: 4px !important;
+                border: 1px solid #eee !important;
+                background: white !important;
+                cursor: pointer !important;
+                transition: all 0.2s !important;
+                font-size: 12px !important;
+                color: #666 !important;
+                display: flex !important;
+                align-items: center !important;
+                gap: 4px !important;
+                white-space: nowrap !important;
+            }
+
+            .filter-btn:hover {
+                background: #fff7e6 !important;
+                border-color: #ffd591 !important;
+                color: #ff6b00 !important;
+            }
+
+            .filter-btn.active {
+                background: #fff7e6 !important;
+                border-color: #ff6b00 !important;
+                color: #ff6b00 !important;
+            }
+
+            .filter-btn span {
+                color: inherit !important;
+            }
+
+            .links-list {
+                flex: 1 !important;
+                overflow-y: auto !important;
+                overflow-x: hidden !important;
+                padding: 12px !important;
+            }
+
+            .link-item {
+                display: flex !important;
+                align-items: flex-start !important;
+                padding: 8px !important;
+                border-bottom: 1px solid #eee !important;
+                gap: 8px !important;
+                transition: all 0.2s ease !important;
+            }
+
+            .link-item[data-hidden="true"] {
+                display: none !important;
+            }
+
+            .link-icon {
+                font-size: 16px !important;
+                min-width: 24px !important;
+                text-align: center !important;
+            }
+
+            .link-content {
+                flex: 1 !important;
+                min-width: 0 !important;
+            }
+
+            .link-url {
+                font-size: 12px !important;
+                color: #1890ff !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            }
+
+            .link-text, .link-alt {
+                font-size: 12px !important;
+                color: #666 !important;
+                margin-top: 4px !important;
+                white-space: nowrap !important;
+                overflow: hidden !important;
+                text-overflow: ellipsis !important;
+            }
+
+            .copy-btn {
+                padding: 4px !important;
+                border-radius: 4px !important;
+                border: none !important;
+                background: transparent !important;
+                cursor: pointer !important;
+                transition: all 0.2s !important;
+                font-size: 14px !important;
+            }
+
+            .copy-btn:hover {
+                background: #f5f5f5 !important;
+            }
         `;
 
             // 创建面板内容
             const panel = document.createElement("div");
             panel.className = "floating-panel yak-proxy-root";
+            
+            // 初始面板内容
             panel.innerHTML = `
-            <div class="panel-header">
-                <div class="header-content">
-                    <img src="${YAK_ICON_URL}" class="yak-icon" alt="Yak" />
-                    <div class="active-proxy-info">
-                        <!-- 当前代理信息将动态更新 -->
+                <div class="panel-header">
+                    <div class="header-content">
+                        <img src="${YAK_ICON_URL}" class="yak-icon" alt="Yak" />
+                        <div class="active-proxy-info">
+                            <span>🟢</span>
+                            <span>直接连接</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="panel-content">
-                <!-- 内容将由 _buildPanelHtml 方法动态生成 -->
-            </div>
-        `;
+                <div class="panel-content">
+                    <!-- 内容将由 updatePanel 方法动态更新 -->
+                </div>
+            `;
 
             // 将样式和面板添加到 shadow DOM
             shadow.appendChild(style);
@@ -529,6 +726,10 @@ console.log("Content script starting...");
                 header.addEventListener("click", (e) => {
                     if (!this.isDragging) {
                         floatingPanel.classList.toggle("expanded");
+                        // 如果展开且内容为空，则更新面板
+                        if (floatingPanel.classList.contains("expanded")) {
+                            this.updatePanel();
+                        }
                     }
                 });
 
@@ -691,37 +892,44 @@ console.log("Content script starting...");
             return this._updateQueue;
         },
 
-        // 将 HTML 构建逻辑抽离成单独的方法
+        // 修改面板内容的构建方法
         _buildPanelHtml(currentProxy, configs) {
             let html = `
-            <div class="proxy-item ${
-                currentProxy.currentMode === "direct" ? "active" : ""
-            }" 
-                 data-id="direct"
-                 title="直接连接">
-                <span>🟢</span>
-                <span>直接连接</span>
-                ${
-                currentProxy.currentMode === "direct"
-                    ? '<div class="proxy-status"></div>'
-                    : ""
-            }
-            </div>
-            <div class="proxy-item ${
-                currentProxy.currentMode === "system" ? "active" : ""
-            }" 
-                 data-id="system"
-                 title="系统代理">
-                <span>⚙️</span>
-                <span>系统代理</span>
-                ${
-                currentProxy.currentMode === "system"
-                    ? '<div class="proxy-status"></div>'
-                    : ""
-            }
-            </div>
-            <div class="divider"></div>
-        `;
+            <div class="tabs-container">
+                <div class="tab-list">
+                    <button class="tab-button active" data-tab="proxy" title="代理设置">🌐</button>
+                    <button class="tab-button" data-tab="links" title="页面链接">🔗</button>
+                </div>
+                <div class="tab-content">
+                    <div class="tab-panel active" data-panel="proxy">
+                        <div class="proxy-item ${
+                            currentProxy.currentMode === "direct" ? "active" : ""
+                        }" 
+                             data-id="direct"
+                             title="直接连接">
+                            <span>🟢</span>
+                            <span>直接连接</span>
+                            ${
+                            currentProxy.currentMode === "direct"
+                                ? '<div class="proxy-status"></div>'
+                                : ""
+                        }
+                        </div>
+                        <div class="proxy-item ${
+                            currentProxy.currentMode === "system" ? "active" : ""
+                        }" 
+                             data-id="system"
+                             title="系统代理">
+                            <span>⚙️</span>
+                            <span>系统代理</span>
+                            ${
+                            currentProxy.currentMode === "system"
+                                ? '<div class="proxy-status"></div>'
+                                : ""
+                        }
+                        </div>
+                        <div class="divider"></div>
+            `;
 
             // 添加自定义代理配置
             configs.forEach((config) => {
@@ -730,64 +938,55 @@ console.log("Content script starting...");
                         currentProxy.currentMode === "fixed_servers" && config.enabled;
                     const proxyIcon = config.proxyType === "pac_script" ? "📜" : "🌐";
 
-                    // 构建 title 提示信息
-                    let tooltipText;
-                    if (config.proxyType === "pac_script") {
-                        tooltipText = "PAC Script";
-                    } else {
-                        const scheme = config.scheme
-                            ? `${config.scheme.toUpperCase()} `
-                            : "";
-                        tooltipText = `${scheme}${config.host}:${config.port}`;
-                    }
+                    const tooltipText = config.proxyType === "pac_script"
+                        ? "PAC Script"
+                        : `${config.scheme ? `${config.scheme.toUpperCase()} ` : ""}${config.host}:${config.port}`;
 
                     html += `
-                    <div class="proxy-item ${isActive ? "active" : ""}" 
-                         data-id="${config.id}"
-                         title="${tooltipText}">
-                        <span>${proxyIcon}</span>
-                        <span>${config.name || "未命名代理"}</span>
-                        ${isActive ? '<div class="proxy-status"></div>' : ""}
-                    </div>
-                `;
+                        <div class="proxy-item ${isActive ? "active" : ""}" 
+                             data-id="${config.id}"
+                             title="${tooltipText}">
+                            <span>${proxyIcon}</span>
+                            <span>${config.name || "未命名代理"}</span>
+                            ${isActive ? '<div class="proxy-status"></div>' : ""}
+                        </div>
+                    `;
                 }
             });
 
             html += `
-            <div class="divider"></div>
-            <div class="action-button add-proxy">
-                <span>➕</span>
-                <span>添加代理</span>
+                        <div class="divider"></div>
+                        <div class="action-button add-proxy">
+                            <span>➕</span>
+                            <span>添加代理</span>
+                        </div>
+                        <div class="action-button settings">
+                            <span>⚙️</span>
+                            <span>设置</span>
+                        </div>
+                    </div>
+                    <div class="tab-panel" data-panel="links">
+                        <!-- Links panel content will be dynamically populated -->
+                    </div>
+                </div>
             </div>
-            <div class="action-button settings">
-                <span>⚙️</span>
-                <span>设置</span>
-            </div>
-        `;
+            `;
 
             return html;
         },
 
         _bindEventListeners(panel, configs, currentProxy) {
-            // 代理项点击事件
+            // 现有的事件监听器
             panel.querySelectorAll(".proxy-item").forEach((item) => {
                 const id = item.dataset.id;
-
-                // 使用事件委托来提高性能
-                const clickHandler = async (e) => {
+                item.addEventListener("click", async (e) => {
                     e.stopPropagation();
+                    if (this._updating) return;
 
-                    if (this._updating) {
-                        console.log("Panel is updating, ignoring click");
-                        return;
-                    }
-
-                    // 添加点击反馈
                     const originalOpacity = item.style.opacity;
                     item.style.opacity = "0.7";
 
                     try {
-                        // 立即更新 UI 状态，不等待响应
                         panel.querySelectorAll(".proxy-item").forEach((i) => {
                             i.classList.remove("active");
                             i.querySelector("span").style.color = "#666";
@@ -805,21 +1004,62 @@ console.log("Content script starting...");
                             });
                         } else {
                             const config = configs.find((c) => c.id === id);
-                            if (config) {
-                                await switchProxy(config);
-                            }
+                            if (config) await switchProxy(config);
                         }
                     } catch (error) {
                         console.error("Error handling proxy item click:", error);
-                        // 发生错误时恢复原状
                         await this.updatePanel();
                     } finally {
                         item.style.opacity = originalOpacity;
                     }
-                };
+                });
+            });
 
-                // 使用 { once: true } 确保事件监听器不会重复
-                item.addEventListener("click", clickHandler, {once: true});
+            // Tab 切换事件
+            panel.querySelectorAll(".tab-button").forEach((button) => {
+                console.log("Setting up tab button click handler for:", button.dataset.tab);
+                button.addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    const tabId = button.dataset.tab;
+                    console.log("Tab button clicked:", tabId);
+                    
+                    // 更新按钮状态
+                    panel.querySelectorAll(".tab-button").forEach((btn) => {
+                        btn.classList.remove("active");
+                    });
+                    button.classList.add("active");
+
+                    // 更新面板显示
+                    panel.querySelectorAll(".tab-panel").forEach((panel) => {
+                        panel.classList.remove("active");
+                    });
+                    const targetPanel = panel.querySelector(`[data-panel="${tabId}"]`);
+                    console.log("Target panel found:", !!targetPanel);
+                    targetPanel.classList.add("active");
+
+                    // 更新面板尺寸
+                    const floatingPanel = this.panel.shadowRoot.querySelector(".floating-panel");
+                    floatingPanel.setAttribute("data-active-tab", tabId);
+
+                    // 如果是链接面板，检查内容并初始化
+                    if (tabId === "links") {
+                        console.log("Links tab selected, checking panel content...");
+                        // 检查面板是否有实际的链接内容
+                        const hasContent = targetPanel.querySelector('.links-stats, .links-filters, .links-list');
+                        if (!hasContent) {
+                            console.log("Links panel needs initialization...");
+                            await this._initLinksPanel(targetPanel);
+                        } else {
+                            console.log("Links panel content found:", hasContent);
+                            // 如果内容存在但为空，重新初始化
+                            const linksList = targetPanel.querySelector('.links-list');
+                            if (linksList && !linksList.children.length) {
+                                console.log("Links list is empty, reinitializing...");
+                                await this._initLinksPanel(targetPanel);
+                            }
+                        }
+                    }
+                });
             });
 
             // 添加代理按钮
@@ -844,6 +1084,45 @@ console.log("Content script starting...");
                     console.error("Error opening options page:", error);
                 }
             });
+        },
+
+        // 初始化链接面板
+        async _initLinksPanel(panel) {
+            try {
+                console.log("Creating LinksFinder instance...");
+                if (!window.LinksFinder) {
+                    console.error("LinksFinder is not defined! Window properties:", Object.keys(window));
+                    throw new Error("LinksFinder class not found");
+                }
+                
+                // 清理旧的事件监听器
+                const oldButtons = panel.querySelectorAll('.filter-btn, .copy-btn');
+                oldButtons.forEach(btn => {
+                    btn.replaceWith(btn.cloneNode(true));
+                });
+                
+                // 创建链接查找器实例
+                const linksFinder = new window.LinksFinder();
+                
+                console.log("Building links panel...");
+                // 构建并插入面板内容
+                panel.innerHTML = linksFinder.buildLinksPanel();
+                
+                console.log("Binding events...");
+                // 绑定事件
+                linksFinder.bindEvents(panel);
+                
+                console.log("Links panel initialization completed");
+            } catch (error) {
+                console.error("Error initializing links panel:", error);
+                panel.innerHTML = `
+                    <div style="padding: 16px; text-align: center; color: #ff4d4f;">
+                        <span>😢</span>
+                        <p>加载链接失败: ${error.message}</p>
+                        <p style="font-size: 12px; color: #999;">详细错误: ${error.stack}</p>
+                    </div>
+                `;
+            }
         },
 
         _initDragFeature(header, panel) {
