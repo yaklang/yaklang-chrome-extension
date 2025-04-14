@@ -42,8 +42,8 @@
 }
 
 .popup-container {
-  width: 320px;
-  min-height: 400px;
+  /*width: 320px;*/
+  /*min-height: 400px;*/
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -52,7 +52,7 @@
 }
 
 .popup-header {
-  background-color: #F28B44;
+  background-color: var(--yakit-primary);
   color: white;
   padding: 12px 16px;
   text-align: center;
