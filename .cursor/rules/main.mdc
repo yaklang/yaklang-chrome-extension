@@ -1,0 +1,578 @@
+---
+description: 使用 WXT、React 和 TypeScript 构建代理管理扩展的指南
+globs: 
+alwaysApply: false
+---
+---
+description: 使用 WXT、React 和 TypeScript 构建代理管理扩展的指南
+globs: "**/*.ts, **/*.tsx, **/*.js, **/*.jsx"
+---
+
+## 概览
+
+](https://wxt.dev/) 是一个为浏览器扩展开发提供现代开发体验的框架。本指南将帮助您使用 WXT、React 和 TypeScript 重构类似 SwitchyOmega 的代理管理扩展。
+
+## 项目结构
+
+推荐使用以下项目结构：
+```
+.
+├── .output/
+├── .wxt/
+├── modules/
+├── public/        # 包含要复制到输出文件夹的任何文件，而无需WXT处理
+├── ord/           # 需要重构的旧代码
+├── src/
+│ │ ├── assets/
+│ │ ├── components/
+│ │ ├── composables/
+│ │ ├── entrypoints/   # 包含所有被捆绑到扩展名的入口点
+│ │ ├── hooks/         # 默认自动导入，包含项目用于 React 和 Solid 的钩子的源代码
+│ │ ├── utils/
+├── .env
+├── .env.publish
+├── app.config.ts
+├── package.json
+├── tsconfig.json
+├── web-ext.config.ts # 配置浏览器启动
+├── wxt.config.ts     # WXT项目的主要配置文件 
+
+```
+
+
+Different browsers provide different global variables for accessing the extension APIs (chrome provides chrome, firefox provides browser, etc).
+
+WXT merges these two into a unified API accessed through the browser variable.
+
+```
+import { browser } from 'wxt/browser';
+
+browser.action.onClicked.addListener(() => {
+// ...
+});
+```
+TIP
+
+With auto-imports enabled, you don't even need to import this variable from wxt/browser!
+
+The browser variable WXT provides is a simple export of the browser or chrome globals provided by the browser at runtime:
+
+
+export const browser = globalThis.browser?.runtime?.id
+? globalThis.browser
+: globalThis.chrome;
+This means you can use the promise-style API for both MV2 and MV3, and it will work across all browsers (Chromium, Firefox, Safari, etc).
+
+Accessing Types
+All types can be accessed via WXT's Browser namespace:
+
+```
+import { type Browser } from 'wxt/browser';
+
+function handleMessage(message: any, sender: Browser.runtime.MessageSender) {
+// ...
+}
+```
+
+## 入口点设置
+
+### 后台脚本
+
+```typescript
+// entrypoints/background/index.ts
+import { defineBackground } from 'wxt/background';
+import { setupProxyManagement } from './proxy';
+
+export default defineBackground({
+  // 设置清单选项
+  type: 'module',
+
+  main() {
+    // 初始化代理管理
+    setupProxyManagement();
+    
+    // 监听消息
+    browser.runtime.onMessage.addListener((message, sender) => {
+      if (message.type === 'SWITCH_PROXY') {
+        return handleProxySwitch(message.proxyId);
+      }
+    });
+  },
+});
+```
+
+### 弹出窗口
+
+```html
+<!-- entrypoints/popup/index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>代理切换器</title>
+    <meta 
+      name="manifest.default_icon" 
+      content="{
+        16: '/icon-16.png',
+        48: '/icon-48.png'
+      }"
+    />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
+```
+
+```tsx
+// entrypoints/popup/index.tsx
+import React from 'react';
+import { createRoot } from 'react-dom/client';
+import App from './App';
+
+const root = createRoot(document.getElementById('app')!);
+root.render(<App />);
+```
+
+```tsx
+// entrypoints/popup/App.tsx
+import React, { useState, useEffect } from 'react';
+import ProxySelector from '../../components/ProxySelector';
+import { getProxyList, getCurrentProxy } from '../../utils/proxy';
+import type { Proxy } from '../../types';
+
+const App: React.FC = () => {
+  const [proxies, setProxies] = useState<Proxy[]>([]);
+  const [currentProxy, setCurrentProxy] = useState<string | null>(null);
+  
+  useEffect(() => {
+    const loadData = async () => {
+      const proxyList = await getProxyList();
+      const current = await getCurrentProxy();
+      setProxies(proxyList);
+      setCurrentProxy(current);
+    };
+    
+    loadData();
+  }, []);
+  
+  const handleProxyChange = async (proxyId: string) => {
+    await browser.runtime.sendMessage({ type: 'SWITCH_PROXY', proxyId });
+    setCurrentProxy(proxyId);
+  };
+  
+  return (
+    <div className="popup">
+      <h1>代理切换器</h1>
+      <ProxySelector 
+        proxies={proxies} 
+        currentProxy={currentProxy} 
+        onChange={handleProxyChange} 
+      />
+    </div>
+  );
+};
+
+export default App;
+```
+
+### 选项页面
+
+```html
+<!-- entrypoints/options/index.html -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>代理切换器设置</title>
+    <meta name="manifest.open_in_tab" content="true" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./index.tsx"></script>
+  </body>
+</html>
+```
+
+```tsx
+// entrypoints/options/App.tsx
+import React, { useState, useEffect } from 'react';
+import { getProxyList, saveProxy, deleteProxy } from '../../utils/proxy';
+import type { Proxy } from '../../types';
+
+const App: React.FC = () => {
+  const [proxies, setProxies] = useState<Proxy[]>([]);
+  const [newProxy, setNewProxy] = useState<Partial<Proxy>>({
+    name: '',
+    host: '',
+    port: '',
+    protocol: 'http'
+  });
+  
+  useEffect(() => {
+    loadProxies();
+  }, []);
+  
+  const loadProxies = async () => {
+    const list = await getProxyList();
+    setProxies(list);
+  };
+  
+  const handleSaveProxy = async () => {
+    if (!newProxy.name || !newProxy.host || !newProxy.port) return;
+    
+    await saveProxy(newProxy as Proxy);
+    loadProxies();
+    setNewProxy({
+      name: '',
+      host: '',
+      port: '',
+      protocol: 'http'
+    });
+  };
+  
+  return (
+    <div className="options">
+      <h1>代理管理器设置</h1>
+      
+      <div className="proxy-list">
+        {proxies.map(proxy => (
+          <div key={proxy.id} className="proxy-item">
+            <span>{proxy.name} ({proxy.protocol}://{proxy.host}:{proxy.port})</span>
+            <button onClick={() => deleteProxy(proxy.id)}>删除</button>
+          </div>
+        ))}
+      </div>
+      
+      <div className="add-proxy">
+        <h2>添加新代理</h2>
+        <input
+          type="text"
+          placeholder="名称"
+          value={newProxy.name}
+          onChange={e => setNewProxy({...newProxy, name: e.target.value})}
+        />
+        <select 
+          value={newProxy.protocol} 
+          onChange={e => setNewProxy({...newProxy, protocol: e.target.value})}
+        >
+          <option value="http">HTTP</option>
+          <option value="https">HTTPS</option>
+          <option value="socks4">SOCKS4</option>
+          <option value="socks5">SOCKS5</option>
+        </select>
+        <input
+          type="text"
+          placeholder="主机"
+          value={newProxy.host}
+          onChange={e => setNewProxy({...newProxy, host: e.target.value})}
+        />
+        <input
+          type="text"
+          placeholder="端口"
+          value={newProxy.port}
+          onChange={e => setNewProxy({...newProxy, port: e.target.value})}
+        />
+        <button onClick={handleSaveProxy}>保存</button>
+      </div>
+    </div>
+  );
+};
+
+export default App;
+```
+
+### 内容脚本
+
+```typescript
+// entrypoints/content.ts
+import { defineContentScript } from 'wxt/content-script';
+
+export default defineContentScript({
+  matches: ['<all_urls>'],
+  
+  main() {
+    // 在页面中执行的内容脚本逻辑
+    console.log('代理切换器内容脚本已加载');
+    
+    // 根据需要与后台脚本通信
+    browser.runtime.sendMessage({ type: 'CONTENT_SCRIPT_LOADED' });
+  },
+});
+```
+
+## 最佳实践
+
+1. **使用 WXT 存储模块**: 利用 `@wxt-dev/storage` 管理扩展数据。
+
+    ```typescript
+    // 安装: npm install @wxt-dev/storage
+    
+    // utils/storage.ts
+    import { createStorage } from '@wxt-dev/storage';
+    
+    export const storage = createStorage({
+      proxies: {
+        defaultValue: [],
+        schema: z.array(z.object({
+          id: z.string(),
+          name: z.string(),
+          protocol: z.enum(['http', 'https', 'socks4', 'socks5']),
+          host: z.string(),
+          port: z.string()
+        }))
+      },
+      currentProxyId: {
+        defaultValue: null,
+        schema: z.string().nullable()
+      }
+    });
+    ```
+
+2. **组件化开发**: 创建可重用的React组件。
+
+    ```tsx
+    // components/ProxySelector.tsx
+    import React from 'react';
+    import type { Proxy } from '../types';
+    
+    interface ProxySelectorProps {
+      proxies: Proxy[];
+      currentProxy: string | null;
+      onChange: (proxyId: string) => void;
+    }
+    
+    const ProxySelector: React.FC<ProxySelectorProps> = ({ proxies, currentProxy, onChange }) => {
+      return (
+        <div className="proxy-selector">
+          {proxies.map(proxy => (
+            <div 
+              key={proxy.id}
+              className={`proxy-item ${currentProxy === proxy.id ? 'active' : ''}`}
+              onClick={() => onChange(proxy.id)}
+            >
+              {proxy.name}
+            </div>
+          ))}
+        </div>
+      );
+    };
+    
+    export default ProxySelector;
+    ```
+
+3. **类型安全**: 为所有对象定义TypeScript接口。
+
+    ```typescript
+    // types/index.ts
+    export interface Proxy {
+      id: string;
+      name: string;
+      protocol: 'http' | 'https' | 'socks4' | 'socks5';
+      host: string;
+      port: string;
+      username?: string;
+      password?: string;
+    }
+    
+    export interface ProxyRule {
+      id: string;
+      name: string;
+      pattern: string;
+      proxyId: string;
+    }
+    ```
+
+4. **使用环境变量**: 为不同环境配置不同的设置。
+
+    ```typescript
+    // wxt.config.ts
+    import { defineConfig } from 'wxt';
+    
+    export default defineConfig({
+      manifest: {
+        name: process.env.NODE_ENV === 'development' ? '[DEV] 代理切换器' : '代理切换器',
+        version: '1.0.0',
+        description: '一个强大的浏览器代理管理扩展',
+      },
+      // 其他配置...
+    });
+    ```
+
+5. **消息通信**: 使用结构化消息系统。
+
+    ```typescript
+    // utils/messaging.ts
+    export type MessageType = 
+      | { type: 'SWITCH_PROXY'; proxyId: string }
+      | { type: 'GET_CURRENT_PROXY' }
+      | { type: 'PROXY_CHANGED'; proxyId: string };
+    
+    export function sendMessage<T extends MessageType>(message: T): Promise<any> {
+      return browser.runtime.sendMessage(message);
+    }
+    ```
+
+6. **图标状态管理**: 根据当前代理状态更新扩展图标。
+
+    ```typescript
+    // background/proxy.ts
+    function updateExtensionIcon(proxyId: string | null) {
+      const iconPath = proxyId 
+        ? '/icons/proxy-active.png' 
+        : '/icons/proxy-inactive.png';
+        
+      browser.action.setIcon({ path: iconPath });
+    }
+    ```
+
+7. **错误处理**: 实现良好的错误捕获和报告。
+
+    ```typescript
+    // utils/error.ts
+    export async function executeWithErrorHandling<T>(
+      fn: () => Promise<T>,
+      errorMessage = '执行操作时出错'
+    ): Promise<T | null> {
+      try {
+        return await fn();
+      } catch (error) {
+        console.error(`${errorMessage}:`, error);
+        browser.notifications.create({
+          type: 'basic',
+          iconUrl: '/icon-48.png',
+          title: '代理切换器错误',
+          message: errorMessage
+        });
+        return null;
+      }
+    }
+    ```
+
+8. **使用现代钩子**: 为React组件编写自定义钩子。
+
+    ```typescript
+    // hooks/useProxies.ts
+    import { useState, useEffect } from 'react';
+    import { storage } from '../utils/storage';
+    import type { Proxy } from '../types';
+    
+    export function useProxies() {
+      const [proxies, setProxies] = useState<Proxy[]>([]);
+      const [loading, setLoading] = useState(true);
+      
+      useEffect(() => {
+        const load = async () => {
+          const data = await storage.proxies.get();
+          setProxies(data);
+          setLoading(false);
+        };
+        
+        load();
+        
+        return storage.proxies.subscribe(newProxies => {
+          setProxies(newProxies);
+        });
+      }, []);
+      
+      return { proxies, loading };
+    }
+    ```
+
+## 版本兼容性
+
+本指南适用于:
+- WXT v0.20.0 及以上
+- React 18+
+- TypeScript 5.0+
+
+## 扩展功能实现
+
+### 代理管理功能
+
+```typescript
+// utils/proxy.ts
+import { storage } from './storage';
+import { v4 as uuidv4 } from 'uuid';
+import type { Proxy } from '../types';
+
+export async function getProxyList(): Promise<Proxy[]> {
+  return await storage.proxies.get();
+}
+
+export async function getCurrentProxy(): Promise<string | null> {
+  return await storage.currentProxyId.get();
+}
+
+export async function switchProxy(proxyId: string | null): Promise<void> {
+  // 更新存储
+  await storage.currentProxyId.set(proxyId);
+  
+  if (!proxyId) {
+    // 清除代理
+    await browser.proxy.settings.clear({});
+    return;
+  }
+  
+  // 获取代理详情
+  const proxies = await storage.proxies.get();
+  const proxy = proxies.find(p => p.id === proxyId);
+  
+  if (!proxy) return;
+  
+  // 设置代理
+  await browser.proxy.settings.set({
+    value: {
+      mode: 'fixed_servers',
+      rules: {
+        proxyForHttp: {
+          scheme: proxy.protocol,
+          host: proxy.host,
+          port: parseInt(proxy.port)
+        },
+        proxyForHttps: {
+          scheme: proxy.protocol,
+          host: proxy.host,
+          port: parseInt(proxy.port)
+        }
+      }
+    },
+    scope: 'regular'
+  });
+}
+
+export async function saveProxy(proxy: Omit<Proxy, 'id'>): Promise<Proxy> {
+  const newProxy: Proxy = {
+    ...proxy,
+    id: uuidv4()
+  };
+  
+  const proxies = await storage.proxies.get();
+  await storage.proxies.set([...proxies, newProxy]);
+  
+  return newProxy;
+}
+
+export async function deleteProxy(proxyId: string): Promise<void> {
+  const proxies = await storage.proxies.get();
+  await storage.proxies.set(proxies.filter(p => p.id !== proxyId));
+  
+  // 如果删除的是当前使用的代理，清除当前代理
+  const currentProxyId = await storage.currentProxyId.get();
+  if (currentProxyId === proxyId) {
+    await storage.currentProxyId.set(null);
+    await browser.proxy.settings.clear({});
+  }
+}
+```
+
+## 相关资源
+
+- [WXT 官方文档](mdc:https:/wxt.dev)
+- [WXT GitHub 仓库](mdc:https:/github.com/wxt-dev/wxt)
+- [Chrome 扩展 API 文档](mdc:https:/developer.chrome.com/docs/extensions/reference)
+- [React 文档](mdc:https:/reactjs.org)
+- [TypeScript 文档](mdc:https:/www.typescriptlang.org)
