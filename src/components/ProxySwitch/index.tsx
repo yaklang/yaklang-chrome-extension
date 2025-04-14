@@ -1,6 +1,6 @@
 import React, {useEffect, useState} from 'react';
 import {Menu} from 'antd';
-import {DisconnectOutlined, SettingOutlined, PlusOutlined} from '@ant-design/icons';
+import {DisconnectOutlined, SettingOutlined, PlusOutlined, CheckOutlined} from '@ant-design/icons';
 import {browser,} from 'wxt/browser';
 import type {MenuProps} from 'antd';
 import type {ProxyConfig} from '@/types/proxy';
@@ -205,7 +205,12 @@ export const ProxySwitch: React.FC = () => {
         const items: MenuProps['items'] = [
             ...FIXED_MODES.map(mode => ({
                 key: mode.key,
-                label: mode.name,
+                label: (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                        <span>{mode.name}</span>
+                        {currentMode === mode.key && <span>🟢</span>}
+                    </div>
+                ),
                 icon: mode.icon,
             })),
             {type: 'divider'}
@@ -216,7 +221,12 @@ export const ProxySwitch: React.FC = () => {
             items.push(
                 ...customProxies.map(proxy => ({
                     key: proxy.key,
-                    label: proxy.name,
+                    label: (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                            <span>{proxy.name}</span>
+                            {currentMode === proxy.key && <CheckOutlined style={{ color: 'var(--yakit-primary)' }} />}
+                        </div>
+                    ),
                     icon: <img src={YAK_ICON_URL} alt="YAK" style={{width: 16, height: 16}}/>,
                 }))
             );
@@ -247,6 +257,7 @@ export const ProxySwitch: React.FC = () => {
                 selectedKeys={[currentMode]}
                 items={buildMenuItems()}
                 onClick={({key}) => handleModeChange(key)}
+                data-menu-id={currentMode}
             />
             {isLoading && <div className="loading-overlay">切换中...</div>}
         </div>
