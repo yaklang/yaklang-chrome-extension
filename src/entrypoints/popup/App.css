@@ -1,7 +1,7 @@
 #root {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 0;
   text-align: center;
 }
 
@@ -42,32 +42,49 @@
 }
 
 .popup-container {
-  /*width: 320px;*/
-  /*min-height: 400px;*/
+  min-width: 190px;
   display: flex;
   flex-direction: column;
   padding: 0;
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-}
-
-.popup-header {
-  background-color: var(--yakit-primary);
-  color: white;
-  padding: 12px 16px;
-  text-align: center;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-}
-
-.popup-header h1 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 500;
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
 }
 
 .popup-content {
   flex: 1;
-  padding: 0;
+  padding: 4px 8px;
   background-color: #fff;
   overflow: auto;
+}
+
+/* Ensure the proxy menu takes full width */
+.popup-content .proxy-switch-container {
+  width: 100%;
+}
+
+.popup-content .proxy-switch-container .ant-menu {
+  width: 100%;
+  border-radius: 0;
+}
+
+/* Customize scrollbar */
+.popup-content::-webkit-scrollbar {
+  width: 4px;
+}
+
+.popup-content::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 2px;
+}
+
+.popup-content::-webkit-scrollbar-thumb {
+  background: var(--yakit-primary);
+  border-radius: 2px;
+}
+
+.popup-content::-webkit-scrollbar-thumb:hover {
+  background: var(--yakit-primary-hover);
 }
