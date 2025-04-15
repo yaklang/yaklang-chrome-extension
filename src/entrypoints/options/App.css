@@ -60,6 +60,26 @@
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
+.add-proxy-card .ant-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 10px 24px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.add-proxy-card .ant-modal-footer button {
+  margin-left: 8px;
+}
+
+.required-label::before {
+  content: '* ';
+  color: #ff4d4f;
+}
+
+.ant-form-item-label > label.ant-form-item-required:not(.ant-form-item-required-mark-optional)::before {
+  display: none !important;
+}
+
 .ant-space {
   width: 100%;
 } 

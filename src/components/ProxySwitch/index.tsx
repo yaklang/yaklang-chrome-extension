@@ -5,6 +5,7 @@ import {browser,} from 'wxt/browser';
 import type {MenuProps} from 'antd';
 import type {ProxyConfig} from '@/types/proxy';
 import {ContentActionType, ProxyActionType} from '@/types/action';
+import { getAllProxyConfigs, getCurrentProxy } from '@/utils/storage';
 
 import './index.css';
 
@@ -58,6 +59,7 @@ export const ProxySwitch: React.FC = () => {
         const handleMessage = (message: any) => {
             if (message.action === ContentActionType.PROXY_CONFIGS_UPDATED && message.source !== 'proxy_switch') {
                 loadCustomProxies();
+                loadProxyStatus();
             }
         };
 
@@ -80,18 +82,23 @@ export const ProxySwitch: React.FC = () => {
     // 获取当前代理状态
     const loadProxyStatus = async () => {
         try {
+            // 先尝试从后台脚本获取当前代理状态
             const response = await browser.runtime.sendMessage({
                 action: ProxyActionType.GET_PROXY_STATUS
             });
 
-            if (!response) {
-                console.log('No response from background script');
+            if (response && response.success) {
+                const activeMode = response.data.mode;
+                setCurrentMode(activeMode);
                 return;
             }
 
-            if (response.success) {
-                const activeMode = response.data.mode;
-                setCurrentMode(activeMode);
+            // 如果后台脚本没有返回，则从存储中获取当前代理
+            const currentProxy = await getCurrentProxy();
+            if (currentProxy) {
+                setCurrentMode(currentProxy.id);
+            } else {
+                setCurrentMode('direct');
             }
         } catch (error) {
             console.error('Error loading proxy status:', error);
@@ -102,33 +109,12 @@ export const ProxySwitch: React.FC = () => {
     // 加载自定义代理配置
     const loadCustomProxies = async () => {
         try {
-            const DB_NAME = 'yaklang_extension';
-            const STORE_NAME = 'proxy_configs';
-
-            // 打开数据库
-            const db = await new Promise<IDBDatabase>((resolve, reject) => {
-                const request = indexedDB.open(DB_NAME, 1);
-                request.onerror = () => reject(request.error);
-                request.onsuccess = () => resolve(request.result);
-            });
-
-            // 从数据库读取代理配置
-            const configs = await new Promise<ProxyConfig[]>((resolve, reject) => {
-                try {
-                    const transaction = db.transaction([STORE_NAME], 'readonly');
-                    const store = transaction.objectStore(STORE_NAME);
-                    const request = store.getAll();
-
-                    request.onerror = () => reject(request.error);
-                    request.onsuccess = () => resolve(request.result || []);
-                } catch (error) {
-                    reject(error);
-                }
-            });
+            // 使用存储API获取所有代理配置
+            const configs = await getAllProxyConfigs();
 
             // 处理代理配置
             const proxies = configs
-                .filter((proxy: ProxyConfig) => !FIXED_MODES.some(mode => mode.key === proxy.id))
+                .filter((proxy: ProxyConfig) => !['direct', 'system'].includes(proxy.id))
                 .map((proxy: ProxyConfig): CustomProxy => ({
                     key: proxy.id,
                     name: proxy.name,
@@ -138,6 +124,7 @@ export const ProxySwitch: React.FC = () => {
                 }));
             setCustomProxies(proxies);
 
+            // 查找并设置已启用的代理
             const enabledProxy = configs.find((proxy: ProxyConfig) => proxy.enabled);
             if (enabledProxy) {
                 setCurrentMode(enabledProxy.id);
@@ -182,6 +169,8 @@ export const ProxySwitch: React.FC = () => {
         }
 
         try {
+            // 先更新UI状态，避免闪烁
+            setCurrentMode(mode);
             setIsLoading(true);
 
             // 发送切换代理请求
@@ -190,11 +179,17 @@ export const ProxySwitch: React.FC = () => {
                 mode
             });
 
-            if (response && response.success) {
-                setCurrentMode(mode);
+            if (!response || !response.success) {
+                // 如果失败，恢复原状态
+                console.error('Failed to switch proxy mode');
+                await loadProxyStatus(); // 重新加载正确的状态
+            } else {
+                // 成功时刷新代理列表状态
+                await loadCustomProxies();
             }
         } catch (error) {
             console.error(`Error switching to proxy mode ${mode}:`, error);
+            await loadProxyStatus(); // 出错时重新加载正确的状态
         } finally {
             setIsLoading(false);
         }
@@ -218,7 +213,15 @@ export const ProxySwitch: React.FC = () => {
                 ...customProxies.map(proxy => ({
                     key: proxy.key,
                     label: proxy.name,
-                    icon: <img src={YAK_ICON_URL} alt="YAK" style={{width: 24, height: 24}}/>,
+                    icon: <img 
+                            src={YAK_ICON_URL} 
+                            alt="YAK" 
+                            style={{
+                                width: 20, 
+                                height: 20,
+                                filter: currentMode === proxy.key ? 'brightness(0) invert(1)' : 'none'
+                            }}
+                          />,
                     className: `${currentMode === proxy.key ? 'active-item' : ''} menu-id-${proxy.key}`,
                 }))
             );
@@ -229,7 +232,7 @@ export const ProxySwitch: React.FC = () => {
         items.push({
             key: 'setting',
             label: '代理设置',
-            icon: <SettingOutlined/>,
+            icon: <SettingOutlined />,
             className: 'menu-id-setting',
         });
 
@@ -237,7 +240,7 @@ export const ProxySwitch: React.FC = () => {
         items.push({
             key: 'add',
             label: '添加代理',
-            icon: <PlusOutlined/>,
+            icon: <PlusOutlined />,
             className: 'menu-id-add',
         });
 
