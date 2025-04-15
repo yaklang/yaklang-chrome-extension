@@ -214,21 +214,33 @@ export const ProxySwitch: React.FC = () => {
         // 添加自定义代理
         if (customProxies.length > 0) {
             items.push(
-                ...customProxies.map(proxy => ({
-                    key: proxy.key,
-                    label: proxy.name,
-                    icon: <img 
-                            src={YAK_ICON_URL} 
-                            alt="YAK" 
-                            style={{
-                                width: 20, 
-                                height: 20,
-                                filter: currentMode === proxy.key ? 'brightness(0) invert(1)' : 'none',
-                                transition: 'filter 0.2s ease-in-out'
-                            }}
-                          />,
-                    className: `${currentMode === proxy.key ? 'active-item' : ''} menu-id-${proxy.key}`,
-                }))
+                ...customProxies.map(proxy => {
+                    // 构建提示信息：显示代理协议、主机和端口
+                    const tooltipText = proxy.config.proxyType === 'fixed_servers' && proxy.config.host && proxy.config.port 
+                        ? `${proxy.config.scheme || 'http'}://${proxy.config.host}:${proxy.config.port}`
+                        : proxy.config.proxyType === 'pac_script' 
+                            ? 'PAC脚本代理'
+                            : proxy.config.proxyType === 'auto_detect'
+                                ? '自动检测代理'
+                                : '';
+                    
+                    return {
+                        key: proxy.key,
+                        label: proxy.name,
+                        icon: <img 
+                                src={YAK_ICON_URL} 
+                                alt="YAK" 
+                                style={{
+                                    width: 20, 
+                                    height: 20,
+                                    filter: currentMode === proxy.key ? 'brightness(0) invert(1)' : 'none',
+                                    transition: 'filter 0.2s ease-in-out'
+                                }}
+                              />,
+                        className: `${currentMode === proxy.key ? 'active-item' : ''} menu-id-${proxy.key}`,
+                        title: tooltipText, // 添加悬停提示
+                    };
+                })
             );
             items.push({type: 'divider'});
         }
