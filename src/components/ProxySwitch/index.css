@@ -214,12 +214,59 @@ body {
     color: var(--yakit-primary);
 }
 
+/* 全局样式重置，确保菜单项样式不受默认样式影响 */
 .proxy-switch-container {
     position: relative;
     width: 100%;
     overflow: hidden;
     border-radius: 0;
     box-shadow: none;
+}
+
+/* 确保菜单没有边框和阴影 */
+.proxy-switch-container .ant-menu {
+    border: none !important;
+    border-right: none !important;
+    box-shadow: none !important;
+}
+
+/* 确保所有菜单项正确对齐和布局 */
+.proxy-switch-container .ant-menu-item {
+    margin: 4px 8px !important;
+    border-radius: 6px !important;
+    height: 36px !important;
+    line-height: 36px !important;
+    position: relative !important;
+}
+
+/* 图标对齐 */
+.proxy-switch-container .ant-menu-item .anticon,
+.proxy-switch-container .ant-menu-item img {
+    position: absolute !important;
+    left: 16px !important;
+    top: 50% !important;
+    transform: translateY(-50%) !important;
+}
+
+/* 选中态和悬停态 */
+.proxy-switch-container .ant-menu-item.ant-menu-item-selected {
+    background-color: var(--yakit-primary) !important;
+    color: white !important;
+}
+
+.proxy-switch-container .ant-menu-item:hover {
+    background-color: #f5f5f5 !important;
+}
+
+.proxy-switch-container .ant-menu-item.ant-menu-item-selected:hover {
+    background-color: var(--yakit-primary-hover) !important;
+}
+
+/* 确保分割线样式 */
+.proxy-switch-container .ant-menu-item-divider {
+    margin: 4px 0 !important;
+    height: 1px !important;
+    background-color: #f0f0f0 !important;
 }
 
 .panel-watermark {
@@ -248,16 +295,53 @@ body {
     z-index: 1;
 }
 
-/* 为[直接连接]菜单项添加橙色背景 */
-.ant-menu[data-menu-id="direct"] .ant-menu-item.ant-menu-item-selected,
-.ant-menu .ant-menu-item[data-menu-id="direct"] {
+/* 为[直接连接]菜单项添加橙色背景，但仅在被选中时 */
+.ant-menu .ant-menu-item.menu-id-direct.ant-menu-item-selected {
     background-color: var(--yakit-primary) !important;
     color: white !important;
 }
 
-.ant-menu[data-menu-id="direct"] .ant-menu-item.ant-menu-item-selected .anticon,
-.ant-menu[data-menu-id="direct"] .ant-menu-item.ant-menu-item-selected span,
-.ant-menu .ant-menu-item[data-menu-id="direct"] .anticon,
-.ant-menu .ant-menu-item[data-menu-id="direct"] span {
+.ant-menu .ant-menu-item.menu-id-direct.ant-menu-item-selected .anticon,
+.ant-menu .ant-menu-item.menu-id-direct.ant-menu-item-selected span {
     color: white !important;
+}
+
+/* 覆盖 Ant Design 的宽度计算，确保菜单项占据全宽 */
+.proxy-switch-container .ant-menu .ant-menu-item,
+.ant-menu-light .ant-menu-item,
+.ant-menu-vertical .ant-menu-item,
+.ant-menu-inline .ant-menu-item,
+.ant-menu .ant-menu-item {
+    width: 100% !important;
+    margin-inline: 0 !important;
+    margin-block: 4px !important;
+    text-align: center !important;
+    height: 40px !important;
+    line-height: 40px !important;
+    padding-inline: 16px !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+
+/* 让文本的容器也占满全宽 */
+.proxy-switch-container .ant-menu .ant-menu-item .ant-menu-title-content,
+.ant-menu .ant-menu-item .ant-menu-title-content {
+    display: block !important;
+    width: 100% !important;
+    text-align: center !important;
+}
+
+/* 活动项样式 */
+.ant-menu .ant-menu-item.active-item::after {
+    content: "✓";
+    position: absolute;
+    right: 16px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--yakit-primary);
+    font-weight: bold;
+}
+
+.ant-menu .ant-menu-item.ant-menu-item-selected.active-item::after {
+    color: white;
 } 
