@@ -8,21 +8,46 @@
   align-items: center;
   justify-content: center;
   padding: 0 24px;
+  height: 64px;
 }
 
 .options-content {
-  padding: 24px;
-  max-width: 800px;
+  padding: 32px;
+  min-width: 600px;
   margin: 0 auto;
   background-color: #f5f5f5;
 }
 
 .proxy-list-card {
-  margin-bottom: 24px;
+  margin-bottom: 32px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.proxy-list-card .ant-card-head {
+  padding: 0 16px;
+  min-height: 48px;
+}
+
+.proxy-list-card .ant-card-head-title {
+  padding: 14px 0;
+  font-size: 16px;
+}
+
+.proxy-list-card .ant-card-head-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.proxy-list-card .ant-card-extra {
+  padding: 8px 0;
+}
+
+.proxy-list-card .ant-card-body {
+  padding: 24px;
 }
 
 .proxy-list-card .ant-list-item {
-  padding: 12px 24px;
+  padding: 16px 24px;
   transition: all 0.3s;
 }
 
@@ -31,7 +56,8 @@
 }
 
 .add-proxy-card {
-  margin-bottom: 24px;
+  margin-bottom: 32px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .ant-space {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ConfigProvider, Layout, Typography, List, Button, Form, Input, Select, Space, Card, Divider } from 'antd';
+import { ConfigProvider, Layout, Typography, List, Button, Form, Input, Select, Space, Card, Divider, Modal } from 'antd';
 import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { v4 as uuidv4 } from 'uuid';
 import { browser } from 'wxt/browser';
@@ -16,6 +16,7 @@ export default function App() {
   const [proxies, setProxies] = useState<ProxyConfig[]>([]);
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
     loadProxies();
@@ -23,7 +24,7 @@ export default function App() {
     // 监听添加代理请求
     const handleMessage = (message: any) => {
       if (message.action === ContentActionType.TRIGGER_ADD_PROXY) {
-        document.getElementById('add-proxy-form')?.scrollIntoView({ behavior: 'smooth' });
+        setIsModalOpen(true);
       }
     };
     
@@ -36,7 +37,7 @@ export default function App() {
   const loadProxies = async () => {
     try {
       const configs = await getAllProxyConfigs();
-      setProxies(configs.filter(config => config.proxyType !== 'direct' && config.proxyType !== 'system'));
+      setProxies(configs.filter(config => config.proxyType === "fixed_servers"));
     } catch (error) {
       console.error('Error loading proxies:', error);
     }
@@ -49,14 +50,15 @@ export default function App() {
       const newProxy: ProxyConfig = {
         id: uuidv4(),
         name: values.name,
-        proxyType: values.proxyType,
+        proxyType: "fixed_servers",
+        scheme: values.proxyType,
         host: values.host,
         port: Number(values.port),
         enabled: false
       };
       
-      // if (values.username) newProxy.username = values.username;
-      // if (values.password) newProxy.password = values.password;
+      if (values.username) newProxy.username = values.username;
+      if (values.password) newProxy.password = values.password;
       
       await saveProxyConfig(newProxy);
       
@@ -65,6 +67,9 @@ export default function App() {
       
       // 重置表单
       form.resetFields();
+      
+      // 关闭模态框
+      setIsModalOpen(false);
       
       // 通知后台脚本
       browser.runtime.sendMessage({
@@ -111,6 +116,15 @@ export default function App() {
     }
   };
 
+  const showModal = () => {
+    form.resetFields();
+    setIsModalOpen(true);
+  };
+
+  const handleCancel = () => {
+    setIsModalOpen(false);
+  };
+
   return (
     <ConfigProvider
       theme={{
@@ -124,9 +138,42 @@ export default function App() {
           <Title level={3} style={{ color: 'white', margin: 0 }}>Yaklang 代理管理设置</Title>
         </Header>
         <Content className="options-content">
-          <Card className="proxy-list-card" title="已保存的代理">
+          <Card 
+            className="proxy-list-card" 
+            title="代理列表"
+            extra={
+              <Button 
+                type="primary" 
+                icon={<PlusOutlined />}
+                onClick={showModal}
+                size="small"
+                style={{ 
+                  backgroundColor: "#F28B44", 
+                  borderColor: "#F28B44",
+                  borderRadius: "4px",
+                  fontSize: "13px"
+                }}
+              >
+                添加代理
+              </Button>
+            }
+          >
             <List
               dataSource={proxies}
+              locale={{
+                emptyText: (
+                  <div style={{ padding: '32px 0', textAlign: 'center' }}>
+                    <div style={{ marginBottom: 16 }}>
+                      <img 
+                        src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjQiIGhlaWdodD0iNjQiIHZpZXdCb3g9IjAgMCA2NCA2NCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTUzLjMzMzMgMzJWNDhDNTMuMzMzMyA0OS40MTc0IDUyLjc3MTQgNTAuNzY1MiA1MS43NzEyIDUxLjc2NTJDNTAuNzcxIDUyLjc2NTIgNDkuNDIzMyA1My4zMzMzIDQ4IDUzLjMzMzNIMTZDMTQuNTc2NyA1My4zMzMzIDEzLjIyODkgNTIuNzcxNCAxMi4yMjg4IDUxLjc3MTJDMTEuMjI4OCA1MC43NzEgMTAuNjY2NyA0OS40MjMzIDEwLjY2NjcgNDhWMTZDMTAuNjY2NyAxNC41NzY3IDExLjIyODggMTMuMjI4OSAxMi4yMjg4IDEyLjIyODhDMTMuMjI4OSAxMS4yMjg4IDE0LjU3NjcgMTAuNjY2NyAxNiAxMC42NjY3SDMyIiBzdHJva2U9IiM1QTVBNUEiIHN0cm9rZS13aWR0aD0iNCIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CjxwYXRoIGQ9Ik0zMiAzMkg1My4zMzMzVjQyLjY2NjciIHN0cm9rZT0iI0YyOEI0NCIgc3Ryb2tlLXdpZHRoPSI0IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+Cg==" 
+                        alt="No data" 
+                        style={{ width: 64, height: 64, opacity: 0.5 }}
+                      />
+                    </div>
+                    <p style={{ color: '#5A5A5A' }}>还没有添加任何代理</p>
+                  </div>
+                )
+              }}
               renderItem={(proxy) => (
                 <List.Item
                   key={proxy.id}
@@ -147,16 +194,22 @@ export default function App() {
                 >
                   <List.Item.Meta
                     title={proxy.name}
-                    description={`${proxy.proxyType}://${proxy.host}:${proxy.port}`}
+                    description={`${proxy.scheme}://${proxy.host}:${proxy.port}`}
                   />
                 </List.Item>
               )}
             />
           </Card>
-          
-          <Divider />
-          
-          <Card id="add-proxy-form" className="add-proxy-card" title="添加新代理">
+          {/* <Card id="add-proxy-form" className="add-proxy-card" title="添加新代理"> */}
+
+          <Modal
+            title="添加新代理"
+            open={isModalOpen}
+            className='add-proxy-card'
+            onCancel={handleCancel}
+            footer={null}
+            destroyOnClose
+          >
             <Form
               form={form}
               layout="vertical"
@@ -234,7 +287,7 @@ export default function App() {
                 </Button>
               </Form.Item>
             </Form>
-          </Card>
+          </Modal>
         </Content>
       </Layout>
     </ConfigProvider>
