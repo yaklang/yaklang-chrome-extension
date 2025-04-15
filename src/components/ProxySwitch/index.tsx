@@ -218,7 +218,7 @@ export const ProxySwitch: React.FC = () => {
                 ...customProxies.map(proxy => ({
                     key: proxy.key,
                     label: proxy.name,
-                    icon: <img src={YAK_ICON_URL} alt="YAK" style={{width: 16, height: 16}}/>,
+                    icon: <img src={YAK_ICON_URL} alt="YAK" style={{width: 24, height: 24}}/>,
                     className: `${currentMode === proxy.key ? 'active-item' : ''} menu-id-${proxy.key}`,
                 }))
             );

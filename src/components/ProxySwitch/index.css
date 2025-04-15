@@ -254,6 +254,11 @@ body {
     color: white !important;
 }
 
+/* 选中态下的YAK图标变为白色 */
+.proxy-switch-container .ant-menu-item.ant-menu-item-selected img {
+    filter: brightness(0) invert(1) !important;
+}
+
 .proxy-switch-container .ant-menu-item:hover {
     background-color: #f5f5f5 !important;
 }
