@@ -168,10 +168,14 @@ export const ProxySwitch: React.FC = () => {
             return;
         }
 
+        // 如果当前已经是选中的模式，不做任何操作
+        if (mode === currentMode) return;
+
         try {
-            // 先更新UI状态，避免闪烁
+            // 立即更新UI状态，避免闪烁
             setCurrentMode(mode);
-            setIsLoading(true);
+            // 显示加载状态但不阻塞UI
+            setTimeout(() => setIsLoading(true), 0);
 
             // 发送切换代理请求
             const response = await browser.runtime.sendMessage({
@@ -219,7 +223,8 @@ export const ProxySwitch: React.FC = () => {
                             style={{
                                 width: 20, 
                                 height: 20,
-                                filter: currentMode === proxy.key ? 'brightness(0) invert(1)' : 'none'
+                                filter: currentMode === proxy.key ? 'brightness(0) invert(1)' : 'none',
+                                transition: 'filter 0.2s ease-in-out'
                             }}
                           />,
                     className: `${currentMode === proxy.key ? 'active-item' : ''} menu-id-${proxy.key}`,

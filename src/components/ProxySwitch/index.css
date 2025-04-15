@@ -129,6 +129,7 @@ body {
     display: flex !important;
     align-items: center !important;
     border-radius: 6px !important;
+    transition: all 0.2s ease-in-out !important;
 }
 
 .ant-menu-item:hover {
@@ -150,6 +151,7 @@ body {
 .ant-menu-item img {
     font-size: 16px;
     margin-right: 8px;
+    transition: all 0.2s ease-in-out !important;
 }
 
 .ant-menu-item.ant-menu-item-selected .anticon, 
@@ -190,6 +192,13 @@ body {
     z-index: 10;
     font-size: 14px;
     color: var(--yakit-primary);
+    opacity: 0;
+    animation: fadeIn 0.2s ease-in-out forwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 /* Remove conflicting styles */
