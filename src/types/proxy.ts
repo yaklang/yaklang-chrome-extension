@@ -16,6 +16,8 @@ export interface ProxyConfig {
   pacScript?: PacScript;
   bypassList?: string[];
   matchList?: string[];
+  username?: string;
+  password?: string;
 }
 
 export interface ProxyLog {
