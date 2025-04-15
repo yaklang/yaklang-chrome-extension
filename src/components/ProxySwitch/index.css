@@ -349,4 +349,28 @@ body {
 
 .ant-menu .ant-menu-item.ant-menu-item-selected.active-item::after {
     color: white;
+}
+
+.active-item {
+    background-color: #F28B44 !important;
+    color: white !important;
+    font-weight: 500;
+    transition: background-color 0.2s ease-in-out !important;
+}
+
+.active-item img {
+    filter: brightness(0) invert(1);
+}
+
+.active-item .anticon {
+    color: white !important;
+}
+
+.proxy-menu .ant-menu-item {
+    transition: all 0.2s ease-in-out !important;
+}
+
+/* 添加悬停效果 */
+.proxy-menu .ant-menu-item:hover {
+    background-color: rgba(242, 139, 68, 0.1) !important;
 } 

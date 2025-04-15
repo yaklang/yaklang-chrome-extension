@@ -47,20 +47,68 @@ export default function App() {
     try {
       setLoading(true);
       
-      const newProxy: ProxyConfig = {
+      const newProxy: Partial<ProxyConfig> = {
         id: uuidv4(),
         name: values.name,
-        proxyType: "fixed_servers",
-        scheme: values.proxyType,
-        host: values.host,
-        port: Number(values.port),
         enabled: false
       };
       
+      if (values.proxyType === 'fixed_servers') {
+        newProxy.proxyType = 'fixed_servers';
+        newProxy.scheme = values.scheme;
+        newProxy.host = values.host;
+        newProxy.port = Number(values.port);
+        
+        // 处理不经过代理的地址
+        if (values.bypassList) {
+          newProxy.bypassList = values.bypassList
+            .split('\n')
+            .map((line: string) => line.trim())
+            .filter((line: string) => line.length > 0);
+        } else {
+          newProxy.bypassList = [];
+        }
+      } else if (values.proxyType === 'pac_script') {
+        newProxy.proxyType = 'pac_script';
+        newProxy.mode = 'pac_script';
+        
+        // 处理PAC脚本匹配域名
+        if (values.matchList) {
+          newProxy.matchList = values.matchList
+            .split('\n')
+            .map((line: string) => line.trim())
+            .filter((line: string) => line.length > 0);
+        }
+        
+        // 创建PAC脚本
+        newProxy.pacScript = {
+          data: `function FindProxyForURL(url, host) {
+  // 匹配域名列表
+  const domains = ${JSON.stringify(newProxy.matchList || [])};
+  
+  // 检查是否匹配任何域名
+  for (let i = 0; i < domains.length; i++) {
+    const domain = domains[i];
+    // 支持通配符
+    if (domain.startsWith('*.') && host.endsWith(domain.substring(1))) {
+      return 'PROXY ${values.host}:${values.port}';
+    } else if (host === domain) {
+      return 'PROXY ${values.host}:${values.port}';
+    }
+  }
+  
+  // 默认直接连接
+  return 'DIRECT';
+}`,
+          mandatory: true
+        };
+      }
+      
+      // 添加认证信息
       if (values.username) newProxy.username = values.username;
       if (values.password) newProxy.password = values.password;
       
-      await saveProxyConfig(newProxy);
+      await saveProxyConfig(newProxy as ProxyConfig);
       
       // 重新加载代理列表
       await loadProxies();
@@ -111,6 +159,12 @@ export default function App() {
       
       // 重新加载代理列表
       await loadProxies();
+      
+      // 通知后台脚本
+      browser.runtime.sendMessage({
+        action: ContentActionType.PROXY_CONFIGS_UPDATED,
+        source: 'options'
+      });
     } catch (error) {
       console.error(`Error activating proxy ${id}:`, error);
     }
@@ -179,9 +233,14 @@ export default function App() {
                   key={proxy.id}
                   actions={[
                     <Button 
-                      type="primary"
+                      type={proxy.enabled ? "default" : "primary"}
                       onClick={() => handleActivate(proxy.id)}
                       disabled={proxy.enabled}
+                      style={proxy.enabled ? { 
+                        backgroundColor: "#F28B44", 
+                        color: "white",
+                        borderColor: "#F28B44"
+                      } : undefined}
                     >
                       {proxy.enabled ? '已启用' : '启用'}
                     </Button>,
@@ -207,7 +266,19 @@ export default function App() {
             open={isModalOpen}
             className='add-proxy-card'
             onCancel={handleCancel}
-            footer={null}
+            footer={[
+              <Button key="cancel" onClick={handleCancel}>
+                Cancel
+              </Button>,
+              <Button 
+                key="submit" 
+                type="primary" 
+                onClick={() => form.submit()}
+                loading={loading}
+              >
+                OK
+              </Button>
+            ]}
             destroyOnClose
           >
             <Form
@@ -217,45 +288,101 @@ export default function App() {
             >
               <Form.Item
                 name="name"
-                label="代理名称"
+                label={<span className="required-label">名称</span>}
                 rules={[{ required: true, message: '请输入代理名称' }]}
               >
-                <Input placeholder="例如: 公司内网代理" />
+                <Input placeholder="为此代理添加一个名称" />
               </Form.Item>
               
               <Form.Item
                 name="proxyType"
-                label="代理类型"
-                initialValue="http"
+                label={<span className="required-label">类型</span>}
+                initialValue="fixed_servers"
                 rules={[{ required: true, message: '请选择代理类型' }]}
               >
                 <Select>
-                  <Option value="http">HTTP</Option>
-                  <Option value="https">HTTPS</Option>
-                  <Option value="socks4">SOCKS4</Option>
-                  <Option value="socks5">SOCKS5</Option>
+                  <Option value="fixed_servers">代理服务器</Option>
+                  <Option value="pac_script">PAC 脚本</Option>
                 </Select>
               </Form.Item>
               
-              <Space style={{ display: 'flex' }}>
-                <Form.Item
-                  name="host"
-                  label="主机地址"
-                  rules={[{ required: true, message: '请输入主机地址' }]}
-                  style={{ flex: 3 }}
-                >
-                  <Input placeholder="例如: proxy.example.com 或 192.168.1.100" />
-                </Form.Item>
-                
-                <Form.Item
-                  name="port"
-                  label="端口"
-                  rules={[{ required: true, message: '请输入端口' }]}
-                  style={{ flex: 1 }}
-                >
-                  <Input placeholder="例如: 8080" />
-                </Form.Item>
-              </Space>
+              <Form.Item
+                noStyle
+                shouldUpdate={(prevValues, currentValues) => prevValues.proxyType !== currentValues.proxyType}
+              >
+                {({ getFieldValue }) => {
+                  const proxyType = getFieldValue('proxyType');
+                  if (proxyType === 'fixed_servers') {
+                    return (
+                      <>
+                        <Form.Item
+                          name="scheme"
+                          label={<span className="required-label">协议</span>}
+                          initialValue="http"
+                          rules={[{ required: true, message: '请选择代理协议' }]}
+                        >
+                          <Select>
+                            <Option value="http">HTTP</Option>
+                            <Option value="https">HTTPS</Option>
+                            <Option value="socks4">SOCKS4</Option>
+                            <Option value="socks5">SOCKS5</Option>
+                          </Select>
+                        </Form.Item>
+                        
+                        <Form.Item
+                          name="host"
+                          label={<span className="required-label">主机</span>}
+                          rules={[{ required: true, message: '请输入主机地址' }]}
+                        >
+                          <Input placeholder="127.0.0.1" />
+                        </Form.Item>
+                        
+                        <Form.Item
+                          name="port"
+                          label={<span className="required-label">端口</span>}
+                          rules={[{ required: true, message: '请输入端口' }]}
+                        >
+                          <Input placeholder="8080" />
+                        </Form.Item>
+                        
+                        <Form.Item
+                          name="bypassList"
+                          label="不经过代理的地址"
+                        >
+                          <Input.TextArea 
+                            rows={4} 
+                            placeholder={`例如：
+localhost
+127.0.0.1
+*.example.com`}
+                          />
+                          <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>每行一个地址，支持通配符 *</div>
+                        </Form.Item>
+                      </>
+                    );
+                  } else if (proxyType === 'pac_script') {
+                    return (
+                      <>
+                        <Form.Item
+                          name="matchList"
+                          label={<span className="required-label">匹配域名</span>}
+                          rules={[{ required: true, message: '请输入至少一个匹配域名' }]}
+                        >
+                          <Input.TextArea 
+                            rows={4} 
+                            placeholder={`例如：
+*.example.com
+google.com
+github.com`}
+                          />
+                          <div style={{ marginTop: 8, fontSize: 12, color: '#999' }}>每行一个域名，支持通配符 *</div>
+                        </Form.Item>
+                      </>
+                    );
+                  }
+                  return null;
+                }}
+              </Form.Item>
               
               <Space style={{ display: 'flex' }}>
                 <Form.Item
@@ -274,18 +401,6 @@ export default function App() {
                   <Input.Password placeholder="认证密码" />
                 </Form.Item>
               </Space>
-              
-              <Form.Item>
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  icon={<PlusOutlined />}
-                  loading={loading}
-                  block
-                >
-                  添加代理
-                </Button>
-              </Form.Item>
             </Form>
           </Modal>
         </Content>
