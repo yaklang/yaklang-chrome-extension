@@ -4,7 +4,7 @@ import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
 import { v4 as uuidv4 } from 'uuid';
 import { browser } from 'wxt/browser';
 import type { ProxyConfig } from '../../types/proxy';
-import { getAllProxyConfigs, saveProxyConfig, deleteProxyConfig, enableProxyConfig } from '../../utils/storage';
+import { getAllProxyConfigs, saveProxyConfig, deleteProxyConfig, enableProxyConfig, getCurrentProxy } from '../../utils/storage';
 import {ContentActionType, ProxyActionType} from '../../types/action';
 import './App.css';
 
@@ -21,10 +21,13 @@ export default function App() {
   useEffect(() => {
     loadProxies();
 
-    // 监听添加代理请求
+    // 监听添加代理请求和代理配置更新
     const handleMessage = (message: any) => {
       if (message.action === ContentActionType.TRIGGER_ADD_PROXY) {
         setIsModalOpen(true);
+      } else if (message.action === ContentActionType.PROXY_CONFIGS_UPDATED) {
+        // 当代理配置发生变化时重新加载代理列表
+        loadProxies();
       }
     };
     
@@ -36,8 +39,30 @@ export default function App() {
 
   const loadProxies = async () => {
     try {
-      const configs = await getAllProxyConfigs();
-      setProxies(configs.filter(config => config.proxyType === "fixed_servers"));
+      // 获取所有代理配置
+      const allConfigs = await getAllProxyConfigs();
+      
+      // 获取当前启用的代理
+      const currentProxy = await getCurrentProxy();
+      const currentProxyId = currentProxy?.id || '';
+      
+      // 检查当前是否为系统代理或直接连接
+      const isSystemOrDirect = currentProxyId === 'system' || currentProxyId === 'direct';
+      
+      // 只显示自定义代理服务器配置
+      const customProxies = allConfigs.filter(config => config.proxyType === "fixed_servers");
+      
+      // 如果当前是系统代理或直接连接，则所有自定义代理显示为未启用
+      if (isSystemOrDirect) {
+        console.log('系统代理或直接连接已启用，确保自定义代理状态正确');
+        // 确保UI状态与实际状态一致
+        setProxies(customProxies.map(proxy => ({
+          ...proxy,
+          enabled: false
+        })));
+      } else {
+        setProxies(customProxies);
+      }
     } catch (error) {
       console.error('Error loading proxies:', error);
     }
