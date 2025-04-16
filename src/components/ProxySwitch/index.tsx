@@ -1,4 +1,4 @@
-import React, {useEffect, useState} from "react";
+import React, {useEffect, useState, useRef} from "react";
 import {Menu} from "antd";
 import {
     DisconnectOutlined,
@@ -55,10 +55,11 @@ interface CustomProxy {
 
 export const ProxySwitch: React.FC = () => {
     const [initialized, setInitialized] = useState<boolean>(false);
-    const [currentMode, setCurrentMode] = useState<string>("");
+    const [currentMode, setCurrentMode] = useState<string>("direct"); // 默认选中直接连接
     const [customProxies, setCustomProxies] = useState<CustomProxy[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
-
+    const loadingTimeoutRef = useRef<number | null>(null);
+    
     // 监听存储变化
     useEffect(() => {
         const handleMessage = (message: any) => {
@@ -76,17 +77,37 @@ export const ProxySwitch: React.FC = () => {
         browser.runtime.onMessage.addListener(handleMessage);
         return () => {
             browser.runtime.onMessage.removeListener(handleMessage);
+            // 清除可能存在的超时计时器
+            if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+            }
         };
     }, []);
 
     // 初始化
     useEffect(() => {
+        let mounted = true;
+        
         const init = async () => {
-            await loadProxyStatus();
-            await loadCustomProxies();
-            setInitialized(true);
+            try {
+                await loadProxyStatus();
+                if (mounted) {
+                    await loadCustomProxies();
+                    setInitialized(true);
+                }
+            } catch (error) {
+                console.error("初始化失败:", error);
+                if (mounted) {
+                    setInitialized(true);
+                }
+            }
         };
+        
         init();
+        
+        return () => {
+            mounted = false;
+        };
     }, []);
 
     // 获取当前代理状态
@@ -100,6 +121,7 @@ export const ProxySwitch: React.FC = () => {
 
             if (response && response.success) {
                 const activeMode = response.data.mode;
+                console.log("获取到当前代理模式:", activeMode);
                 setCurrentMode(activeMode);
                 return;
             }
@@ -107,8 +129,10 @@ export const ProxySwitch: React.FC = () => {
             // 如果后台脚本没有返回，则从存储中获取当前代理
             const currentProxy = await getCurrentProxy();
             if (currentProxy) {
+                console.log("从存储获取到当前代理:", currentProxy.id);
                 setCurrentMode(currentProxy.id);
             } else {
+                console.log("未找到当前代理，使用默认值 direct");
                 setCurrentMode("direct");
             }
         } catch (error) {
@@ -139,6 +163,7 @@ export const ProxySwitch: React.FC = () => {
                 );
             setCustomProxies(proxies);
             console.log("proxy_switch proxies", proxies);
+            
             // 查找并设置已启用的代理
             const enabledProxy = configs.find((proxy: ProxyConfig) => proxy.enabled);
             if (enabledProxy) {
@@ -184,14 +209,24 @@ export const ProxySwitch: React.FC = () => {
             return;
         }
         console.log("proxy_switch 处理代理模式变更", mode);
+        
         // 如果当前已经是选中的模式，不做任何操作
         if (mode === currentMode) return;
+        
+        // 清除之前可能存在的加载超时
+        if (loadingTimeoutRef.current) {
+            clearTimeout(loadingTimeoutRef.current);
+        }
 
         try {
-            // 立即更新UI状态，避免闪烁
+            // 先更新UI，让用户感知到变化
             setCurrentMode(mode);
-            // 显示加载状态但不阻塞UI
-            setTimeout(() => setIsLoading(true), 0);
+            setIsLoading(true);
+            
+            // 设置超时保护，确保加载状态最终会被清除
+            loadingTimeoutRef.current = window.setTimeout(() => {
+                setIsLoading(false);
+            }, 5000); // 5秒超时保护
 
             // 发送切换代理请求
             const response = await browser.runtime.sendMessage({
@@ -200,21 +235,25 @@ export const ProxySwitch: React.FC = () => {
                 source: "proxy_switch",
             });
 
+            // 请求完成后，清除超时保护
+            if (loadingTimeoutRef.current) {
+                clearTimeout(loadingTimeoutRef.current);
+                loadingTimeoutRef.current = null;
+            }
+
             if (!response || !response.success) {
                 // 如果失败，恢复原状态
                 console.error("Failed to switch proxy mode");
                 await loadProxyStatus(); // 重新加载正确的状态
             } else {
-                setTimeout(() => {
-                    setCurrentMode((preMode) => {
-                        return mode === preMode ? preMode : mode;
-                    });
-                }, 20);
+                console.log("代理模式切换成功:", mode);
+                setCurrentMode(mode);
             }
         } catch (error) {
             console.error(`Error switching to proxy mode ${mode}:`, error);
             await loadProxyStatus(); // 出错时重新加载正确的状态
         } finally {
+            // 无论如何，最终要关闭加载状态
             setIsLoading(false);
         }
     };
@@ -296,16 +335,25 @@ export const ProxySwitch: React.FC = () => {
         return items;
     };
 
+    // 只在加载完成后渲染内容
+    if (!initialized) {
+        return <div className="proxy-switch-container loading">加载中...</div>;
+    }
+
     return (
         <div className="proxy-switch-container">
             <Menu
                 className="proxy-menu"
                 selectedKeys={[currentMode]}
+                defaultSelectedKeys={[currentMode]}
                 items={buildMenuItems()}
                 onClick={({key}) => handleModeChange(key)}
-                key={`proxy-menu-${currentMode}`}
             />
-            {isLoading && <div className="loading-overlay">切换中...</div>}
+            {isLoading && (
+                <div className="loading-overlay">
+                    切换中...
+                </div>
+            )}
         </div>
     );
 };
