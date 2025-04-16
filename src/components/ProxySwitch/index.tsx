@@ -247,7 +247,12 @@ export const ProxySwitch: React.FC = () => {
                 await loadProxyStatus(); // 重新加载正确的状态
             } else {
                 console.log("代理模式切换成功:", mode);
-                setCurrentMode(mode);
+                // 不加 setTimeout firefox UI 会无法渲染选中状态
+                setTimeout(() => {
+                    setCurrentMode((preMode) => {
+                        return mode === preMode ? preMode : mode;
+                    });
+                }, 20);
             }
         } catch (error) {
             console.error(`Error switching to proxy mode ${mode}:`, error);
