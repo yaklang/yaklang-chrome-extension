@@ -40,6 +40,11 @@ export default function App() {
   useEffect(() => {
     loadProxies();
 
+    // 确保Form实例初始化完成
+    if (isModalOpen) {
+      form.resetFields();
+    }
+
     // 监听添加代理请求和代理配置更新
     const handleMessage = (message: any) => {
       if (message.action === ContentActionType.TRIGGER_ADD_PROXY) {
@@ -54,7 +59,7 @@ export default function App() {
     return () => {
       browser.runtime.onMessage.removeListener(handleMessage);
     };
-  }, []);
+  }, [isModalOpen]);
 
   const loadProxies = async () => {
     try {
@@ -239,6 +244,7 @@ export default function App() {
   };
 
   const handleCancel = () => {
+    form.resetFields();
     setIsModalOpen(false);
   };
 
@@ -352,9 +358,13 @@ export default function App() {
                 OK
               </Button>,
             ]}
-            destroyOnClose
           >
-            <Form form={form} layout="vertical" onFinish={handleSave}>
+            <Form 
+              form={form} 
+              layout="vertical" 
+              onFinish={handleSave}
+              preserve={false}
+            >
               <Form.Item
                 name="name"
                 label={<span className="required-label">名称</span>}
@@ -428,16 +438,17 @@ localhost
 127.0.0.1
 *.example.com`}
                           />
-                          <div
-                            style={{
-                              marginTop: 8,
-                              fontSize: 12,
-                              color: "#999",
-                            }}
-                          >
-                            每行一个地址，支持通配符 *
-                          </div>
                         </Form.Item>
+                        <div
+                          style={{
+                            marginTop: -16,
+                            marginBottom: 16,
+                            fontSize: 12,
+                            color: "#999",
+                          }}
+                        >
+                          每行一个地址，支持通配符 *
+                        </div>
 
                         <Space style={{ display: "flex" }}>
                           <Form.Item
@@ -464,7 +475,6 @@ localhost
                         <Form.Item
                           name="matchList"
                           label="匹配域名"
-                          help="每行一个域名，支持通配符 *"
                           rules={[
                             {
                               required: true,
@@ -480,6 +490,16 @@ google.com
 github.com`}
                           />
                         </Form.Item>
+                        <div
+                          style={{
+                            marginTop: -16,
+                            marginBottom: 16,
+                            fontSize: 12,
+                            color: "#999",
+                          }}
+                        >
+                          每行一个域名，支持通配符 *
+                        </div>
 
                         <Form.Item
                           name="proxyServer"
