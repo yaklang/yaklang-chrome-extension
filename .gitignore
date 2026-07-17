@@ -32,3 +32,4 @@ web-ext.config.ts
 
 
 ord/
+.artifacts/
