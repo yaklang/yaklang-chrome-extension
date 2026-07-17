@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-03/schema#",
+  "type": "object",
+  "properties": {
+    "bridgeTransport": {
+      "title": "Bridge transport",
+      "description": "Lock the extension to native or loopback WebSocket transport.",
+      "type": "string",
+      "enum": ["native", "websocket"]
+    },
+    "bridgeEndpoint": {
+      "title": "Bridge endpoint",
+      "description": "Managed loopback WebSocket endpoint.",
+      "type": "string"
+    },
+    "nativeHost": {
+      "title": "Native Messaging host",
+      "type": "string"
+    },
+    "autoConnect": {
+      "title": "Connect automatically",
+      "type": "boolean"
+    },
+    "disableWebSocket": {
+      "title": "Require Native Messaging",
+      "type": "boolean"
+    },
+    "floatingPanelEnabled": {
+      "title": "Enable the page floating panel",
+      "type": "boolean"
+    },
+    "maxGrantMinutes": {
+      "title": "Maximum grant duration in minutes",
+      "type": "integer",
+      "minimum": 5,
+      "maximum": 1440
+    },
+    "grantAllowedOrigins": {
+      "title": "Origins that may be shared with an Agent",
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "allowProgramEval": {
+      "title": "Allow program Eval grants",
+      "type": "boolean"
+    }
+  }
+}
