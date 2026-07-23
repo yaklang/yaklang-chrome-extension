@@ -16,13 +16,30 @@ export interface ProxyProfile {
   authUsername?: string;
 }
 
+export type ProxyConditionType =
+  | 'host_exact'
+  | 'host_suffix'
+  | 'host_wildcard'
+  | 'host_regex'
+  | 'url_prefix'
+  | 'url_wildcard'
+  | 'url_regex'
+  | 'keyword';
+
+export interface ProxyCondition {
+  type: ProxyConditionType;
+  value: string;
+}
+
 export interface ProxyRule {
   id: string;
   name: string;
   enabled: boolean;
-  patterns: string[];
+  condition: ProxyCondition;
   proxyProfileId: string;
-  priority: number;
+  order: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface ProxyRoutingSettings {
@@ -30,36 +47,147 @@ export interface ProxyRoutingSettings {
   failMode: 'open' | 'closed';
 }
 
-export interface ProxyRuleStats {
-  ruleId: string;
-  hits: number;
-  lastHitAt?: number;
-  lastUrl?: string;
+export type ProxyRuleSourceFormat = 'auto' | 'autoproxy' | 'switchyomega' | 'hosts';
+export type ProxyRuleSourceStatus = 'idle' | 'updating' | 'ready' | 'error';
+
+export interface ProxyRuleSource {
+  id: string;
+  name: string;
+  url: string;
+  format: ProxyRuleSourceFormat;
+  enabled: boolean;
+  matchProfileId: string;
+  bypassProfileId: string;
+  order: number;
+  updateIntervalMinutes: number;
+  revision?: string;
+  contentHash?: string;
+  etag?: string;
+  lastModified?: string;
+  lastCheckedAt?: number;
+  lastUpdatedAt?: number;
+  status: ProxyRuleSourceStatus;
+  totalRuleCount: number;
+  supportedRuleCount: number;
+  ignoredRuleCount: number;
+  invalidRuleCount: number;
+  error?: string;
+}
+
+export interface ProxyRuleSourceInput {
+  id?: string;
+  name: string;
+  url: string;
+  format: ProxyRuleSourceFormat;
+  enabled: boolean;
+  matchProfileId: string;
+  bypassProfileId: string;
+  order?: number;
+  updateIntervalMinutes: number;
+}
+
+export interface NormalizedProxyRule {
+  sourceId: string;
+  ordinal: number;
+  condition: ProxyCondition;
+  exception: boolean;
+  raw: string;
+  resultProfileName?: string;
+}
+
+export interface ProxyRuleParseDiagnostics {
+  detectedFormat: Exclude<ProxyRuleSourceFormat, 'auto'>;
+  total: number;
+  supported: number;
+  ignored: number;
+  invalid: number;
+  warnings: string[];
+}
+
+export interface ProxyRulePage {
+  sourceId: string;
+  revision?: string;
+  offset: number;
+  limit: number;
+  total: number;
+  rules: NormalizedProxyRule[];
+}
+
+export interface ProxyRuntimeState {
+  dirty: boolean;
+  compiledBytes: number;
+  manualRuleCount: number;
+  sourceRuleCount: number;
+  appliedAt?: number;
+  revision?: string;
+  error?: string;
+  warnings: string[];
+}
+
+export interface ProxyRouteTrace {
+  kind: 'manual' | 'source' | 'default';
+  name: string;
+  condition?: string;
+  matched: boolean;
+  profileId?: string;
 }
 
 export interface ProxyRulePreview {
   url: string;
-  matchedRuleIds: string[];
-  effectiveRuleId?: string;
+  hostname: string;
   effectiveProfileId: string;
   effectiveProxy: string;
-  conflict: boolean;
-  conflictProfileIds: string[];
+  matchedKind: 'manual' | 'source' | 'default';
+  matchedName: string;
+  matchedCondition?: string;
+  matchedRuleId?: string;
+  matchedSourceId?: string;
+  trace: ProxyRouteTrace[];
+}
+
+export interface ProxyRuleSourceExport {
+  source: ProxyRuleSource;
+  content?: string;
 }
 
 export interface ProxyConfiguration {
-  version: 1;
+  version: 2;
   profiles: ProxyProfile[];
   rules: ProxyRule[];
+  sources: ProxyRuleSourceExport[];
   routing: ProxyRoutingSettings;
 }
 
-export interface UserAgentRule {
+export type UserAgentProfileCategory = 'desktop' | 'mobile' | 'bot' | 'custom';
+
+export interface UserAgentProfile {
   id: string;
   name: string;
-  enabled: boolean;
   userAgent: string;
-  domains: string[];
+  category: UserAgentProfileCategory;
+  builtin: boolean;
+}
+
+export interface UserAgentProfileInput {
+  id?: string;
+  name: string;
+  userAgent: string;
+}
+
+export interface UserAgentAssignment {
+  id: string;
+  hostname: string;
+  profileId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UserAgentResolution {
+  hostname: string;
+  mode: 'default' | 'override';
+  userAgent: string;
+  profile?: UserAgentProfile;
+  assignment?: UserAgentAssignment;
 }
 
 export interface BridgeConfig {
@@ -110,9 +238,15 @@ export type CapabilityScope =
   | 'browser.network.read'
   | 'browser.network.capture'
   | 'browser.network.sensitive.read'
-  | 'browser.observation.read'
-  | 'browser.observation.control'
-  | 'browser.observation.sensitive.read'
+  | 'browser.recording.read'
+  | 'browser.recording.control'
+  | 'browser.recording.sensitive.read'
+  | 'browser.callable.execute'
+  | 'browser.debugger.read'
+  | 'browser.debugger.control'
+  | 'browser.transform.read'
+  | 'browser.transform.manage'
+  | 'browser.transform.execute'
   | 'browser.proxy.read'
   | 'browser.proxy.write';
 
@@ -279,44 +413,570 @@ export interface NetworkRequestExport {
   limitations: string[];
 }
 
-export type PageObservationKind = 'fetch' | 'xhr' | 'form' | 'websocket' | 'webcrypto' | 'cryptojs';
+export type BrowserRecordingEventKind =
+  | 'interaction'
+  | 'fetch'
+  | 'xhr'
+  | 'form'
+  | 'beacon'
+  | 'worker'
+  | 'message'
+  | 'websocket'
+  | 'crypto'
+  | 'transform'
+  | 'navigation';
 
-export interface PageObservationOptions {
+export type BrowserCryptoFamily = 'symmetric' | 'asymmetric' | 'digest' | 'mac' | 'signature' | 'kdf' | 'key-management' | 'unknown';
+export type BrowserCryptoProviderKind = 'native' | 'library' | 'business' | 'wasm' | 'unknown';
+export type BrowserCryptoStateModel = 'stateless' | 'receiver' | 'session' | 'stream' | 'async-ready';
+
+export interface BrowserRecordingCrypto {
+  adapterId: string;
+  providerKind: BrowserCryptoProviderKind;
+  family: BrowserCryptoFamily;
+  operation: string;
+  algorithm?: string;
+  mode?: string;
+  padding?: string;
+  inputEncoding?: BrowserPageCallableValueEncoding;
+  outputEncoding?: BrowserPageCallableValueEncoding;
+  state?: {
+    model: BrowserCryptoStateModel;
+    correlationId?: string;
+    phase?: 'create' | 'init' | 'update' | 'final' | 'one-shot';
+  };
+  key?: {
+    kind: 'public' | 'private' | 'secret' | 'unknown';
+    bits?: number;
+    fingerprint?: string;
+  };
+}
+
+export interface BrowserRecordingNavigation {
+  phase: 'started' | 'committed' | 'completed' | 'restored' | 'same-document' | 'failed';
+  kind: 'document' | 'history' | 'fragment' | 'reload' | 'back-forward';
+  fromUrl?: string;
+  toUrl: string;
+  sameDocument: boolean;
+  transitionType?: string;
+  transitionQualifiers?: string[];
+  previousDocumentId?: string;
+  documentId?: string;
+  error?: string;
+}
+
+export interface BrowserRecordingTransform {
+  category: 'serializer' | 'canonicalization' | 'request-builder' | 'encoding';
+  provider: 'native' | 'axios' | 'page';
+  phase?: 'input' | 'output' | 'boundary';
+}
+
+export interface BrowserRecordingOptions {
   captureValues: boolean;
   maxEntries: number;
   maxValueBytes: number;
   expiresAt?: number;
 }
 
-export interface PageObservationRecord {
+export interface BrowserRecordingValueEvidence {
+  path: string;
+  fingerprint: string;
+  encoding: 'text' | 'bytes' | 'hex' | 'base64' | 'json';
+  byteLength: number;
+  preview?: string;
+}
+
+export type BrowserRecordingArgumentRole =
+  | 'data'
+  | 'key'
+  | 'iv'
+  | 'algorithm'
+  | 'options'
+  | 'signature'
+  | 'salt'
+  | 'nonce'
+  | 'aad'
+  | 'unknown';
+
+export interface BrowserRecordingCallArgument {
+  index: number;
+  role: BrowserRecordingArgumentRole;
+  dataType: string;
+  byteLength?: number;
+  replaceable: boolean;
+  retained: boolean;
+  summary?: string;
+}
+
+export interface BrowserRecordingEvent {
   id: string;
   sequence: number;
   timestamp: number;
-  kind: PageObservationKind;
+  durationMs?: number;
+  recordingId: string;
+  traceId: string;
+  interactionId?: string;
+  parentEventId?: string;
+  kind: BrowserRecordingEventKind;
+  source?: 'page' | 'browser';
+  documentId?: string;
   operation: string;
+  label?: string;
   url?: string;
   method?: string;
-  algorithm?: string;
+  crypto?: BrowserRecordingCrypto;
+  transform?: BrowserRecordingTransform;
   direction?: 'send' | 'receive';
   socketId?: string;
+  channelId?: string;
   byteLength?: number;
   resultByteLength?: number;
   dataType?: string;
   stack?: string;
   scriptUrl?: string;
+  wrapperHandleId?: string;
+  callHandleId?: string;
+  callableCapable?: boolean;
+  arguments?: BrowserRecordingCallArgument[];
+  inputs: BrowserRecordingValueEvidence[];
+  outputs: BrowserRecordingValueEvidence[];
   sensitiveCaptured: boolean;
   inputPreview?: string;
   outputPreview?: string;
   error?: string;
+  navigation?: BrowserRecordingNavigation;
 }
 
-export interface PageObservationStatus {
+export interface BrowserRecordingStatus {
   active: boolean;
   target: BrowserTarget;
+  documentAvailable: boolean;
+  pageUrl?: string;
+  recordingId?: string;
   startedAt?: number;
   count: number;
   droppedCount: number;
-  options?: PageObservationOptions;
+  options?: BrowserRecordingOptions;
+  endedReason?: 'user' | 'expired' | 'authorization';
+  navigation?: BrowserRecordingNavigation & {
+    eventId?: string;
+    timestamp: number;
+  };
+}
+
+export interface BrowserRecordingLink {
+  id: string;
+  traceId: string;
+  kind: 'value' | 'channel' | 'state';
+  fromEventId: string;
+  fromPath: string;
+  toEventId: string;
+  toPath: string;
+  confidence: 'exact' | 'correlated';
+}
+
+export interface BrowserRecordingTrace {
+  id: string;
+  interactionId?: string;
+  label: string;
+  startedAt: number;
+  endedAt: number;
+  eventIds: string[];
+  requestCount: number;
+  cryptoCount: number;
+  websocketCount: number;
+  messageCount: number;
+  navigationCount: number;
+  linkedValueCount: number;
+}
+
+export type BrowserPageCallableKind = 'recorded-call' | 'business-closure' | 'request-transaction' | 'global-function';
+export type BrowserPageCallableValueEncoding = 'auto' | 'utf8' | 'hex' | 'base64' | 'json';
+export type BrowserPageCallableResultMode = 'sync' | 'promise' | 'auto';
+
+export interface BrowserPageCallableExecutionPolicy {
+  resultMode: BrowserPageCallableResultMode;
+  timeoutMs: number;
+}
+
+export interface BrowserPageCallableTransaction {
+  request: {
+    method: string;
+    url: string;
+    expectedDestinations: string[];
+  };
+  inputMode: 'auto';
+  boundaries: Array<'fetch' | 'xhr' | 'beacon' | 'form'>;
+}
+
+export interface BrowserPageCallableInputSlot {
+  id: string;
+  name: string;
+  index: number;
+  role: BrowserRecordingArgumentRole;
+  dataType: string;
+  required: boolean;
+  retained: boolean;
+}
+
+export interface BrowserPageCallable {
+  id: string;
+  name: string;
+  kind: BrowserPageCallableKind;
+  operation: string;
+  algorithm?: string;
+  crypto?: BrowserRecordingCrypto;
+  origin: string;
+  target: BrowserTarget;
+  lifecycle: 'document';
+  execution: BrowserPageCallableExecutionPolicy;
+  inputSlots: BrowserPageCallableInputSlot[];
+  output: {
+    dataType: string;
+    encoding: BrowserPageCallableValueEncoding;
+    shape: 'value' | 'envelope';
+    paths: string[];
+  };
+  transaction?: BrowserPageCallableTransaction;
+  provenance: {
+    recordingId?: string;
+    traceId?: string;
+    eventId?: string;
+    sourceUrl?: string;
+    lineNumber?: number;
+    functionName?: string;
+  };
+  createdAt: number;
+}
+
+export interface BrowserPageCallableExecution {
+  callableId: string;
+  type: string;
+  preview: string;
+  value: unknown;
+  byteLength?: number;
+  durationMs: number;
+}
+
+export interface BrowserRecordingSnapshot {
+  status: BrowserRecordingStatus;
+  events: BrowserRecordingEvent[];
+  traces: BrowserRecordingTrace[];
+  links: BrowserRecordingLink[];
+  callables: BrowserPageCallable[];
+  profileCandidates: BrowserProfileInferenceCandidate[];
+}
+
+export type BrowserProfileInferenceStatus =
+  | 'ready'
+  | 'capture-required'
+  | 'mapping-required'
+  | 'insufficient-evidence';
+
+export type BrowserProfileInferenceEvidenceKind =
+  | 'request-boundary'
+  | 'exact-value'
+  | 'message-boundary'
+  | 'state-sequence'
+  | 'transform-lineage'
+  | 'callable'
+  | 'trace-order'
+  | 'heuristic';
+
+export interface BrowserProfileInferenceEvidence {
+  id: string;
+  kind: BrowserProfileInferenceEvidenceKind;
+  strength: 'proven' | 'supported' | 'hypothesis';
+  label: string;
+  eventIds: string[];
+  fromPath?: string;
+  toPath?: string;
+}
+
+export interface BrowserProfileInferenceMissingStep {
+  kind: 'business-callable' | 'input-mapping' | 'output-mapping' | 'request-boundary';
+  label: string;
+  action: 'capture-business-function' | 'select-input' | 'select-output' | 'record-again';
+}
+
+export interface BrowserProfileInferencePipelineNode {
+  id: string;
+  kind: 'context.read' | 'page.call' | 'output.write';
+  label: string;
+  source?: string;
+  destination?: string;
+  callHandleId?: string;
+}
+
+export interface BrowserProfileInferenceAIContext {
+  valuePolicy: 'metadata-only';
+  request: {
+    eventId: string;
+    method: string;
+    url: string;
+    destination?: string;
+    serialization?: BrowserProfileInferenceSerialization;
+  };
+  source: {
+    eventId: string;
+    kind: BrowserRecordingEventKind;
+    operation: string;
+    crypto?: BrowserRecordingCrypto;
+    scriptUrl?: string;
+    arguments: BrowserRecordingCallArgument[];
+  };
+  sources: Array<{
+    eventId: string;
+    operation: string;
+    crypto?: BrowserRecordingCrypto;
+    destination?: string;
+  }>;
+  evidenceIds: string[];
+  requiredDecision: 'capture-business-callable' | 'map-input' | 'map-output' | 'none';
+}
+
+export type BrowserProfileInferenceSerialization =
+  | 'raw-body'
+  | 'json-field'
+  | 'form-field'
+  | 'header'
+  | 'query';
+
+export interface BrowserProfileInferenceSource {
+  eventId: string;
+  kind: BrowserRecordingEventKind;
+  operation: string;
+  crypto?: BrowserRecordingCrypto;
+  callHandleId?: string;
+  arguments: BrowserRecordingCallArgument[];
+  destination?: string;
+  serialization?: BrowserProfileInferenceSerialization;
+}
+
+export interface BrowserBusinessFrameHint {
+  functionName: string;
+  url?: string;
+  support: number;
+  averageDepth: number;
+}
+
+export interface BrowserProfileCapturePlan {
+  matcherEventId: string;
+  frameHints: BrowserBusinessFrameHint[];
+  expectedDestinations: string[];
+  sourceCount: number;
+}
+
+export interface BrowserProfileInferenceCandidate {
+  id: string;
+  recordingId: string;
+  traceId: string;
+  target: BrowserTarget;
+  direction: 'request' | 'response';
+  request: {
+    eventId: string;
+    method: string;
+    url: string;
+    destination?: string;
+    serialization?: BrowserProfileInferenceSerialization;
+    mappings: Array<{
+      sourceEventId: string;
+      destination?: string;
+      serialization?: BrowserProfileInferenceSerialization;
+    }>;
+  };
+  source: BrowserProfileInferenceSource;
+  sources: BrowserProfileInferenceSource[];
+  status: BrowserProfileInferenceStatus;
+  confidence: { score: number; level: 'high' | 'medium' | 'low' };
+  summary: string;
+  flow: string[];
+  pipeline: BrowserProfileInferencePipelineNode[];
+  evidence: BrowserProfileInferenceEvidence[];
+  missing: BrowserProfileInferenceMissingStep[];
+  capturePlan?: BrowserProfileCapturePlan;
+  aiContext: BrowserProfileInferenceAIContext;
+}
+
+export type BrowserDeepCaptureState = 'detached' | 'attached' | 'armed' | 'paused' | 'captured' | 'error';
+
+export type BrowserDeepCaptureMatcher =
+  | { kind: 'crypto'; adapterId: string; operation: string; wrapperHandleId: string; scriptUrl?: string; frameHints?: BrowserBusinessFrameHint[] }
+  | { kind: 'boundary'; eventKind: 'beacon' | 'worker' | 'message'; operation: string; wrapperHandleId: string; scriptUrl?: string; frameHints?: BrowserBusinessFrameHint[] }
+  | { kind: 'request'; urlPattern: string; frameHints?: BrowserBusinessFrameHint[] };
+
+export interface BrowserDeepCaptureVariable {
+  name: string;
+  type: string;
+  subtype?: string;
+  preview: string;
+  detail?: string;
+  detailTruncated?: boolean;
+}
+
+export interface BrowserDeepCaptureScope {
+  type: 'local' | 'closure' | 'module' | 'block' | 'catch' | 'script' | 'with' | 'wasm-expression-stack';
+  name?: string;
+  variables: BrowserDeepCaptureVariable[];
+}
+
+export interface BrowserDeepCaptureFrame {
+  id: string;
+  index: number;
+  functionName: string;
+  scriptId: string;
+  url: string;
+  lineNumber: number;
+  columnNumber: number;
+  scopes: BrowserDeepCaptureScope[];
+  thisPreview: string;
+  sourceKind: 'page' | 'extension-hook' | 'library';
+  libraryFrame: boolean;
+  functionInspection?: {
+    resolved: boolean;
+    parameterCount?: number;
+    parameterNames?: string[];
+    riskFlags: Array<'network' | 'dom' | 'navigation' | 'storage'>;
+    resolution?: 'frame-name' | 'receiver-method' | 'scope-binding' | 'manual-expression';
+    referenceExpression?: string;
+    candidateCount?: number;
+  };
+  businessScore?: number;
+  businessReasons?: string[];
+}
+
+export interface BrowserDeepCapturePause {
+  reason: string;
+  pausedAt: number;
+  deadline: number;
+  collecting?: boolean;
+  frames: BrowserDeepCaptureFrame[];
+  recommendedFrameId?: string;
+  automaticCapture?: {
+    state: 'ready' | 'ambiguous' | 'blocked' | 'unavailable';
+    strategy?: 'selected-frame' | 'request-transaction';
+    frameId?: string;
+    reason: string;
+    alternativeFrameIds?: string[];
+  };
+}
+
+export interface BrowserDeepCaptureStatus {
+  state: BrowserDeepCaptureState;
+  target: BrowserTarget;
+  matcher?: BrowserDeepCaptureMatcher;
+  attachedAt?: number;
+  pause?: BrowserDeepCapturePause;
+  error?: string;
+}
+
+export type BrowserTransformDirectionName = 'request' | 'response';
+export type BrowserTransformValueEncoding = 'auto' | 'text' | 'json' | 'base64';
+export type BrowserTransformBuiltinOperation =
+  | 'value.literal'
+  | 'json.stringify'
+  | 'json.parse'
+  | 'text.toString'
+  | 'url.encode'
+  | 'url.decode'
+  | 'base64.encode'
+  | 'base64.decode'
+  | 'hex.encode'
+  | 'hex.decode'
+  | 'object.pick'
+  | 'object.compose'
+  | 'form.compose';
+
+export interface BrowserTransformNodeReference {
+  nodeId: string;
+  path?: string;
+}
+
+interface BrowserTransformPipelineNodeBase {
+  id: string;
+  name: string;
+}
+
+export type BrowserTransformPipelineNode =
+  | (BrowserTransformPipelineNodeBase & {
+    kind: 'context.read';
+    path: string;
+  })
+  | (BrowserTransformPipelineNodeBase & {
+    kind: 'builtin';
+    operation: BrowserTransformBuiltinOperation;
+    inputs: BrowserTransformNodeReference[];
+    options?: Record<string, unknown>;
+  })
+  | (BrowserTransformPipelineNodeBase & {
+    kind: 'page.call';
+    callableId: string;
+    arguments: BrowserTransformNodeReference[];
+  })
+  | (BrowserTransformPipelineNodeBase & {
+    kind: 'output.write';
+    destination: string;
+    source: BrowserTransformNodeReference;
+    encoding: BrowserTransformValueEncoding;
+  });
+
+export interface BrowserTransformDirection {
+  enabled: boolean;
+  nodes: BrowserTransformPipelineNode[];
+}
+
+export interface BrowserTransformProfile {
+  id: string;
+  name: string;
+  enabled: boolean;
+  target: BrowserTarget;
+  origin: string;
+  match: {
+    methods: string[];
+    urlPattern: string;
+  };
+  request: BrowserTransformDirection;
+  response: BrowserTransformDirection;
+  failMode: 'closed';
+  maxConcurrency: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type BrowserTransformProfileInput = Omit<BrowserTransformProfile, 'id' | 'createdAt' | 'updatedAt'> & {
+  id?: string;
+};
+
+export interface BrowserTransformHeader {
+  name: string;
+  value: string;
+}
+
+export interface BrowserTransformPacket {
+  method?: string;
+  url: string;
+  statusCode?: number;
+  headers: BrowserTransformHeader[];
+  bodyBase64: string;
+}
+
+export interface BrowserTransformExecuteInput {
+  profileId: string;
+  direction: BrowserTransformDirectionName;
+  packet: BrowserTransformPacket;
+}
+
+export interface BrowserTransformExecution {
+  profileId: string;
+  direction: BrowserTransformDirectionName;
+  url: string;
+  bodyBase64: string;
+  setHeaders: BrowserTransformHeader[];
+  removeHeaders: string[];
+  logicalInput: unknown;
+  logicalOutput: unknown;
+  nodeDurations: Array<{ nodeId: string; durationMs: number }>;
+  durationMs: number;
 }
 
 export interface YakitFuzzerOpenResult {
@@ -350,7 +1010,7 @@ export interface BrowserRequestAnalysisBundle {
     bodyBytes: number;
   };
   signals: BrowserRequestAnalysisSignal[];
-  observations: Array<Pick<PageObservationRecord, 'kind' | 'operation' | 'algorithm' | 'direction' | 'scriptUrl' | 'byteLength' | 'resultByteLength' | 'timestamp'>>;
+  observations: Array<Pick<BrowserRecordingEvent, 'kind' | 'operation' | 'crypto' | 'direction' | 'scriptUrl' | 'byteLength' | 'resultByteLength' | 'timestamp'>>;
   valuePolicy: string;
   recommendedChecks: string[];
 }
@@ -446,7 +1106,12 @@ export interface DiagnosticsBundle {
   state: {
     proxyProfiles: number;
     proxyRules: number;
-    userAgentRules: number;
+    proxyRuleSources: number;
+    proxySourceRules: number;
+    proxyCompiledBytes: number;
+    proxyConfigurationDirty: boolean;
+    customUserAgentProfiles: number;
+    userAgentAssignments: number;
     floatingPanelEnabled: boolean;
     activeGrant: boolean;
     activeGrantTargets: number;
@@ -462,9 +1127,12 @@ export interface ExtensionState {
   version: 7;
   proxyProfiles: ProxyProfile[];
   proxyRules: ProxyRule[];
+  proxyRuleSources: ProxyRuleSource[];
   proxyRouting: ProxyRoutingSettings;
+  proxyRuntime: ProxyRuntimeState;
   activeProxyId: string;
-  userAgentRules: UserAgentRule[];
+  customUserAgentProfiles: UserAgentProfile[];
+  userAgentAssignments: UserAgentAssignment[];
   bridge: BridgeConfig;
   floatingPanel: FloatingPanelPreferences;
   activeGrant?: BridgeGrant;

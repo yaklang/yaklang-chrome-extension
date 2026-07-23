@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import type { BridgeEnvelope } from '@/types/messages';
 import type { BridgePublicKey } from '@/types/models';
+import { browserTransformExecuteSchema, browserTransformProfileInputSchema } from './transform';
 
 export const BRIDGE_PROTOCOL_VERSION = 3;
 export const BRIDGE_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -32,6 +33,36 @@ const optionalTabId = v.optional(tabId);
 const optionalFrameId = v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(0)));
 const optionalDocumentId = v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160)));
 const targetFields = { tabId: optionalTabId, frameId: optionalFrameId, documentId: optionalDocumentId };
+const cryptoAdapterId = v.pipe(v.string(), v.trim(), v.regex(/^[a-z0-9][a-z0-9.-]{0,63}$/));
+const businessFrameHints = v.optional(v.pipe(v.array(v.strictObject({
+  functionName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(240)),
+  url: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(4_096))),
+  support: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(8)),
+  averageDepth: v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(16)),
+})), v.maxLength(8)));
+const deepCaptureMatcher = v.variant('kind', [
+  v.strictObject({
+    kind: v.literal('crypto'),
+    adapterId: cryptoAdapterId,
+    operation: v.pipe(v.string(), v.trim(), v.regex(/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,159}$/)),
+    wrapperHandleId: id,
+    scriptUrl: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(4_096))),
+    frameHints: businessFrameHints,
+  }),
+  v.strictObject({
+    kind: v.literal('boundary'),
+    eventKind: v.picklist(['beacon', 'worker', 'message']),
+    operation: v.pipe(v.string(), v.trim(), v.regex(/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,159}$/)),
+    wrapperHandleId: id,
+    scriptUrl: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(4_096))),
+    frameHints: businessFrameHints,
+  }),
+  v.strictObject({
+    kind: v.literal('request'),
+    urlPattern: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(2_048)),
+    frameHints: businessFrameHints,
+  }),
+]);
 const captureId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
 const nodeId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80));
 
@@ -78,19 +109,48 @@ const capabilityParams = {
   'browser.network.export': v.strictObject({ ...targetFields, id }),
   'browser.network.poc': v.strictObject({ ...targetFields, id }),
   'browser.network.analysis': v.strictObject({ ...targetFields, id }),
-  'browser.observe.start': v.optional(v.strictObject({
+  'browser.recording.start': v.optional(v.strictObject({
     ...targetFields,
     captureValues: v.optional(v.boolean()),
-    maxEntries: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(10), v.maxValue(200))),
+    maxEntries: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(20), v.maxValue(500))),
     maxValueBytes: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(256), v.maxValue(8_192))),
   })),
-  'browser.observe.status': v.optional(v.strictObject(targetFields)),
-  'browser.observe.list': v.optional(v.strictObject({
+  'browser.recording.status': v.optional(v.strictObject(targetFields)),
+  'browser.recording.get': v.optional(v.strictObject({
     ...targetFields,
-    limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200))),
+    limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500))),
   })),
-  'browser.observe.clear': v.optional(v.strictObject(targetFields)),
-  'browser.observe.stop': v.optional(v.strictObject(targetFields)),
+  'browser.recording.clear': v.optional(v.strictObject(targetFields)),
+  'browser.recording.stop': v.optional(v.strictObject(targetFields)),
+  'browser.callable.create': v.union([
+    v.strictObject({
+      ...targetFields, source: v.literal('recording'), callHandleId: id,
+      name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120)),
+    }),
+    v.strictObject({
+      ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
+      strategy: v.literal('selected-frame'),
+      name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+    }),
+    v.strictObject({
+      ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
+      strategy: v.literal('expression'),
+      name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120)),
+      functionExpression: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(4_096)),
+    }),
+  ]),
+  'browser.callable.list': v.optional(v.strictObject(targetFields)),
+  'browser.callable.execute': v.strictObject({ ...targetFields, callableId: id, args: v.pipe(v.array(v.unknown()), v.maxLength(64)) }),
+  'browser.callable.delete': v.strictObject({ ...targetFields, callableId: id }),
+  'browser.deep_capture.start': v.strictObject({ ...targetFields, matcher: deepCaptureMatcher }),
+  'browser.deep_capture.status': v.optional(v.strictObject(targetFields)),
+  'browser.deep_capture.keepalive': v.optional(v.strictObject(targetFields)),
+  'browser.deep_capture.resume': v.optional(v.strictObject(targetFields)),
+  'browser.deep_capture.detach': v.optional(v.strictObject(targetFields)),
+  'browser.transform.profile.list': v.optional(v.strictObject(targetFields)),
+  'browser.transform.profile.save': browserTransformProfileInputSchema,
+  'browser.transform.profile.delete': v.strictObject({ id }),
+  'browser.transform.execute': browserTransformExecuteSchema,
   'browser.invoke': v.strictObject({
     ...targetFields,
     path: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(2_048)),

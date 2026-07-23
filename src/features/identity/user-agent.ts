@@ -1,48 +1,84 @@
 import { browser } from 'wxt/browser';
-import type { UserAgentRule } from '@/types/models';
+import type {
+  UserAgentAssignment, UserAgentProfile, UserAgentResolution,
+} from '@/types/models';
+import { getUserAgentProfiles } from './user-agent-profiles';
 
 const RULE_ID_BASE = 20_000;
-const MAX_UA_RULES = 5_000;
+const MAX_UA_ASSIGNMENTS = 5_000;
 
-function domainFilter(domain: string): string {
-  const normalized = domain.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '').replace(/^\*\./, '');
-  return normalized ? `||${normalized}^` : '*';
+function domainFilter(hostname: string): string {
+  return `||${hostname}^`;
 }
 
-export function buildUserAgentDnrRules(rules: UserAgentRule[]): Browser.declarativeNetRequest.Rule[] {
-  const addRules: Browser.declarativeNetRequest.Rule[] = [];
-  let nextRuleId = RULE_ID_BASE;
-  for (const rule of rules.filter((item) => item.enabled)) {
-    const domains = rule.domains.length > 0 ? [...new Set(rule.domains)] : [''];
-    for (const domain of domains) {
-      if (nextRuleId >= RULE_ID_BASE + MAX_UA_RULES) {
-        throw new Error(`User-Agent 动态规则超过 ${MAX_UA_RULES} 条限制`);
-      }
-      addRules.push({
-        id: nextRuleId,
-        priority: nextRuleId - RULE_ID_BASE + 1,
-        action: {
-          type: 'modifyHeaders',
-          requestHeaders: [{ header: 'user-agent', operation: 'set', value: rule.userAgent }],
-        },
-        condition: {
-          urlFilter: domainFilter(domain),
-          resourceTypes: [
-            'main_frame', 'sub_frame', 'xmlhttprequest', 'script', 'image', 'stylesheet',
-            'font', 'media', 'websocket', 'other',
-          ],
-        },
-      });
-      nextRuleId += 1;
-    }
-  }
-  return addRules;
+export function userAgentHostname(url: string): string {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('User-Agent 只能应用到 HTTP(S) 页面');
+  return parsed.hostname.toLowerCase();
 }
 
-export async function applyUserAgentRules(rules: UserAgentRule[]): Promise<void> {
+export function validateUserAgent(value: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new Error('User-Agent 不能为空');
+  if (normalized.length > 1_024) throw new Error('User-Agent 不能超过 1024 个字符');
+  if (/\r|\n/.test(normalized)) throw new Error('User-Agent 不能包含换行符');
+  return normalized;
+}
+
+export function resolveUserAgent(
+  url: string,
+  assignments: UserAgentAssignment[],
+  customProfiles: UserAgentProfile[],
+  browserDefault = globalThis.navigator?.userAgent || '',
+): UserAgentResolution {
+  const hostname = userAgentHostname(url);
+  const assignment = assignments.find((item) => item.hostname === hostname);
+  const profile = assignment
+    ? getUserAgentProfiles(customProfiles).find((item) => item.id === assignment.profileId)
+    : undefined;
+  if (!assignment || !profile) return { hostname, mode: 'default', userAgent: browserDefault };
+  return { hostname, mode: 'override', userAgent: profile.userAgent, profile, assignment };
+}
+
+export function buildUserAgentDnrRules(
+  assignments: UserAgentAssignment[],
+  customProfiles: UserAgentProfile[] = [],
+): Browser.declarativeNetRequest.Rule[] {
+  const profiles = new Map(getUserAgentProfiles(customProfiles).map((profile) => [profile.id, profile]));
+  const uniqueAssignments = new Map(assignments.map((assignment) => [assignment.hostname, assignment]));
+  const active = [...uniqueAssignments.values()]
+    .filter((assignment) => profiles.has(assignment.profileId))
+    .sort((left, right) => left.hostname.localeCompare(right.hostname));
+  if (active.length > MAX_UA_ASSIGNMENTS) throw new Error(`User-Agent 站点绑定超过 ${MAX_UA_ASSIGNMENTS} 条限制`);
+  return active.map((assignment, index) => {
+    const profile = profiles.get(assignment.profileId)!;
+    return {
+      id: RULE_ID_BASE + index,
+      priority: 1_000 + assignment.hostname.split('.').length,
+      action: {
+        type: 'modifyHeaders',
+        requestHeaders: [{ header: 'user-agent', operation: 'set', value: validateUserAgent(profile.userAgent) }],
+      },
+      condition: {
+        urlFilter: domainFilter(assignment.hostname),
+        resourceTypes: [
+          'main_frame', 'sub_frame', 'xmlhttprequest', 'script', 'image', 'stylesheet',
+          'font', 'media', 'websocket', 'other',
+        ],
+      },
+    } satisfies Browser.declarativeNetRequest.Rule;
+  });
+}
+
+export async function applyUserAgentAssignments(
+  assignments: UserAgentAssignment[],
+  customProfiles: UserAgentProfile[] = [],
+): Promise<void> {
   const oldRuleIds = (await browser.declarativeNetRequest.getDynamicRules())
     .map((rule) => rule.id)
     .filter((id) => id >= RULE_ID_BASE && id < RULE_ID_BASE + 10_000);
-
-  await browser.declarativeNetRequest.updateDynamicRules({ removeRuleIds: oldRuleIds, addRules: buildUserAgentDnrRules(rules) });
+  await browser.declarativeNetRequest.updateDynamicRules({
+    removeRuleIds: oldRuleIds,
+    addRules: buildUserAgentDnrRules(assignments, customProfiles),
+  });
 }

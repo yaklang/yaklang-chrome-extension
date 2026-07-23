@@ -5,13 +5,23 @@ import {
 } from '@/features/network-capture/service';
 import { capturedRequestEnginePayload } from '@/features/network-capture/workflows';
 import {
-  clearPageObservations, listPageObservations, pageObservationStatus, startPageObservation,
-  stopPageObservation, stopPageObservationsForGrant,
-} from '@/features/page-observation/service';
+  browserRecordingStatus, clearBrowserRecording, createRecordedPageCallable, getBrowserRecording, startBrowserRecording,
+  stopBrowserRecording, stopBrowserRecordingsForGrant,
+} from '@/features/browser-recording/service';
+import {
+  createCapturedPageCallable, deepCaptureStatus, detachDeepCapture,
+  initializeDeepCaptureService, keepDeepCaptureAlive,
+  resumeDeepCapture, startDeepCapture, stopDeepCapturesForGrant,
+} from '@/features/deep-capture/service';
+import { deletePageCallable, executePageCallable, listPageCallables } from '@/features/page-callable/service';
+import {
+  deleteBrowserTransformProfile, executeBrowserTransform, listBrowserTransformProfiles,
+  saveBrowserTransformProfile,
+} from '@/features/browser-transform/service';
 import type { ExtensionRequest, ExtensionResponse } from '@/types/messages';
 import { parseExtensionRequest } from '@/protocol/extension';
 import type {
-  BridgeGrantTarget, BrowserRequestAnalysisBundle, BrowserTarget, YakPocGenerateResult, YakitFuzzerOpenResult,
+  BridgeGrantTarget, BrowserRequestAnalysisBundle, BrowserTarget, UserAgentProfile, YakPocGenerateResult, YakitFuzzerOpenResult,
 } from '@/types/models';
 import { engineBridge } from '@/features/engine-bridge/service';
 import { getFrameInventory } from '@/features/page-context/frames';
@@ -22,11 +32,16 @@ import {
 import { listCookies, removeCookie, setCookie } from '@/features/cookies/service';
 import { exportCookies, importCookies } from '@/features/cookies/transfer';
 import {
-  applyProxyRules, clearProxyRuleStats, compileProxyRules, getProxyRuleStats, hasProxyAuthPassword,
-  previewProxyRules, setProxyAuthPassword, switchProxy,
+  applyProxyRules, clearCurrentSiteRoute, compileCurrentProxyRules, dirtyProxyState, exportProxyConfiguration,
+  getProxyRuleSourcePage, hasProxyAuthPassword, importProxyConfiguration, previewCurrentProxyRules,
+  refreshProxyRuleSource, removeProxyRuleSource, routeCurrentSite, saveProxyProfile, saveProxyRuleSource,
+  setProxyAuthPassword, switchProxy,
 } from '@/features/proxy/service';
 import { getState, updateState } from '@/platform/storage/state';
-import { applyUserAgentRules } from '@/features/identity/user-agent';
+import {
+  applyUserAgentAssignments, resolveUserAgent, userAgentHostname, validateUserAgent,
+} from '@/features/identity/user-agent';
+import { BUILTIN_USER_AGENT_PROFILES, getUserAgentProfiles } from '@/features/identity/user-agent-profiles';
 import { errorCode, ExtensionError } from '@/shared/errors';
 import { appendAuditEvent, clearAuditEvents, listAuditEvents } from '@/features/diagnostics/audit';
 import {
@@ -105,6 +120,28 @@ async function requiredRequestTarget(
   return target;
 }
 
+async function requiredDebuggerTarget(
+  input: { tabId?: number; frameId?: number; documentId?: string },
+  sender: Browser.runtime.MessageSender,
+): Promise<BrowserTarget> {
+  const boundTabId = senderBoundTabId(sender);
+  if (boundTabId && input.tabId && boundTabId !== input.tabId) {
+    throw new ExtensionError('target_denied', '页面内请求不能操作其他标签页');
+  }
+  const tabId = boundTabId || input.tabId;
+  if (!tabId) throw new ExtensionError('target_unavailable', '请选择一个可访问的 HTTP(S) 标签页');
+  const frameId = boundTabId && !isFloatingSender(sender) ? sender.frameId ?? 0 : input.frameId ?? 0;
+  if (boundTabId && !isFloatingSender(sender) && input.frameId !== undefined && input.frameId !== frameId) {
+    throw new ExtensionError('target_denied', '页面内请求不能操作其他 frame');
+  }
+  const frame = await browser.webNavigation.getFrame({ tabId, frameId });
+  if (!frame) throw new ExtensionError('target_unavailable', '目标 frame 已不存在');
+  if (input.documentId && frame.documentId && input.documentId !== frame.documentId) {
+    throw new ExtensionError('stale_document', '目标页面已经刷新或导航');
+  }
+  return { tabId, frameId, documentId: frame.documentId || input.documentId };
+}
+
 function originOf(url: string): string {
   const parsed = new URL(url);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('只能授权 HTTP(S) 标签页');
@@ -146,18 +183,22 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     })));
     case 'frame.list': return ok(await getFrameInventory(targetTabId(request.payload.tabId, sender)!));
     case 'proxy.save': {
-      const profile = request.payload;
-      return ok(await updateState((state) => ({
-        ...state,
-        proxyProfiles: [...state.proxyProfiles.filter((item) => item.id !== profile.id), profile],
-      })));
+      return ok(await saveProxyProfile(request.payload));
     }
     case 'proxy.delete': {
       const { id } = request.payload;
-      return ok(await updateState((state) => ({
-        ...state,
-        proxyProfiles: state.proxyProfiles.filter((item) => item.id !== id || item.builtin),
-        proxyRules: state.proxyRules.filter((rule) => rule.proxyProfileId !== id),
+      const state = await getState();
+      const profile = state.proxyProfiles.find((item) => item.id === id);
+      if (!profile || profile.builtin) throw new Error('内置代理出口不能删除');
+      if (state.activeProxyId === id) throw new Error('该出口正在使用，请先切换到其他出口');
+      if (state.proxyRules.some((rule) => rule.proxyProfileId === id)
+        || state.proxyRuleSources.some((source) => source.matchProfileId === id || source.bypassProfileId === id)
+        || state.proxyRouting.defaultProfileId === id) {
+        throw new Error('该出口仍被自动切换规则引用，请先修改相关规则');
+      }
+      return ok(await updateState((current) => dirtyProxyState({
+        ...current,
+        proxyProfiles: current.proxyProfiles.filter((item) => item.id !== id),
       })));
     }
     case 'proxy.switch':
@@ -169,26 +210,18 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       if (!profiles.some((profile) => profile.id === rule.proxyProfileId && ['direct', 'fixed_servers'].includes(profile.kind))) {
         throw new Error('规则 PAC 只能使用直接连接或固定代理出口');
       }
-      return ok(await updateState((state) => ({
+      return ok(await updateState((state) => dirtyProxyState({
         ...state,
         proxyRules: [...state.proxyRules.filter((item) => item.id !== rule.id), rule],
       })));
     }
     case 'proxy.rule.delete': {
       const { id } = request.payload;
-      return ok(await updateState((state) => ({ ...state, proxyRules: state.proxyRules.filter((item) => item.id !== id) })));
+      return ok(await updateState((state) => dirtyProxyState({ ...state, proxyRules: state.proxyRules.filter((item) => item.id !== id) })));
     }
-    case 'proxy.rules.apply':
-      await applyProxyRules();
-      return ok(await getState());
-    case 'proxy.rules.preview': {
-      const state = await getState();
-      return ok(previewProxyRules(request.payload.url, state.proxyRules, state.proxyProfiles, state.proxyRouting));
-    }
-    case 'proxy.rules.compile': {
-      const state = await getState();
-      return ok(compileProxyRules(state.proxyRules, state.proxyProfiles, state.proxyRouting));
-    }
+    case 'proxy.auto.apply': return ok(await applyProxyRules());
+    case 'proxy.rules.preview': return ok(await previewCurrentProxyRules(request.payload.url));
+    case 'proxy.rules.compile': return ok(await compileCurrentProxyRules());
     case 'proxy.rules.reorder': {
       const ids = request.payload.ids;
       const state = await getState();
@@ -196,44 +229,44 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
         throw new Error('规则排序必须包含当前全部规则且不能重复');
       }
       const byId = new Map(state.proxyRules.map((rule) => [rule.id, rule]));
-      return ok(await updateState((current) => ({
+      return ok(await updateState((current) => dirtyProxyState({
         ...current,
-        proxyRules: ids.map((id, index) => ({ ...byId.get(id)!, priority: (ids.length - index) * 10 })),
+        proxyRules: ids.map((id, order) => ({ ...byId.get(id)!, order, updatedAt: Date.now() })),
       })));
     }
     case 'proxy.rules.settings': {
       const input = request.payload;
       const state = await getState();
       if (!state.proxyProfiles.some((profile) => profile.id === input.defaultProfileId && ['direct', 'fixed_servers'].includes(profile.kind))) throw new Error('默认出口必须是直接连接或固定代理');
-      return ok(await updateState((current) => ({ ...current, proxyRouting: input })));
+      return ok(await updateState((current) => dirtyProxyState({ ...current, proxyRouting: input })));
     }
-    case 'proxy.rules.stats': return ok(getProxyRuleStats());
-    case 'proxy.rules.stats.clear':
-      await clearProxyRuleStats();
-      return ok();
+    case 'proxy.source.save': return ok(await saveProxyRuleSource(request.payload));
+    case 'proxy.source.refresh': return ok(await refreshProxyRuleSource(request.payload.id));
+    case 'proxy.source.delete': return ok(await removeProxyRuleSource(request.payload.id));
+    case 'proxy.sources.reorder': {
+      const ids = request.payload.ids;
+      const state = await getState();
+      if (ids.length !== state.proxyRuleSources.length || new Set(ids).size !== ids.length
+        || ids.some((id) => !state.proxyRuleSources.some((source) => source.id === id))) {
+        throw new Error('规则源排序必须包含当前全部订阅且不能重复');
+      }
+      const byId = new Map(state.proxyRuleSources.map((source) => [source.id, source]));
+      return ok(await updateState((current) => dirtyProxyState({
+        ...current,
+        proxyRuleSources: ids.map((id, order) => ({ ...byId.get(id)!, order })),
+      })));
+    }
+    case 'proxy.source.rules': return ok(await getProxyRuleSourcePage(
+      request.payload.id, request.payload.offset, request.payload.limit, request.payload.query,
+    ));
+    case 'proxy.site.route': return ok(await routeCurrentSite(request.payload.url, request.payload.profileId));
+    case 'proxy.site.route.clear': return ok(await clearCurrentSiteRoute(request.payload.url));
     case 'proxy.auth.set':
       await setProxyAuthPassword(request.payload.profileId, request.payload.password);
       return ok({ configured: hasProxyAuthPassword(request.payload.profileId) });
     case 'proxy.auth.status': return ok({ configured: hasProxyAuthPassword(request.payload.profileId) });
-    case 'proxy.config.export': {
-      const state = await getState();
-      return ok({ version: 1 as const, profiles: state.proxyProfiles, rules: state.proxyRules, routing: state.proxyRouting });
-    }
-    case 'proxy.config.import': {
-      const configuration = request.payload.configuration;
-      const profileIds = new Set(configuration.profiles.map((profile) => profile.id));
-      if (profileIds.size !== configuration.profiles.length || !profileIds.has(configuration.routing.defaultProfileId)) throw new Error('代理配置包含重复或缺失的出口 ID');
-      if (configuration.rules.some((rule) => !profileIds.has(rule.proxyProfileId))) throw new Error('代理规则引用了不存在的出口');
-      const routableIds = new Set(configuration.profiles.filter((profile) => ['direct', 'fixed_servers'].includes(profile.kind)).map((profile) => profile.id));
-      if (!routableIds.has(configuration.routing.defaultProfileId) || configuration.rules.some((rule) => !routableIds.has(rule.proxyProfileId))) throw new Error('规则 PAC 只能使用直接连接或固定代理出口');
-      return ok(await updateState((current) => ({
-        ...current,
-        proxyProfiles: configuration.profiles,
-        proxyRules: configuration.rules,
-        proxyRouting: configuration.routing,
-        activeProxyId: 'direct',
-      })));
-    }
+    case 'proxy.config.export': return ok(await exportProxyConfiguration());
+    case 'proxy.config.import': return ok(await importProxyConfiguration(request.payload.configuration));
     case 'cookie.list': return ok(await listCookies(request.payload.url));
     case 'cookie.set': return ok(await setCookie(request.payload));
     case 'cookie.remove': {
@@ -248,27 +281,79 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     }
     case 'cookie.import': return ok(await importCookies(request.payload.url, request.payload.format, request.payload.text));
     case 'cookie.export': return ok(exportCookies(await listCookies(request.payload.url), request.payload.format, request.payload.includeValues));
-    case 'ua.save': {
-      const rule = request.payload;
-      const state = await updateState((current) => ({
-        ...current,
-        userAgentRules: [...current.userAgentRules.filter((item) => item.id !== rule.id), rule],
-      }));
-      if (state.activeGrant) await startAgentRuntime(state.activeGrant);
-      await applyUserAgentRules(state.userAgentRules);
-      return ok(state);
-    }
-    case 'ua.delete': {
-      const state = await updateState((current) => ({
-        ...current,
-        userAgentRules: current.userAgentRules.filter((item) => item.id !== request.payload.id),
-      }));
-      await applyUserAgentRules(state.userAgentRules);
-      return ok(state);
-    }
-    case 'ua.apply': {
+    case 'ua.catalog': {
       const state = await getState();
-      await applyUserAgentRules(state.userAgentRules);
+      return ok(getUserAgentProfiles(state.customUserAgentProfiles));
+    }
+    case 'ua.resolve': {
+      const state = await getState();
+      return ok(resolveUserAgent(request.payload.url, state.userAgentAssignments, state.customUserAgentProfiles));
+    }
+    case 'ua.profile.save': {
+      const input = request.payload;
+      const profileId = input.id || crypto.randomUUID();
+      if (BUILTIN_USER_AGENT_PROFILES.some((profile) => profile.id === profileId)) throw new Error('不能覆盖内置 User-Agent 预设');
+      const profile: UserAgentProfile = {
+        id: profileId,
+        name: input.name.trim(),
+        userAgent: validateUserAgent(input.userAgent),
+        category: 'custom',
+        builtin: false,
+      };
+      const state = await updateState((current) => ({
+        ...current,
+        customUserAgentProfiles: [
+          ...current.customUserAgentProfiles.filter((item) => item.id !== profile.id),
+          profile,
+        ],
+      }));
+      await applyUserAgentAssignments(state.userAgentAssignments, state.customUserAgentProfiles);
+      void appendAuditEvent({ category: 'settings', action: 'ua.profile.save', outcome: 'success', summary: profile.name });
+      return ok(profile);
+    }
+    case 'ua.profile.delete': {
+      if (BUILTIN_USER_AGENT_PROFILES.some((profile) => profile.id === request.payload.id)) throw new Error('不能删除内置 User-Agent 预设');
+      const state = await updateState((current) => ({
+        ...current,
+        customUserAgentProfiles: current.customUserAgentProfiles.filter((item) => item.id !== request.payload.id),
+        userAgentAssignments: current.userAgentAssignments.filter((item) => item.profileId !== request.payload.id),
+      }));
+      await applyUserAgentAssignments(state.userAgentAssignments, state.customUserAgentProfiles);
+      void appendAuditEvent({ category: 'settings', action: 'ua.profile.delete', outcome: 'success' });
+      return ok(state);
+    }
+    case 'ua.site.apply': {
+      const input = request.payload;
+      const before = await getState();
+      const profile = getUserAgentProfiles(before.customUserAgentProfiles).find((item) => item.id === input.profileId);
+      if (!profile) throw new Error('User-Agent 预设不存在');
+      const hostname = userAgentHostname(input.url);
+      const now = Date.now();
+      const state = await updateState((current) => {
+        const existing = current.userAgentAssignments.find((item) => item.hostname === hostname);
+        return {
+          ...current,
+          userAgentAssignments: [
+            ...current.userAgentAssignments.filter((item) => item.hostname !== hostname),
+            {
+              id: existing?.id || crypto.randomUUID(), hostname, profileId: profile.id,
+              createdAt: existing?.createdAt || now, updatedAt: now,
+            },
+          ],
+        };
+      });
+      await applyUserAgentAssignments(state.userAgentAssignments, state.customUserAgentProfiles);
+      void appendAuditEvent({ category: 'settings', action: 'ua.site.apply', outcome: 'success', summary: `${hostname} · ${profile.name}` });
+      return ok(state);
+    }
+    case 'ua.site.reset': {
+      const hostname = userAgentHostname(request.payload.url);
+      const state = await updateState((current) => ({
+        ...current,
+        userAgentAssignments: current.userAgentAssignments.filter((item) => item.hostname !== hostname),
+      }));
+      await applyUserAgentAssignments(state.userAgentAssignments, state.customUserAgentProfiles);
+      void appendAuditEvent({ category: 'settings', action: 'ua.site.reset', outcome: 'success', summary: hostname });
       return ok(state);
     }
     case 'context.capture': {
@@ -354,7 +439,8 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       if (before.activeGrant) {
         await Promise.all([
           stopNetworkCapturesForGrant(before.activeGrant.id),
-          stopPageObservationsForGrant(before.activeGrant.id),
+          stopBrowserRecordingsForGrant(before.activeGrant.id),
+          stopDeepCapturesForGrant(before.activeGrant.id),
         ]);
       }
       if (before.handoff?.state === 'waiting_for_user' && state.handoff) {
@@ -386,7 +472,8 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       if (before.activeGrant) {
         await Promise.all([
           stopNetworkCapturesForGrant(before.activeGrant.id),
-          stopPageObservationsForGrant(before.activeGrant.id),
+          stopBrowserRecordingsForGrant(before.activeGrant.id),
+          stopDeepCapturesForGrant(before.activeGrant.id),
         ]);
       }
       await setAgentRuntimeState('revoked', before.activeGrant);
@@ -499,32 +586,94 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       void appendAuditEvent({ category: 'capability', action: 'network.capture.prepare_analysis', outcome: 'success', targetTabId: target.tabId });
       return ok(result);
     }
-    case 'observation.start': {
+    case 'recording.start': {
       const input = request.payload;
       const target = await requiredRequestTarget(input, sender);
-      const status = await startPageObservation(target, input);
+      const snapshot = await startBrowserRecording(target, input);
       void appendAuditEvent({
-        category: 'capability', action: 'observation.start', outcome: 'success', targetTabId: target.tabId,
+        category: 'capability', action: 'recording.start', outcome: 'success', targetTabId: target.tabId,
         summary: input.captureValues ? '包含用户明确启用的短时值预览' : '仅元数据',
+      });
+      return ok(snapshot);
+    }
+    case 'recording.status': return ok(await browserRecordingStatus(await requiredRequestTarget(request.payload, sender)));
+    case 'recording.get': {
+      const target = await requiredRequestTarget(request.payload, sender);
+      return ok(await getBrowserRecording(target, request.payload.limit, true));
+    }
+    case 'recording.clear': {
+      const target = await requiredRequestTarget(request.payload, sender);
+      const snapshot = await clearBrowserRecording(target, true);
+      void appendAuditEvent({ category: 'capability', action: 'recording.clear', outcome: 'success', targetTabId: target.tabId });
+      return ok(snapshot);
+    }
+    case 'recording.stop': {
+      const target = await requiredRequestTarget(request.payload, sender);
+      const snapshot = await stopBrowserRecording(target, true);
+      void appendAuditEvent({ category: 'capability', action: 'recording.stop', outcome: 'success', targetTabId: target.tabId });
+      return ok(snapshot);
+    }
+    case 'callable.create': {
+      const target = request.payload.source === 'deep-capture'
+        ? await requiredDebuggerTarget(request.payload, sender)
+        : await requiredRequestTarget(request.payload, sender);
+      const callable = request.payload.source === 'deep-capture'
+        ? await createCapturedPageCallable(target, request.payload.callFrameId, request.payload)
+        : await createRecordedPageCallable(target, request.payload);
+      void appendAuditEvent({ category: 'capability', action: 'callable.create', outcome: 'success', targetTabId: target.tabId, summary: callable.name });
+      return ok(callable);
+    }
+    case 'callable.list': return ok(await listPageCallables(await requiredRequestTarget(request.payload, sender)));
+    case 'callable.execute': {
+      const target = await requiredRequestTarget(request.payload, sender);
+      const result = await executePageCallable(target, request.payload.callableId, request.payload.args);
+      void appendAuditEvent({ category: 'capability', action: 'callable.execute', outcome: 'success', targetTabId: target.tabId, summary: `${result.durationMs.toFixed(1)} ms` });
+      return ok(result);
+    }
+    case 'callable.delete': return ok(await deletePageCallable(
+      await requiredRequestTarget(request.payload, sender), request.payload.callableId,
+    ));
+    case 'deep.capture.start': {
+      const target = await requiredRequestTarget(request.payload, sender);
+      const status = await startDeepCapture(target, request.payload.matcher);
+      void appendAuditEvent({
+        category: 'capability', action: 'deep.capture.start', outcome: 'success', targetTabId: target.tabId,
+        summary: request.payload.matcher.kind === 'request'
+          ? request.payload.matcher.urlPattern
+          : request.payload.matcher.operation,
       });
       return ok(status);
     }
-    case 'observation.status': return ok(await pageObservationStatus(await requiredRequestTarget(request.payload, sender)));
-    case 'observation.list': {
-      const target = await requiredRequestTarget(request.payload, sender);
-      return ok(await listPageObservations(target, request.payload.limit, true));
-    }
-    case 'observation.clear': {
-      const target = await requiredRequestTarget(request.payload, sender);
-      const status = await clearPageObservations(target);
-      void appendAuditEvent({ category: 'capability', action: 'observation.clear', outcome: 'success', targetTabId: target.tabId });
+    case 'deep.capture.status': return ok(await deepCaptureStatus(await requiredDebuggerTarget(request.payload, sender)));
+    case 'deep.capture.keepalive': return ok(await keepDeepCaptureAlive(await requiredDebuggerTarget(request.payload, sender)));
+    case 'deep.capture.resume': return ok(await resumeDeepCapture(await requiredDebuggerTarget(request.payload, sender)));
+    case 'deep.capture.detach': {
+      const target = await requiredDebuggerTarget(request.payload, sender);
+      const status = await detachDeepCapture(target);
+      void appendAuditEvent({ category: 'capability', action: 'deep.capture.detach', outcome: 'success', targetTabId: target.tabId });
       return ok(status);
     }
-    case 'observation.stop': {
-      const target = await requiredRequestTarget(request.payload, sender);
-      const status = await stopPageObservation(target);
-      void appendAuditEvent({ category: 'capability', action: 'observation.stop', outcome: 'success', targetTabId: target.tabId });
-      return ok(status);
+    case 'transform.profile.list': {
+      const input = request.payload;
+      const target = input.tabId ? await requiredRequestTarget(input, sender) : undefined;
+      return ok(await listBrowserTransformProfiles(target ? { tabId: target.tabId, frameId: target.frameId } : undefined));
+    }
+    case 'transform.profile.save': {
+      const profile = await saveBrowserTransformProfile(request.payload);
+      void appendAuditEvent({
+        category: 'capability', action: 'transform.profile.save', outcome: 'success',
+        targetTabId: profile.target.tabId, summary: profile.name,
+      });
+      return ok(profile);
+    }
+    case 'transform.profile.delete': return ok(await deleteBrowserTransformProfile(request.payload.id));
+    case 'transform.execute': {
+      const result = await executeBrowserTransform(request.payload);
+      void appendAuditEvent({
+        category: 'capability', action: `transform.${result.direction}`, outcome: 'success',
+        durationMs: result.durationMs, summary: `${result.nodeDurations.length} 个 Pipeline 节点`,
+      });
+      return ok(result);
     }
     case 'audit.list': return ok(await listAuditEvents(request.payload.limit));
     case 'audit.clear': {
@@ -587,9 +736,10 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
 }
 
 export async function runBackground(): Promise<void> {
+    initializeDeepCaptureService();
     recordServiceWorkerStart();
     browser.runtime.onMessage.addListener((input: unknown, sender: Browser.runtime.MessageSender, sendResponse) => {
-      if (['bridge.status.changed', 'bridge.pairing.status.changed'].includes((input as { action?: string })?.action || '')) return undefined;
+      if (['bridge.status.changed', 'bridge.pairing.status.changed', 'network.capture.changed', 'deep.capture.changed'].includes((input as { action?: string })?.action || '')) return undefined;
       void Promise.resolve().then(() => parseExtensionRequest(input)).then((request) => handleRequest(request, sender)).then(sendResponse).catch((error) => sendResponse(fail(error)));
       return true;
     });
@@ -598,6 +748,6 @@ export async function runBackground(): Promise<void> {
     if (JSON.stringify(state.bridge) !== JSON.stringify(storedState.bridge) || JSON.stringify(state.floatingPanel) !== JSON.stringify(storedState.floatingPanel)) {
       await updateState(() => state);
     }
-    await applyUserAgentRules(state.userAgentRules).catch(console.error);
+    await applyUserAgentAssignments(state.userAgentAssignments, state.customUserAgentProfiles).catch(console.error);
     if (state.bridge.autoConnect && state.bridge.pairedEngine) await engineBridge.connect(state.bridge).catch(console.error);
 }

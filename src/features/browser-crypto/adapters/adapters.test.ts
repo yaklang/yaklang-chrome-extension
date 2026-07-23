@@ -1,0 +1,338 @@
+import { describe, expect, it } from 'vitest';
+import type { CryptoAdapterScope, CryptoAdapterToolkit } from './contract';
+import { cryptoAdapterLabel } from './catalog';
+import { cryptoJsAdapter } from './cryptojs';
+import { jsEncryptAdapter } from './jsencrypt';
+import { webCryptoAdapter } from './webcrypto';
+import { smCryptoAdapter } from './sm-crypto';
+import { nodeForgeAdapter } from './node-forge';
+import { jsrsasignAdapter } from './jsrsasign';
+import { joseAdapter } from './jose';
+
+function byteLength(value: unknown): number | undefined {
+  if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
+  if (ArrayBuffer.isView(value)) return value.byteLength;
+  if (value instanceof ArrayBuffer) return value.byteLength;
+  if (value && typeof value === 'object' && typeof (value as { sigBytes?: unknown }).sigBytes === 'number') {
+    return (value as { sigBytes: number }).sigBytes;
+  }
+  return undefined;
+}
+
+function toolkit(): CryptoAdapterToolkit {
+  return {
+    unique: (prefix) => `${prefix}-1`,
+    byteLength,
+    dataType: (value) => typeof value,
+    fingerprint: () => 'v2:opaque-fingerprint',
+    argument: (index, role, value, replaceable, retained, summary) => ({
+      index,
+      role,
+      dataType: typeof value,
+      byteLength: byteLength(value),
+      replaceable,
+      retained,
+      summary,
+    }),
+    collectEvidence: (value, path) => [{
+      path,
+      fingerprint: `fingerprint:${String(value)}`,
+      encoding: 'text',
+      byteLength: byteLength(String(value)) || 0,
+    }],
+    defaultOutputEvidence: () => [],
+    defaultAdaptInput: (value) => value,
+    bytesForInput: (value) => value instanceof Uint8Array ? value : undefined,
+    bytesToBase64: (value) => `base64:${Array.from(value).join(',')}`,
+  };
+}
+
+describe('page crypto adapters', () => {
+  it('keeps the UI catalog separate and safely falls back for unknown adapter IDs', () => {
+    expect(cryptoAdapterLabel('webcrypto')).toBe('WebCrypto');
+    expect(cryptoAdapterLabel('vendor-suite.v2')).toBe('vendor-suite.v2');
+  });
+
+  it('describes WebCrypto input roles and state without reading key material', () => {
+    const subtlePrototype = { encrypt() { return Promise.resolve(new ArrayBuffer(0)); } };
+    const subtle = Object.create(subtlePrototype) as SubtleCrypto;
+    const operations = webCryptoAdapter.discover({
+      window: { crypto: { subtle } } as unknown as Window,
+      crypto: { subtle } as Crypto,
+    });
+    const encrypt = operations.find((item) => item.operation === 'encrypt');
+    const key = { type: 'secret' } as CryptoKey;
+    const plan = encrypt?.describe(subtle, [
+      { name: 'AES-GCM', iv: new Uint8Array(12), tagLength: 128 },
+      key,
+      new Uint8Array([1, 2, 3]),
+    ], toolkit());
+
+    expect(plan?.crypto).toMatchObject({
+      adapterId: 'webcrypto',
+      providerKind: 'native',
+      family: 'symmetric',
+      operation: 'encrypt',
+      algorithm: 'AES-GCM tag=128 ivBytes=12',
+      state: { model: 'receiver', phase: 'one-shot' },
+    });
+    expect(plan?.arguments.map((argument) => argument.role)).toEqual(['algorithm', 'key', 'data']);
+    expect(plan?.arguments[2]).toMatchObject({ replaceable: true, retained: true, byteLength: 3 });
+    expect(JSON.stringify(plan)).not.toContain('secret');
+  });
+
+  it('describes CryptoJS modes and adapts bytes through the page encoder', () => {
+    const CBC = {};
+    const Pkcs7 = {};
+    const parsed: string[] = [];
+    const cryptoJs = {
+      AES: { encrypt() { return 'cipher'; } },
+      mode: { CBC },
+      pad: { Pkcs7 },
+      enc: { Base64: { parse(value: string) { parsed.push(value); return { wordArray: value }; } } },
+    };
+    const scope = { window: { CryptoJS: cryptoJs } as unknown as Window } satisfies CryptoAdapterScope;
+    const encrypt = cryptoJsAdapter.discover(scope).find((item) => item.operation === 'AES.encrypt');
+    const plan = encrypt?.describe(cryptoJs.AES, [
+      { sigBytes: 3 },
+      { sigBytes: 16 },
+      { mode: CBC, padding: Pkcs7, iv: { sigBytes: 16 } },
+    ], toolkit());
+
+    expect(plan?.crypto).toMatchObject({
+      adapterId: 'cryptojs', family: 'symmetric', operation: 'AES.encrypt',
+      mode: 'CBC', padding: 'Pkcs7', outputEncoding: 'base64',
+    });
+    expect(plan?.arguments[2].summary).toBe('mode=CBC padding=Pkcs7 ivBytes=16');
+    expect(plan?.adaptInput?.(new Uint8Array([4, 5, 6]))).toEqual({ wordArray: 'base64:4,5,6' });
+    expect(parsed).toEqual(['base64:4,5,6']);
+  });
+
+  it('retains only bounded JSEncrypt receiver metadata', () => {
+    const prototype = {
+      encrypt() { return 'ciphertext'; },
+      decrypt() { return 'plaintext'; },
+      sign() { return 'signature'; },
+      verify() { return true; },
+    };
+    const instance = {
+      key: {
+        n: { bitLength: () => 2048, toString: () => 'public-modulus' },
+        e: 65_537,
+      },
+    };
+    const encrypt = jsEncryptAdapter.discover({
+      window: { JSEncrypt: { prototype } } as unknown as Window,
+    }).find((item) => item.operation === 'encrypt');
+    const plan = encrypt?.describe(instance, ['plain'], toolkit());
+
+    expect(plan?.crypto).toMatchObject({
+      adapterId: 'jsencrypt', family: 'asymmetric', algorithm: 'RSA',
+      state: { model: 'receiver', phase: 'one-shot' },
+      key: { kind: 'public', bits: 2048, fingerprint: 'v2:opaque-fingerprint' },
+    });
+    expect(plan?.arguments[0]).toMatchObject({ role: 'data', replaceable: true, retained: true });
+    expect(JSON.stringify(plan?.crypto)).not.toContain('public-modulus');
+  });
+
+  it('describes sm-crypto SM2/SM3/SM4 using one bounded contract', () => {
+    const smCrypto = {
+      sm2: {
+        doEncrypt: () => 'cipher',
+        doDecrypt: () => 'plain',
+        doSignature: () => 'signature',
+        doVerifySignature: () => true,
+      },
+      sm3: () => 'digest',
+      sm4: { encrypt: () => 'cipher', decrypt: () => 'plain' },
+    };
+    const operations = smCryptoAdapter.discover({ window: { ...smCrypto } as unknown as Window });
+    const sm4 = operations.find((item) => item.operation === 'sm4.encrypt');
+    const plan = sm4?.describe(smCrypto.sm4, [
+      'plain',
+      '00112233445566778899aabbccddeeff',
+      { mode: 'cbc', padding: 'pkcs#7', iv: '0102030405060708' },
+    ], toolkit());
+    const verify = operations.find((item) => item.operation === 'sm2.verify')?.describe(
+      smCrypto.sm2, ['plain', 'signature', 'public-key', { hash: true }], toolkit(),
+    );
+
+    expect(operations).toHaveLength(7);
+    expect(plan?.crypto).toMatchObject({
+      adapterId: 'sm-crypto', family: 'symmetric', algorithm: 'SM4', mode: 'cbc', padding: 'pkcs#7',
+      state: { model: 'stateless', phase: 'one-shot' },
+      key: { kind: 'secret', bits: 128, fingerprint: 'v2:opaque-fingerprint' },
+    });
+    expect(plan?.arguments[2].summary).toContain('ivBytes=16');
+    expect(verify?.callableKind).toBe('verify');
+    expect(verify?.arguments.map((item) => item.role)).toEqual(['data', 'signature', 'key', 'options']);
+    expect(JSON.stringify(plan?.crypto)).not.toContain('00112233445566778899aabbccddeeff');
+  });
+
+  it('discovers node-forge stateful cipher sessions without treating them as replay-safe one-shot calls', () => {
+    const outputBuffer = {
+      bytes: () => 'cipher-bytes',
+      length: () => 12,
+      getBytes: () => 'cipher-bytes',
+    };
+    const session = {
+      output: outputBuffer,
+      start: () => undefined,
+      update: () => undefined,
+      finish: () => true,
+    };
+    const forge = {
+      cipher: { createCipher: () => session, createDecipher: () => session },
+      hmac: { create: () => ({ start() {}, update() {}, digest: () => outputBuffer }) },
+      pki: {
+        publicKeyFromPem: () => ({
+          n: { bitLength: () => 2048, toString: () => 'modulus' }, e: 65_537,
+          encrypt: (value: string) => value, verify: () => true,
+        }),
+        privateKeyFromPem: () => ({
+          n: { bitLength: () => 2048, toString: () => 'modulus' }, e: 65_537,
+          d: {}, decrypt: (value: string) => value, sign: () => 'signature',
+        }),
+      },
+      md: {
+        sha256: { create: () => ({ start() {}, update() {}, digest: () => outputBuffer }) },
+      },
+    };
+    const operations = nodeForgeAdapter.discover({ window: { forge } as unknown as Window });
+    const factory = operations.find((item) => item.operation === 'cipher.create.encrypt');
+    const factoryPlan = factory?.describe(forge.cipher, ['AES-CBC', 'secret-key'], toolkit());
+    const sessionOperations = factoryPlan?.discoverResult?.(session) || [];
+    const update = sessionOperations.find((item) => item.operation === 'cipher.encrypt.update');
+    const finish = sessionOperations.find((item) => item.operation === 'cipher.encrypt.finish');
+    const updatePlan = update?.describe(session, [outputBuffer], toolkit());
+    const finishPlan = finish?.describe(session, [], toolkit());
+
+    expect(factoryPlan?.crypto).toMatchObject({
+      adapterId: 'node-forge', family: 'symmetric', algorithm: 'AES-CBC',
+      state: { model: 'session', phase: 'create', correlationId: 'forge-session-1' },
+    });
+    expect(updatePlan?.crypto.state).toMatchObject({ model: 'stream', phase: 'update', correlationId: 'forge-session-1' });
+    expect(updatePlan?.callableKind).toBeUndefined();
+    expect(finishPlan?.outputEvidence?.(true)[0]).toMatchObject({ path: '$receiver.output' });
+    expect(sessionOperations.some((item) => item.operation === 'cipher.encrypt.output.getBytes')).toBe(true);
+  });
+
+  it('turns node-forge RSA key instances into receiver-bound direct operations without exporting PEM', () => {
+    const key = {
+      n: { bitLength: () => 2048, toString: () => 'private-modulus' },
+      e: 65_537,
+      encrypt: (value: string) => `cipher:${value}`,
+      verify: () => true,
+    };
+    const forge = { pki: { publicKeyFromPem: () => key } };
+    const factory = nodeForgeAdapter.discover({ window: { forge } as unknown as Window })
+      .find((item) => item.operation === 'pki.public-key.create');
+    const plan = factory?.describe(forge.pki, ['-----BEGIN PUBLIC KEY-----raw-material'], toolkit());
+    const encrypt = plan?.discoverResult?.(key).find((item) => item.operation === 'rsa.encrypt');
+    const encryptPlan = encrypt?.describe(key, ['plain', 'RSA-OAEP'], toolkit());
+
+    expect(plan?.outputEvidence?.(key)).toEqual([]);
+    expect(encryptPlan?.callableKind).toBe('encrypt');
+    expect(encryptPlan?.crypto).toMatchObject({
+      family: 'asymmetric', algorithm: 'RSA', state: { model: 'receiver', phase: 'one-shot' },
+      key: { kind: 'public', bits: 2048, fingerprint: 'v2:opaque-fingerprint' },
+    });
+    expect(JSON.stringify(encryptPlan?.crypto)).not.toContain('raw-material');
+    expect(JSON.stringify(encryptPlan?.crypto)).not.toContain('private-modulus');
+  });
+
+  it('models a jsrsasign constructor session as create, init, update, and final stages', () => {
+    class Signature {
+      constructor(public options: { alg: string }) {}
+      init(_key: unknown) {}
+      updateString(_value: string) {}
+      sign() { return 'deadbeef'; }
+      verify(_signature: string) { return true; }
+    }
+    const JWS = {
+      sign: (_algorithm: string, _header: unknown, payload: unknown) => `jws:${String(payload)}`,
+      verify: () => true,
+      verifyJWT: () => true,
+      getJWKthumbprint: () => 'thumbprint',
+    };
+    const window = {
+      KJUR: { crypto: { Signature }, jws: { JWS } },
+      KEYUTIL: { getKey: () => ({}), getJWK: () => ({ kty: 'RSA' }), getPEM: () => 'pem' },
+    } as unknown as Window;
+    const operations = jsrsasignAdapter.discover({ window });
+    const constructor = operations.find((item) => item.operation === 'Signature.create');
+    const createPlan = constructor?.describe(undefined, [{ alg: 'SHA256withRSA' }], toolkit());
+    const instance = new Signature({ alg: 'SHA256withRSA' });
+    const stages = createPlan?.discoverResult?.(instance) || [];
+    const init = stages.find((item) => item.operation === 'Signature.init')
+      ?.describe(instance, ['-----BEGIN PRIVATE KEY-----private-material'], toolkit());
+    const update = stages.find((item) => item.operation === 'Signature.updateString')
+      ?.describe(instance, ['canonical-request'], toolkit());
+    const sign = stages.find((item) => item.operation === 'Signature.sign')
+      ?.describe(instance, [], toolkit());
+
+    expect(constructor?.invocationMode).toBe('construct');
+    expect(createPlan?.crypto).toMatchObject({
+      adapterId: 'jsrsasign', family: 'signature', algorithm: 'SHA256withRSA',
+      state: { model: 'session', phase: 'create', correlationId: 'jsrsasign-signature-1' },
+    });
+    expect(init?.crypto.state).toMatchObject({ phase: 'init', correlationId: 'jsrsasign-signature-1' });
+    expect(update?.crypto.state).toMatchObject({ phase: 'update', correlationId: 'jsrsasign-signature-1' });
+    expect(sign?.crypto.state).toMatchObject({ phase: 'final', correlationId: 'jsrsasign-signature-1' });
+    expect(sign?.callableKind).toBeUndefined();
+    expect(JSON.stringify(init?.crypto)).not.toContain('private-material');
+
+    const jwsSign = operations.find((item) => item.operation === 'JWS.sign')
+      ?.describe(JWS, ['RS256', { alg: 'RS256' }, { account: 'admin' }, 'private-key'], toolkit());
+    expect(jwsSign).toMatchObject({ inputIndex: 2, callableKind: 'sign' });
+  });
+
+  it('models jose builders as async stateful envelopes and keeps key material opaque', () => {
+    class SignJWT {
+      constructor(public payload: unknown) {}
+      setProtectedHeader(_header: unknown) { return this; }
+      setIssuedAt() { return this; }
+      sign(_key: unknown) { return Promise.resolve('header.payload.signature'); }
+    }
+    class CompactSign {
+      constructor(public payload: Uint8Array) {}
+      setProtectedHeader(_header: unknown) { return this; }
+      sign(_key: unknown) { return Promise.resolve('header.payload.signature'); }
+    }
+    class CompactEncrypt {
+      constructor(public payload: Uint8Array) {}
+      setProtectedHeader(_header: unknown) { return this; }
+      encrypt(_key: unknown) { return Promise.resolve('compact-jwe'); }
+    }
+    const jose = {
+      SignJWT, CompactSign, CompactEncrypt,
+      compactVerify: async () => ({ payload: new Uint8Array() }),
+      jwtVerify: async () => ({ payload: {} }),
+      compactDecrypt: async () => ({ plaintext: new Uint8Array() }),
+      jwtDecrypt: async () => ({ payload: {} }),
+      importJWK: async () => ({}),
+      exportJWK: async () => ({ kty: 'RSA' }),
+    };
+    const operations = joseAdapter.discover({ window: { jose } as unknown as Window });
+    const constructor = operations.find((item) => item.operation === 'SignJWT.create');
+    const createPlan = constructor?.describe(undefined, [{ account: 'admin' }], toolkit());
+    const instance = new SignJWT({ account: 'admin' });
+    const stages = createPlan?.discoverResult?.(instance) || [];
+    const header = stages.find((item) => item.operation === 'SignJWT.setProtectedHeader')
+      ?.describe(instance, [{ alg: 'RS256' }], toolkit());
+    const final = stages.find((item) => item.operation === 'SignJWT.sign')
+      ?.describe(instance, [{ type: 'private', algorithm: { name: 'RSA-PSS' }, secret: 'never-export' }], toolkit());
+
+    expect(constructor?.invocationMode).toBe('construct');
+    expect(createPlan?.crypto.state).toMatchObject({ model: 'async-ready', phase: 'create', correlationId: 'jose-session-1' });
+    expect(header?.crypto).toMatchObject({ algorithm: 'RS256', state: { phase: 'update', correlationId: 'jose-session-1' } });
+    expect(final?.crypto).toMatchObject({
+      family: 'signature', algorithm: 'RS256', key: { kind: 'private' },
+      state: { phase: 'final', correlationId: 'jose-session-1' },
+    });
+    expect(stages.find((item) => item.operation === 'SignJWT.sign')?.resultMode).toBe('promise');
+    expect(final?.callableKind).toBeUndefined();
+    expect(JSON.stringify(final?.crypto)).not.toContain('never-export');
+    expect(operations.find((item) => item.operation === 'CompactVerify.verify')?.resultMode).toBe('promise');
+  });
+});

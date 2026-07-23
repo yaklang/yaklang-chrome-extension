@@ -157,7 +157,7 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, yakIcon
         {expanded && <>
           <div className="floating-panel__title">
             <strong>Yakit Browser Agent</strong>
-            <span>{activeProfile?.name || (state.activeProxyId === 'rules' ? '按规则分流' : '浏览器工具')}</span>
+            <span>{activeProfile?.name || (state.activeProxyId === 'auto' ? '自动切换' : '浏览器工具')}</span>
           </div>
           <GripVertical className="floating-panel__grip" size={15} aria-hidden="true" />
           {side === 'right' ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
@@ -182,7 +182,7 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, yakIcon
                     <span><strong>{profile.name}</strong><small>{profile.kind === 'fixed_servers' ? `${profile.host}:${profile.port}` : profile.kind}</small></span>
                   </button>
                 ))}
-                {state.proxyRules.length > 0 && <button className={state.activeProxyId === 'rules' ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.rules.apply')))}><i className="floating-radio" /><span><strong>按规则分流</strong><small>{state.proxyRules.filter((rule) => rule.enabled).length} 条启用规则</small></span></button>}
+                <button className={state.activeProxyId === 'auto' ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.auto.apply')))}><i className="floating-radio" /><span><strong>自动切换</strong><small>{state.proxyRules.filter((rule) => rule.enabled).length} 条手动 · {state.proxyRuleSources.filter((source) => source.enabled).length} 个订阅</small></span></button>
               </div>
             </TabsContent>
 

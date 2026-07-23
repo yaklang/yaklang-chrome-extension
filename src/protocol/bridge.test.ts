@@ -44,4 +44,21 @@ describe('Bridge v3 protocol', () => {
     expect(() => parseCapabilityParams('browser.eval', { code: 'document.title' })).toThrow('mode');
     expect(() => parseBridgeEnvelope('x'.repeat(BRIDGE_MAX_MESSAGE_BYTES + 1))).toThrow('16 MiB');
   });
+
+  it('accepts exact Worker boundary handles for remote deep capture', () => {
+    expect(parseCapabilityParams('browser.deep_capture.start', {
+      matcher: {
+        kind: 'boundary', eventKind: 'worker', operation: 'worker.postMessage', wrapperHandleId: 'boundary-wrapper-1',
+      },
+    })).toMatchObject({ matcher: { kind: 'boundary', eventKind: 'worker' } });
+  });
+
+  it('accepts automatic selected-frame capture and rejects the legacy expression contract', () => {
+    expect(parseCapabilityParams('browser.callable.create', {
+      source: 'deep-capture', strategy: 'selected-frame', callFrameId: 'frame-1', name: 'Envelope',
+    })).toMatchObject({ strategy: 'selected-frame', callFrameId: 'frame-1' });
+    expect(() => parseCapabilityParams('browser.callable.create', {
+      source: 'deep-capture', callFrameId: 'frame-1', name: 'Envelope', functionExpression: 'buildEnvelope',
+    })).toThrow();
+  });
 });

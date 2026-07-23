@@ -1,0 +1,1 @@
+export const PAGE_CALLABLE_REGISTRY_KEY = '__YAKIT_PAGE_CALLABLES_V2__' as const;

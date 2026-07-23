@@ -8,6 +8,8 @@ import type {
   BridgePairingStatus,
   BridgePublicKey,
   BrowserCookie,
+  BrowserDeepCaptureMatcher,
+  BrowserDeepCaptureStatus,
   CookieInput,
   CookieImportResult,
   CookieRemoveInput,
@@ -20,8 +22,15 @@ import type {
   NetworkCaptureStatus,
   NetworkRequestExport,
   NetworkRequestRecord,
-  PageObservationRecord,
-  PageObservationStatus,
+  BrowserPageCallable,
+  BrowserPageCallableExecution,
+  BrowserPageCallableTransaction,
+  BrowserRecordingSnapshot,
+  BrowserRecordingStatus,
+  BrowserTransformExecuteInput,
+  BrowserTransformExecution,
+  BrowserTransformProfile,
+  BrowserTransformProfileInput,
   PageContext,
   PageContextOptions,
   PageEvalRequest,
@@ -33,10 +42,14 @@ import type {
   ProxyProfile,
   ProxyConfiguration,
   ProxyRule,
+  ProxyRulePage,
   ProxyRulePreview,
-  ProxyRuleStats,
+  ProxyRuleSource,
+  ProxyRuleSourceInput,
   ProxyRoutingSettings,
-  UserAgentRule,
+  UserAgentProfile,
+  UserAgentProfileInput,
+  UserAgentResolution,
   YakPocGenerateResult,
   YakitFuzzerOpenResult,
 } from './models';
@@ -52,13 +65,18 @@ export interface ExtensionRequestMap {
   'proxy.switch': { input: { id: string }; output: ExtensionState };
   'proxy.rule.save': { input: ProxyRule; output: ExtensionState };
   'proxy.rule.delete': { input: { id: string }; output: ExtensionState };
-  'proxy.rules.apply': { input: undefined; output: ExtensionState };
+  'proxy.auto.apply': { input: undefined; output: ExtensionState };
   'proxy.rules.preview': { input: { url: string }; output: ProxyRulePreview };
-  'proxy.rules.compile': { input: undefined; output: string };
+  'proxy.rules.compile': { input: undefined; output: { revision: string; pacScript: string; compiledBytes: number; manualRuleCount: number; sourceRuleCount: number; warnings: string[] } };
   'proxy.rules.reorder': { input: { ids: string[] }; output: ExtensionState };
   'proxy.rules.settings': { input: ProxyRoutingSettings; output: ExtensionState };
-  'proxy.rules.stats': { input: undefined; output: ProxyRuleStats[] };
-  'proxy.rules.stats.clear': { input: undefined; output: undefined };
+  'proxy.source.save': { input: ProxyRuleSourceInput; output: ProxyRuleSource };
+  'proxy.source.refresh': { input: { id: string }; output: ExtensionState };
+  'proxy.source.delete': { input: { id: string }; output: ExtensionState };
+  'proxy.sources.reorder': { input: { ids: string[] }; output: ExtensionState };
+  'proxy.source.rules': { input: { id: string; offset: number; limit: number; query?: string }; output: ProxyRulePage };
+  'proxy.site.route': { input: { url: string; profileId: string }; output: ExtensionState };
+  'proxy.site.route.clear': { input: { url: string }; output: ExtensionState };
   'proxy.auth.set': { input: { profileId: string; password: string }; output: { configured: boolean } };
   'proxy.auth.status': { input: { profileId: string }; output: { configured: boolean } };
   'proxy.config.export': { input: undefined; output: ProxyConfiguration };
@@ -69,9 +87,12 @@ export interface ExtensionRequestMap {
   'cookie.removeMany': { input: { cookies: CookieRemoveInput[] }; output: { removed: number; failed: number } };
   'cookie.import': { input: { url: string; format: CookieTransferFormat; text: string }; output: CookieImportResult };
   'cookie.export': { input: { url: string; format: CookieTransferFormat; includeValues: boolean }; output: string };
-  'ua.save': { input: UserAgentRule; output: ExtensionState };
-  'ua.delete': { input: { id: string }; output: ExtensionState };
-  'ua.apply': { input: undefined; output: ExtensionState };
+  'ua.catalog': { input: undefined; output: UserAgentProfile[] };
+  'ua.resolve': { input: { url: string }; output: UserAgentResolution };
+  'ua.profile.save': { input: UserAgentProfileInput; output: UserAgentProfile };
+  'ua.profile.delete': { input: { id: string }; output: ExtensionState };
+  'ua.site.apply': { input: { url: string; profileId: string }; output: ExtensionState };
+  'ua.site.reset': { input: { url: string }; output: ExtensionState };
   'context.capture': { input: PageContextOptions & { tabId?: number; frameId?: number; documentId?: string }; output: PageContext };
   'context.node.inspect': { input: { captureId: string; nodeId: string; tabId?: number; frameId?: number; documentId?: string }; output: PageNodeDetails };
   'context.node.action': { input: { captureId: string; nodeId: string; action: PageNodeAction; value?: string; tabId?: number; frameId?: number; documentId?: string }; output: PageNodeActionResult };
@@ -94,11 +115,29 @@ export interface ExtensionRequestMap {
   'network.capture.send': { input: { id: string; tabId?: number; frameId?: number; documentId?: string }; output: YakitFuzzerOpenResult };
   'network.capture.poc': { input: { id: string; tabId?: number; frameId?: number; documentId?: string }; output: YakPocGenerateResult };
   'network.capture.analysis': { input: { id: string; tabId?: number; frameId?: number; documentId?: string }; output: BrowserRequestAnalysisBundle };
-  'observation.start': { input: { tabId?: number; frameId?: number; documentId?: string; captureValues?: boolean; maxEntries?: number; maxValueBytes?: number }; output: PageObservationStatus };
-  'observation.status': { input: { tabId?: number; frameId?: number; documentId?: string }; output: PageObservationStatus };
-  'observation.list': { input: { tabId?: number; frameId?: number; documentId?: string; limit?: number }; output: PageObservationRecord[] };
-  'observation.clear': { input: { tabId?: number; frameId?: number; documentId?: string }; output: PageObservationStatus };
-  'observation.stop': { input: { tabId?: number; frameId?: number; documentId?: string }; output: PageObservationStatus };
+  'recording.start': { input: { tabId?: number; frameId?: number; documentId?: string; captureValues?: boolean; maxEntries?: number; maxValueBytes?: number }; output: BrowserRecordingSnapshot };
+  'recording.status': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingStatus };
+  'recording.get': { input: { tabId?: number; frameId?: number; documentId?: string; limit?: number }; output: BrowserRecordingSnapshot };
+  'recording.clear': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
+  'recording.stop': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
+  'callable.create': { input: ({ tabId?: number; frameId?: number; documentId?: string } & (
+    | { source: 'recording'; callHandleId: string; name: string }
+    | { source: 'deep-capture'; strategy: 'selected-frame'; callFrameId: string; name?: string }
+    | { source: 'deep-capture'; strategy: 'request-transaction'; callFrameId: string; name?: string; transaction: BrowserPageCallableTransaction }
+    | { source: 'deep-capture'; strategy: 'expression'; callFrameId: string; name: string; functionExpression: string }
+  )); output: BrowserPageCallable };
+  'callable.list': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserPageCallable[] };
+  'callable.execute': { input: { tabId?: number; frameId?: number; documentId?: string; callableId: string; args: unknown[] }; output: BrowserPageCallableExecution };
+  'callable.delete': { input: { tabId?: number; frameId?: number; documentId?: string; callableId: string }; output: BrowserPageCallable[] };
+  'deep.capture.start': { input: { tabId?: number; frameId?: number; documentId?: string; matcher: BrowserDeepCaptureMatcher }; output: BrowserDeepCaptureStatus };
+  'deep.capture.status': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
+  'deep.capture.keepalive': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
+  'deep.capture.resume': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
+  'deep.capture.detach': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
+  'transform.profile.list': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserTransformProfile[] };
+  'transform.profile.save': { input: BrowserTransformProfileInput; output: BrowserTransformProfile };
+  'transform.profile.delete': { input: { id: string }; output: BrowserTransformProfile[] };
+  'transform.execute': { input: BrowserTransformExecuteInput; output: BrowserTransformExecution };
   'audit.list': { input: { limit?: number }; output: AuditEvent[] };
   'audit.clear': { input: undefined; output: undefined };
   'agent.runtime.get': { input: undefined; output: AgentRuntime };

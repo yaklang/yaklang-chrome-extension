@@ -2,7 +2,7 @@
 
 The public Firefox artifact is `pnpm build:firefox:amo`, producing Firefox MV3 in `.output/firefox-mv3-store`.
 
-Mozilla's current Add-on Policies reserve `userScripts` for user-script managers. Yakit Browser Agent is not marketed as one, so the AMO artifact does not request `userScripts`, does not package `page-main-world.js`, and does not advertise `browser.invoke` or `browser.eval`. It retains structured context, document-bound node commands, request capture, observation, Cookie/UA/proxy tools and human handoff. Local or enterprise Firefox builds can use the injected adapter outside the public AMO channel.
+Mozilla's current Add-on Policies reserve `userScripts` for user-script managers. Yakit Browser Agent is not marketed as one, so the AMO artifact does not request `userScripts`, does not package `page-main-world.js`, and does not advertise `browser.invoke` or `browser.eval`. Firefox packages also do not request Chromium's `debugger` permission or advertise Deep Capture/business-closure capabilities. They retain structured context, document-bound node commands, request capture, browser recording and recorded-call page functions, Cookie/UA/proxy tools and human handoff. Local or enterprise Firefox builds can use the injected page-execution adapter outside the public AMO channel, but Deep Capture remains Chromium-only.
 
 The manifest targets Firefox 140+ and declares required built-in data consent categories: authentication information, browsing activity, website activity and website content. There is no remote technical/user-interaction telemetry; operational metrics stay local until the user exports a diagnostics file.
 

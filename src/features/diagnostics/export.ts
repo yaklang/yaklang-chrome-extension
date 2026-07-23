@@ -30,7 +30,12 @@ export async function createDiagnosticsBundle(bridge: BridgeStatus): Promise<Dia
     state: {
       proxyProfiles: state.proxyProfiles.length,
       proxyRules: state.proxyRules.length,
-      userAgentRules: state.userAgentRules.length,
+      proxyRuleSources: state.proxyRuleSources.length,
+      proxySourceRules: state.proxyRuleSources.reduce((total, source) => total + source.supportedRuleCount, 0),
+      proxyCompiledBytes: state.proxyRuntime.compiledBytes,
+      proxyConfigurationDirty: state.proxyRuntime.dirty,
+      customUserAgentProfiles: state.customUserAgentProfiles.length,
+      userAgentAssignments: state.userAgentAssignments.length,
       floatingPanelEnabled: state.floatingPanel.enabled,
       activeGrant: Boolean(state.activeGrant),
       activeGrantTargets: state.activeGrant?.targets.length || 0,

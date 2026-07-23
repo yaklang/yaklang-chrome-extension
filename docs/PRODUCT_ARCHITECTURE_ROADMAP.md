@@ -1,7 +1,7 @@
 # Yakit Browser Agent 产品与架构路线
 
-> 状态：Phase 1-4 源码、构建、测试与审核产物已完成；仅剩外部账号、签名与商店人工审核
-> 更新时间：2026-07-17
+> 状态：Phase 1-4 生产基线已完成；前端密码通用化 Phase 3.2 的 G0-G3.5 已实施，G4-G5 按真实样本继续；外部分发仍受账号、签名与商店人工审核约束
+> 更新时间：2026-07-21
 > 适用仓库：`yaklang-chrome-extension`、Yak `common/browser`/`common/yak/yakurl` 与 Yakit 浏览器集成页
 
 ## 0. 2026-07-17 实施快照
@@ -18,14 +18,14 @@
 - background 状态写入串行化，避免并发 `get -> modify -> set` 丢更新；
 - Bridge v3 使用 `engine challenge -> extension auth -> hello_ack`，以双方 P-256 身份签名绑定 extension Origin、installation、engine、connection、session、task 与 grant；
 - Yak gRPC 默认托管 loopback Bridge；Yakit 复用 `RequestYakURL` 的 `browser-extension://` schema 完成配对窗口、审批、重命名和撤销，没有增加成组 gRPC RPC；
-- Bridge 运行时支持多浏览器同时在线并按 `deviceId` 隔离路由；Yakit 点击设备行可进入能力调用/Yak 脚本工作台，单一 `ExecuteBrowserExtensionTask` 流式 RPC 负责 schema 分发、日志、结果、取消和错误回程；
+- Bridge 运行时支持多浏览器同时在线并按 `deviceId` 隔离路由；Yakit 点击设备行默认进入包含录制与深度捕获的浏览器现场工作台，能力调用/Yak 脚本作为高级模式；单一 `ExecuteBrowserExtensionTask` 流式 RPC 负责 schema 分发、日志、结果、取消和错误回程；
 - 浏览器 Yak 任务在拥有 Bridge 的 gRPC 进程内执行，请求级注入选中设备的 `browser.ExtensionCall`，并限制脚本体积、并发、超时、单事件和总输出；不再借用会 fork 子进程的通用 Exec Yak 链路；
 - 插件与 Yakit 展示同一六位校验码，审批后自动连接；不再配置、复制或轮换 bearer token，设备撤销会立即断开当前会话；
 - 页面执行抽象为 Chrome User Scripts MAIN、受管 injected MAIN fallback 与 Firefox AMO invoke-only 渠道；
 - 默认 production/store 构建使用 User Scripts，物理移除 `page-main-world.js`；enterprise 使用 User Scripts 优先并保留 injected fallback，dev 与 Firefox MV2 保留 injected bridge；
-- 常驻 content script 从约 480KB 降到 Store 约 10.4 KiB；React 浮动工作台仅在展开时加载；
+- 常驻 content script 从约 480KB 降到 Store 约 11.1 KiB；React 浮动工作台仅在展开时加载；
 - Chrome Store/User Scripts 与 injected bridge 均通过真实 Chromium E2E；
-- 构建预算、商店执行策略和资源暴露策略已经加入自动审计。
+- content/background/MAIN world/总包体积继续作为可观测的参考指标，但不再阻断构建；商店执行策略、权限和资源暴露策略仍由自动审计硬性校验。
 - grant target 已绑定 `tabId + frameId + documentId + origin`，同源刷新返回 `stale_document`，跨来源导航返回 `origin_changed`；
 - Bridge 已支持 cancel、8 请求并发上限、重复 ID 拒绝、16 MiB 收发上限和断线清理；
 - 人工接管具备 `waiting_for_user -> completed/cancelled` 状态、三处 UI 提示和扩展到 Yak 的事件回程；
@@ -40,13 +40,16 @@
 - open Shadow DOM 遍历、认证信号、context diff 与登录态工作区已经完成，并通过真实 Chromium 节点写入/点击测试。
 - main/同源/跨源 frame inventory、显式 frame 授权与跨 frame context 已完成；
 - IndexedDB database/store/key 概况、CacheStorage 名称清单和 SPA history/fragment 生命周期已完成，数据库与 Cache 值不会被采集。
-- Fetch/XHR/Form/WebSocket/WebCrypto/CryptoJS 独立 MAIN-world 观测器、敏感值独立 scope、Yak PoC 与无值 AI 分析上下文已完成；
+- 交互/Fetch/XHR/Form/Beacon/WebSocket/Worker/SharedWorker/MessagePort/统一密码调用/转换独立 MAIN-world 录制器、业务 Trace、每次录制随机加盐的值关联、文档绑定页面函数、敏感值独立 scope、Yak PoC 与无值 AI 分析上下文已完成；密码调用已收敛为开放但有界的统一 `crypto` 协议和 adapter registry，覆盖 WebCrypto、CryptoJS、JSEncrypt、sm-crypto 与 node-forge；
+- Chromium `chrome.debugger` 深度捕获、一次性函数/请求断点、两阶段 stack/scope 采集、45 秒自动恢复、页面闭包运行时适配器与 Options/Yakit 工作台已完成；Firefox 明确不声明该能力；
+- 浏览器明文网关已完成：插件提供文档绑定的多步 request/response 页面函数链，Yak Web Fuzzer 在发送前加密/签名、响应后解密，Yakit 保持明文编辑并提供明文/线上报文对照；失败不会回退发送明文；
 - Cookie 三格式导入导出、UA 请求头边界、PAC 分流/认证/冲突/统计已完成；
+- Popup 已改为固定图标 rail：概览、代理、Cookie Editor、User-Agent 四个模块保持稳定位置；顶部仅保留 Yak SVG、当前页面和带 Tooltip 的引擎状态点。Cookie Editor 与 User-Agent 面向当前标签页提供快速操作：敏感值默认隐藏、显式显示、当前站点新增/编辑/删除 Cookie，以及内置/自定义 UA 预设的应用、刷新和恢复默认；Options 的“常用工具”分组承载完整 Cookie 清单、导入导出、CHIPS 属性、站点绑定和自定义预设管理；
 - Bridge v3 已支持 512 KiB 阈值分片、16 MiB 总上限、心跳延迟、设备签名认证和逻辑 session 恢复；
 - expression/program Eval 独立 scope、Agent session action timeline 与暂停/恢复/撤销已完成；
 - 任务型 Overview、320/390px 导航、站点策略/活动任务/全屏/快捷展开悬浮面板已完成；
 - Native Host 可执行程序、Linux/macOS/Windows 安装器、企业 managed policy、本地指标、脱敏诊断、权限/隐私/Limited Use/商店审核包已完成；
-- Vitest 23 项、四渠道构建审计、Store/Enterprise Chromium E2E、Service Worker 重启验证、Native Messaging v3 真实链路与 Yak Go 确定性包测试已完成。
+- Vitest 116 项、四渠道构建与 fixture 泄漏审计、Store/Enterprise Chromium E2E、Trace 精确/通道关联、跨页面录制与浏览器后退、停止后页面函数复跑、JSEncrypt RSA receiver 保真回放与 `form.data` 自动 Profile、真实 AES-GCM/HMAC 闭包捕获、AES + RSA 请求事务与独立服务端验签、自动共同祖先捕获与参数级明文网关、sm-crypto/node-forge 独立服务端验收、随机 ESM + WASM 闭包和 Worker holdout、明文网关双向转换与服务端验证、Service Worker 重启验证、Native Messaging v3 真实链路与 Yak Go 确定性包测试已完成。
 
 外部发布动作不属于源码可自动完成的状态：开发者账号、签名证书、稳定隐私政策 URL、Windows/macOS/Linux 真机签名包、Chrome Web Store/AMO 上传、审查往返与批准。执行清单位于 `docs/store-review/RELEASE_CHECKLIST.md`。
 
@@ -56,11 +59,12 @@
 
 - WXT、React、Chrome MV3 与 Firefox 构建链路已经建立；
 - Popup、Options 和网页悬浮面板使用统一的品牌与 UI 体系；
+- Popup 负责 1-2 步完成当前标签页的高频动作，Options 负责可搜索、可批量、可审计的深度管理；两者共用同一 runtime request map 和 background capability handler，不复制浏览器 API 逻辑；
 - Yak/Yakit 原始品牌资产已经恢复；
 - 代理、Cookie、User-Agent、页面上下文和 Bridge 已经形成基础能力；
 - Chrome Store User Scripts、Enterprise User Scripts + injected fallback 与 Firefox AMO invoke-only 发布边界已经物理分包；
 - Bridge v3、Yakit 配对控制面、Native Host、task/grant/session 身份和授权有效期已经打通；
-- 只读、表达式 Eval、程序 Eval、敏感网络与观测值分别授权；
+- 只读、表达式 Eval、程序 Eval、敏感网络、录制值预览、页面函数、调试读取/控制与页面函数执行分别授权；
 - 扫码、MFA、CAPTCHA 接管和 Agent 暂停/恢复/撤销已经形成可观察状态机；
 - 生产剩余风险已经收敛为外部签名、真机兼容与商店审核，而不是未实现的核心架构。
 
@@ -426,7 +430,7 @@ Frames and shadow roots
 Authentication signals
 Storage inventory
 Network request summary
-Crypto/signing observations
+Crypto/signing recording and page callables
 Relevant excerpts on demand
 ```
 
@@ -454,7 +458,7 @@ captureId + documentId + frameId + nodeId
 
 ### 6.1 浏览器请求到 Yakit 工作流
 
-浏览器请求到 Yakit 的生产链路已经闭环：`webRequest` 捕获 Fetch/XHR/Form navigation，用户显式开启敏感字段后生成 HTTP/1.1 重放包，并通过带回执的 Bridge 在 Yakit 中打开 Web Fuzzer、生成可运行 Yak PoC，或生成不含认证值的 AI 分析上下文。AI Agent 可结合附近的 WebCrypto/CryptoJS/WebSocket 观测分析鉴权、签名、重放和对象级越权风险。
+浏览器请求到 Yakit 的生产链路已经闭环：`webRequest` 捕获 Fetch/XHR/Form navigation，用户显式开启敏感字段后生成 HTTP/1.1 重放包，并通过带回执的 Bridge 在 Yakit 中打开 Web Fuzzer、生成可运行 Yak PoC，或生成不含认证值的 AI 分析上下文。AI Agent 可结合关联 Trace 中统一建模的 WebCrypto/CryptoJS/JSEncrypt/sm-crypto/node-forge 密码事件、Worker/MessagePort 通道和 WebSocket 事件分析鉴权、签名、重放和对象级越权风险。
 
 优先完成：
 
@@ -468,18 +472,31 @@ captureId + documentId + frameId + nodeId
 
 这是浏览器插件与 Yakit 结合最直接的产品价值。
 
-### 6.2 前端加密与签名观测
+### 6.2 浏览器现场、前端加密与页面函数
 
-在明确授权期间临时观测：
+这部分不再是平铺的 Hook 日志，而是围绕一次真实业务操作组织：
 
-- `fetch` / XHR；
-- WebSocket；
-- `crypto.subtle`；
-- 常见 CryptoJS；
-- 请求签名前后的字段；
-- 调用栈和脚本来源。
+```text
+点击 / 提交
+    -> 业务 Trace
+    -> 页面转换 / WebCrypto / CryptoJS / JSEncrypt / sm-crypto / node-forge
+    -> Fetch / XHR / WebSocket
+    -> 精确值关联
+    -> 保留页面调用句柄
+    -> 用新输入验证页面函数
+```
 
-上述能力已经通过独立 WXT MAIN-world entrypoint 落地。观测器使用最多 200 条的有界 ring buffer，默认只记录算法、方向、大小、调用栈和脚本来源；短时值预览需要独立敏感 scope，授权到期、撤销或用户停止时恢复原始页面 API 并销毁预览。
+独立 `page-recorder-main-world.js` 已覆盖 click/submit、Fetch/XHR/Form/Beacon、WebSocket、Worker/SharedWorker/MessagePort、统一密码 adapter 和 Base64 编解码。WebCrypto、CryptoJS、JSEncrypt、sm-crypto 与 node-forge 不再是不同事件类型，而是使用同一 `crypto` envelope；库、算法族、调用名、padding、编码、状态 phase/correlation 和有界 key 元数据由 adapter 提供。默认不返回原始值，只发送路径、大小、编码和每个文档随机加盐的指纹；早期输出和后续输入指纹相同才建立 `exact` link，跨异步消息只建立明确标注的 `correlated` channel link。短时值预览需要 `browser.recording.sensitive.read`，单值最多 8 KiB。用户发起的录制现在是标签页/Frame 级 Session：完整跳转、刷新、历史前进后退、SPA History 与 fragment 都成为 Trace 事件；旧文档片段封存在扩展专属 `storage.session`，新文档观察器沿用 Session 身份和全局顺序继续录制。该 Session 不进入持久化存储、审计或 AI 请求分析，并在新录制、清空、标签页关闭或浏览器会话结束时删除。
+
+满足 replay eligibility 的一次调用会保留原函数、receiver、参数模板和页面内 key 对象的 opaque handle；状态型/流式调用默认作为证据，引导捕获其上层一次性业务闭包。JSEncrypt、sm-crypto 与 node-forge 只公开密钥类型、位数和本次录制加盐指纹，不导出 PEM、私钥、模数或实例。handle 同时受数量、单条 2 MiB 和总计 8 MiB 预算约束，超限调用保留元数据但不成为 callable。录制调用与深度捕获闭包都注册为统一 `BrowserPageCallable`，`browser.callable.*` 不导出密钥，只允许在同一 live document 中使用显式参数槽调用。手动停止录制会恢复页面 API，但 callable 仍可验证；完整导航后 callable 属于历史文档，BFCache 恢复时可重新使用，硬刷新或新文档则会真实销毁闭包。Grant 拥有的录制不会跨文档自动扩权。
+
+Options 与 Yakit 都使用 Session -> Trace -> 执行链/证据/页面函数的三列工作台。录制时间线与执行卡片统一为从早到晚，编号和相对时间表达执行顺序，精确值关联使用独立视觉语义，跳转卡片承担文档边界。Yakit 不新增成组 gRPC 接口，而是通过 `ExecuteBrowserExtensionTask` 的 `capability.call` schema 调用 `browser.recording.*`、`browser.callable.*` 和 `browser.transform.*`。
+
+生产级深度模式不把低层 WebCrypto primitive 当成最终能力。用户从 Trace 选择自动推断候选，插件比较多个密码来源的有界调用栈，寻找最近共同页面祖先，并通过 Chromium CDP 在最早仍保留业务栈的真实调用处暂停。后台用真实 script/function location、作用域绑定和副作用门禁唯一解析业务 frame：纯业务函数以 `selected-frame` 保存；如果该函数同时读 DOM、组装多密码字段并发出请求，则以 `request-transaction` 保留，回放时在页面内映射新明文、拦截唯一目标请求、校验预期输出并回滚 DOM，不会因为浅层副作用检查而误选外层 `onclick`。函数表达式只作为歧义场景的高级入口；暂停作用域默认只存在于当前会话，不进入 Bridge、审计或 Profile。只有用户明确生成并保存明文网关后，被选中的短时样本才会复制到 `profileId + direction` 关联的本机私有回放草稿；该草稿不进入 Bridge、Yak/AI、诊断或导出。页面恢复后，Options、Yakit 或 Yak 可用新 JSON 参数重复调用。
+
+暂停控制面只依赖 grant 身份、`webNavigation`、session 状态和 CDP，不向已暂停页面执行脚本。UI 持续 keepalive，失去控制面后 alarm 在 45 秒自动恢复页面。`browser.debugger.read`、`browser.debugger.control` 和 `browser.callable.execute` 独立授权；grant 替换、过期、撤销和标签页关闭释放其拥有的会话。完整设计和边界见 `docs/DEEP_CAPTURE_ARCHITECTURE.md`。
+
+真实验收夹具使用闭包内不可导出的 AES-GCM/HMAC key、动态 timestamp/nonce/IV、本地 `buildLoginEnvelope` 与 `openLoginResponse` 业务函数。只有捕获请求与响应闭包后，用新账号/密码生成不同随机参数，通过服务端验签解密，并将服务端密文响应还原为明文 JSON，才算完成；字符串 hash mock 不算深度能力验收。
 
 ### 6.3 登录态工作区
 
@@ -542,16 +559,22 @@ completed / cancelled / expired
 
 完整设备指纹伪装不属于当前插件承诺；如果未来引入，必须作为独立能力重新设计 scope、页面注入生命周期和浏览器兼容测试，不能与单一 UA header 规则混为一谈。
 
-### 代理规则
+### 代理与自动切换
 
-- [已完成] 优先级与拖动排序；
-- [已完成] 冲突检测；
-- [已完成] 当前 URL 命中预览；
-- [已完成] PAC 编译结果查看；
+- [已完成] 代理出口、自动切换、规则订阅三个稳定工作区；
+- [已完成] 结构化 host/URL 条件、手动规则与订阅源的确定性顺序；
+- [已完成] AutoProxy/GFWList、SwitchyOmega Conditions、域名与 hosts 列表解析；
+- [已完成] GitHub blob 转 raw、ETag/Last-Modified、定时更新、失败保留上一可用 revision；
+- [已完成] IndexedDB 512 条分块、分页读取、流式搜索与八份 PAC artifact 上限；
+- [已完成] host exact/suffix 共享 trie、正则慢路径预编译、4 MB PAC 安全预算和 50,000 域名回归测试；
+- [已完成] 当前 URL 路由解释、Popup 将当前 hostname 指定到任意固定出口或恢复自动判断、全局模式与站点规则分层、悬浮面板快切；
+- [已完成] 编译、浏览器应用与运行态提交串行化，过期下载结果丢弃；
 - [已完成] 代理认证，用户名持久化、密码仅保存在浏览器 session；
-- [已完成] JSON 导入导出，不包含代理密码；
+- [已完成] 有界 JSON 导入导出，不包含代理密码；
 - [已完成] 默认出口和 fail-open/fail-closed 行为；
-- [已完成] 规则命中统计。
+- [已完成] 移除每请求规则命中统计，PAC 成为唯一请求热路径。
+
+详细不变量与性能边界见 `docs/PROXY_ARCHITECTURE.md`。
 
 ## 8. UI/UX 改进
 
@@ -608,13 +631,16 @@ src/
     options/
     agent.content/
     page-main-world.ts
+    page-recorder-main-world.ts
 
   features/
     proxy/
     cookies/
     identity/
     page-context/
-    page-observation/
+    browser-recording/
+    deep-capture/
+    browser-transform/
     network-capture/
     grants/
     handoff/
@@ -652,6 +678,8 @@ src/
 - [已完成] Bridge envelope、extension RequestMap 与 managed policy validation；
 - [已完成] Grant scope/策略判断与 expression/program Eval serializer；
 - [已完成] Cookie URL/脱敏交换与 UA DNR 规则生成。
+- [已完成] Deep Capture matcher、adapter 参数上限与 Chromium/Firefox capability 声明。
+- [已完成] Transform profile/path/output schema、多步映射、路由匹配、原型链与 Header 注入拒绝。
 
 ### 协议测试
 
@@ -660,6 +688,8 @@ src/
 - [已完成] timeout/cancel、并发、重复 ID、payload 上限与双向 chunk；
 - [已完成] 设备审批/撤销、断线 session 恢复、task 到期/撤销与 Native Host framing；
 - [已完成] Chromium `connectNative` -> Go Host -> loopback Yak Bridge -> Bridge v3 challenge/auth/identity/heartbeat 的真实端到端验证（生产包仍为 optional permission，只有不可交互的临时测试副本预授权）。
+- [已完成] debugger read/control/adapter 独立 scope、会话所有权、暂停期无页面脚本控制面与 grant 撤销清理。
+- [已完成] transform read/manage/execute 独立 scope、profile target 越权、Web Fuzzer request/response hook 顺序与 fail-closed。
 
 ### 浏览器 E2E
 
@@ -667,6 +697,8 @@ src/
 - [已完成] Firefox MV2 injected 与 Firefox MV3 AMO invoke-only 构建/静态策略审计；
 - [已完成] CSP 严格页面、SPA、同源/跨源 iframe 与 open Shadow DOM；
 - [已完成] 页面伪造消息不扩权、Service Worker 停启保留 session、标签页关闭/导航 Eval fail-closed；
+- [已完成] WebCrypto 函数调用断点、业务 frame/scope、闭包适配器动态 nonce/IV 与服务端 HMAC/AES-GCM 验证；
+- [已完成] 明文登录请求经 document-bound profile 转为不含明文的动态线上报文，并通过独立服务端 HMAC 验签与 AES-GCM 解密；服务端 AES-GCM 密文响应经页面闭包还原；路径不匹配与隐式跨 Origin 调用失败关闭；
 - [已完成] 320px、390px 和桌面视口 UI、面板边界与资源像素/加载检查。
 
 当前容器没有 Firefox 可执行程序或 macOS/Windows 环境；Firefox 真机安装、AMO 签名包和三平台 Native Host 签名属于 `RELEASE_CHECKLIST.md` 的外部发布门禁，不能用 Chromium 模拟结果冒充通过。
@@ -698,9 +730,59 @@ src/
 - [已完成] frame/document/node 引用与显式跨 frame 授权；
 - [已完成] open Shadow DOM；
 - [已完成] IndexedDB/CacheStorage inventory；
-- [已完成] Fetch/XHR/Form/WebSocket/WebCrypto/CryptoJS 有界观测与独立敏感 scope；
+- [已完成] 交互/Fetch/XHR/Form/Beacon/WebSocket/Worker/SharedWorker/MessagePort/统一 `crypto` 事件有界录制、Trace/value/channel link 与独立敏感 scope；WebCrypto、CryptoJS、JSEncrypt、sm-crypto、node-forge 通过同一 adapter contract 接入；
+- [已完成] 标签页级录制 Session：登录跳转、刷新、历史前进后退与 SPA 路由成为有序 Trace 事件，新文档自动接续；BFCache 恢复旧函数现场，硬加载保留证据并准确标记闭包失效；
+- [已完成] 文档绑定页面函数创建、停止后复跑、刷新/撤销失效与 Options/Yakit 专用工作台；
+- [已完成] Options/Yakit 页面函数生命周期管理：统一列出来源、引用数量、删除影响与二次确认；
+- [已完成] Chromium Deep Capture、45 秒 watchdog、两阶段 stack/scope、业务闭包 callable 与 Options/Yakit 同构工作台；
+- [已完成] Deep Capture 为插件 Hook、页面函数和依赖库标记来源，默认选择页面业务帧，并支持点击展开有界作用域值/函数源码；
+- [已完成] Browser Transform Gateway：Pipeline v2 有序 DAG、多参数、多输出请求与响应转换、并发门控、Bridge 能力、Yak Web Fuzzer 原生数据面、Yakit 配置与明文/线上对照；
 - [已完成] 登录态工作区；
 - [已完成] Cookie、UA 请求头边界和代理规则完善。
+
+### Phase 3.1：自动推断 Profile 与 AI 浏览器协作
+
+- [已完成] WebCrypto / CryptoJS / JSEncrypt / sm-crypto / node-forge 参数角色、请求字段、exact value link 与 state correlation 形成统一推断证据；
+- [已完成] JSEncrypt RSA 保留真实实例 receiver 与固定参数，只公开 key 类型、位数和加盐指纹；单字段 exact link 可直接生成 Form/JSON/Header/Query 明文网关；
+- [已完成] AES/RSA/HMAC 等多个密码输出进入同一请求时合并为 request-level candidate，界面逐项展示目标字段并要求捕获上层业务 callable，避免拆分后破坏随机 key/IV/nonce 一致性；
+- [已完成] 高置信度候选在 Options / Yakit 展示证据、参数语义与缺失步骤，并可一键武装对应的深度捕获入口；
+- [已完成] 页面录制调用与深度捕获闭包合并为统一 Page Callable，不保留旧模型迁移或方法别名；
+- [已完成] Pipeline v2 使用类型化 context.read / builtin / page.call / output.write 节点，节点只能引用前序结果；
+- [已完成] JSON、FormData、URLSearchParams、form-urlencoded 与 query 建立通用字段级证据，不依赖站点 URL 或字段名称；
+- [已完成] 单条精确值链且保留调用句柄的已知加密调用可从一次录制直接生成可解释候选；
+- [已完成] Options 与 Yakit 默认使用“明文来源 → 页面能力 → 线上目标”三步引导，自动编译 form.compose、字段名、Content-Type 与底层引用；
+- [已完成] 自动把录制短时样本带入明文网关本地回放，并允许一键恢复原样本；保存网关后按 Profile/请求响应方向自动保存本机私有草稿，切换工作区或目标标签页可恢复，删除网关联动清理，且草稿不进入 Bridge、Yak/AI、诊断或导出；
+- [已完成] 多来源同步栈推断共同业务祖先，一键以后台可信 `selected-frame` 捕获完整闭包；参数名自动形成字段级 Body 映射，完整暂停作用域保持非持久化，只有用户明确保存网关时选中的短时样本可进入有界本机私有草稿；
+- [已完成] 共同业务祖先直接负责 DOM 取值与发包时自动生成 `request-transaction`，严格拦截 method/URL、保留混淆后的固定 URL 参数，并以 AES + RSA 真实服务端验签、零浏览器请求泄漏验收；
+- [待完成] 为页面内回放生成确定性或结构性断言；
+- [已完成] 低层加密调用或未知请求/消息边界可一键进入业务 frame 捕获，确定性排序页面闭包并保留完整 envelope / signature callable；
+- [待完成] Yakit AI ReAct 使用 task-bound `browser_session` 附加资源和领域工具读取页面、分析候选、驱动捕获；
+- [待完成] AI 只能返回引用现有 evidence 的候选补丁，不能直接发布任意代码；
+- [待完成] 混淆 CryptoJS、不可导出 WebCrypto key、刷新重捕获与 AI 候选补丁夹具。
+
+完整设计见 `docs/AUTO_PROFILE_INFERENCE_ARCHITECTURE.md`。
+
+### Phase 3.2：前端密码能力通用化
+
+当前统一 `crypto` event、Evidence Graph、Page Callable 与 request-level Profile compiler 已通过 global、真实 minified bundle、随机 ESM closure、Worker 和 WASM 外围业务 wrapper 验收。已知库 adapter 负责增强语义；算法未知时，请求/消息边界和业务 callable 恢复仍是最低保证。
+
+本阶段将已知库 adapter 定义为语义加速器，把请求/消息边界与业务 callable 恢复定义为最低保证：
+
+- [已完成] 记录 recorder 关闭/1,000 次小调用/10 次 1 MiB 调用/预算耗尽性能与 93 项测试基线，并加入生产源码 fixture leakage 审计；
+- [已完成] 删除封闭 provider 枚举和展示字符串函数匹配，改为有界 `adapterId + providerKind + operation + wrapperHandleId + state model`；
+- [已完成] 从 MAIN-world recorder 拆出 adapter registry、五个独立 adapter、通信边界和 retained-call 双预算基础设施，不保留旧 adapter 分支；
+- [待完成] 继续把 Fetch/XHR/Form/WebSocket、evidence/trace 与编码运行时从 MAIN-world 编排入口物理拆开；该项只改善维护边界，不阻塞已经通过的运行时通用性验收；
+- [已完成] WebCrypto、CryptoJS、JSEncrypt 迁移到同一独立 adapter contract，不保留旧分支；
+- [已完成] 增加 sendBeacon、Worker、SharedWorker、MessagePort 边界和有界同步/异步来源；
+- [已完成] 从未知请求/消息边界自动排序页面业务 frame，并允许在算法未命名时捕获完整 closure callable；
+- [已完成] 第一批高价值 adapter：sm-crypto 的 SM2/SM3/SM4 与 node-forge 的 RSA/digest/HMAC/stateful cipher；
+- [待完成] 第二批 adapter：jsrsasign 与 jose；后续按真实样本推进 libsodium.js、TweetNaCl、noble 和 OpenPGP.js；
+- [待完成] serializer/compression 使用独立 transform evidence 接入 Axios interceptor、protobuf、MessagePack 与 pako，不伪装成密码调用；
+- [已完成] 使用随机 URL、字段和函数名的 global/minified bundle/ESM closure/Worker/WASM holdout，已发布 callable 由独立服务端解密、验签或校验；
+- [已完成] 没有专用 adapter 的 ESM + WASM holdout 仅靠通用 WebCrypto 边界、业务 frame 排序和 closure 恢复完成服务端认可的重放；
+- [已完成] 录制停止后无 wrapper/timer/listener/channel context 残留，活跃录制的 CPU、输入大小、事件数和 retained memory 进入真实浏览器回归门禁。
+
+实施顺序固定为“adapter host 与协议 -> 通用边界与未知函数 -> sm-crypto/node-forge -> 其余语义 adapter”。不得用继续堆叠库名称代替通用能力。完整决策、协议草案、目录设计、库优先级、测试矩阵和完成定义见 `docs/FRONTEND_CRYPTO_GENERALIZATION_ROADMAP.md`。
 
 ### Phase 4：分发与运营
 
@@ -723,6 +805,9 @@ src/
 - User Scripts 未开启时给出明确降级和开启路径；
 - Agent 默认使用 structured commands，Eval 是最后手段；
 - 用户能看见、暂停、恢复和撤销 Agent 对浏览器的操作；
+- 深度捕获命中后控制面立即可见，不依赖暂停页面执行脚本，控制面丢失时页面在 45 秒内自动恢复；
 - 默认不记录或导出 Cookie、token、Eval 参数和页面正文；
 - Chrome Store、Enterprise User Scripts 与 Enterprise injected fallback 关键路径有真实 Chromium E2E；Firefox 真机安装/运行是发布前外部门禁，不能由 Chromium 或静态审计替代；
+- 前端加密深度能力必须通过不可导出 key、动态参数和服务端验签/解密的真实夹具，不能用固定字符串 mock 代替；
+- Web Fuzzer 启用浏览器明文网关后，request transform 任何失败都不得发送明文；UI 必须分别保留逻辑明文与实际线上报文；
 - Native Host 与 Yakit 实例身份、版本和连接状态可信。
