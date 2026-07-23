@@ -24,9 +24,12 @@ export const DEFAULT_STATE: ExtensionState = {
     },
   ],
   proxyRules: [],
+  proxyRuleSources: [],
   proxyRouting: { defaultProfileId: 'direct', failMode: 'closed' },
+  proxyRuntime: { dirty: false, compiledBytes: 0, manualRuleCount: 0, sourceRuleCount: 0, warnings: [] },
   activeProxyId: 'direct',
-  userAgentRules: [],
+  customUserAgentProfiles: [],
+  userAgentAssignments: [],
   bridge: {
     transport: 'websocket', nativeHost: 'com.yaklang.browser_agent', endpoint: 'ws://127.0.0.1:64333/extension',
     autoConnect: false, installationId: crypto.randomUUID(),
@@ -48,14 +51,42 @@ function normalizeState(value: Partial<ExtensionState>): ExtensionState {
   const routableIds = new Set(proxyProfiles.filter((profile) => ['direct', 'fixed_servers'].includes(profile.kind)).map((profile) => profile.id));
   const proxyRouting = { ...DEFAULT_STATE.proxyRouting, ...value.proxyRouting };
   if (!routableIds.has(proxyRouting.defaultProfileId)) proxyRouting.defaultProfileId = 'direct';
+  const proxyRules = (value.proxyRules || []).filter((rule) => (
+    rule && typeof rule.id === 'string' && typeof rule.name === 'string' && typeof rule.enabled === 'boolean'
+    && rule.condition && typeof rule.condition.type === 'string' && typeof rule.condition.value === 'string'
+    && routableIds.has(rule.proxyProfileId)
+  )).map((rule, order) => ({
+    ...rule,
+    order: Number.isSafeInteger(rule.order) ? rule.order : order,
+    createdAt: Number.isFinite(rule.createdAt) ? rule.createdAt : Date.now(),
+    updatedAt: Number.isFinite(rule.updatedAt) ? rule.updatedAt : Date.now(),
+  }));
+  const proxyRuleSources = (value.proxyRuleSources || []).filter((source) => (
+    source && typeof source.id === 'string' && typeof source.url === 'string'
+    && routableIds.has(source.matchProfileId) && routableIds.has(source.bypassProfileId)
+  )).map((source, order) => ({
+    ...source,
+    order: Number.isSafeInteger(source.order) ? source.order : order,
+    status: source.status || (source.revision ? 'ready' : 'idle'),
+    totalRuleCount: source.totalRuleCount || 0,
+    supportedRuleCount: source.supportedRuleCount || 0,
+    ignoredRuleCount: source.ignoredRuleCount || 0,
+    invalidRuleCount: source.invalidRuleCount || 0,
+  }));
   return {
     ...DEFAULT_STATE,
     ...value,
     version: 7,
     proxyProfiles,
-    proxyRules: (value.proxyRules || []).filter((rule) => routableIds.has(rule.proxyProfileId)).map((rule, index) => ({ ...rule, priority: rule.priority || 1_000 - index })),
+    proxyRules,
+    proxyRuleSources,
     proxyRouting,
-    userAgentRules: value.userAgentRules || [],
+    proxyRuntime: { ...DEFAULT_STATE.proxyRuntime, ...value.proxyRuntime, warnings: value.proxyRuntime?.warnings || [] },
+    activeProxyId: value.activeProxyId === 'auto' || proxyProfiles.some((profile) => profile.id === value.activeProxyId)
+      ? value.activeProxyId!
+      : 'direct',
+    customUserAgentProfiles: value.customUserAgentProfiles || [],
+    userAgentAssignments: value.userAgentAssignments || [],
     bridge: { ...DEFAULT_STATE.bridge, ...value.bridge },
     floatingPanel: {
       ...DEFAULT_STATE.floatingPanel, ...value.floatingPanel,
@@ -107,9 +138,13 @@ export async function setState(input: ExtensionState): Promise<ExtensionState> {
     browser.storage.local.set({
       [PROXY_SETTINGS_STORAGE_KEY]: {
         proxyProfiles: state.proxyProfiles, proxyRules: state.proxyRules,
-        proxyRouting: state.proxyRouting, activeProxyId: state.activeProxyId,
+        proxyRuleSources: state.proxyRuleSources, proxyRouting: state.proxyRouting,
+        proxyRuntime: state.proxyRuntime, activeProxyId: state.activeProxyId,
       },
-      [USER_AGENT_SETTINGS_STORAGE_KEY]: { userAgentRules: state.userAgentRules },
+      [USER_AGENT_SETTINGS_STORAGE_KEY]: {
+        customUserAgentProfiles: state.customUserAgentProfiles,
+        userAgentAssignments: state.userAgentAssignments,
+      },
       [BRIDGE_SETTINGS_STORAGE_KEY]: { bridge: state.bridge },
       [FLOATING_UI_STORAGE_KEY]: { floatingPanel: state.floatingPanel },
     }),

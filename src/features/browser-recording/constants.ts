@@ -1,0 +1,2 @@
+export const PAGE_RECORDER_PROTOCOL_VERSION = 9 as const;
+export const PAGE_RECORDER_REGISTRY_KEY = '__YAKIT_PAGE_RECORDER_V9__' as const;

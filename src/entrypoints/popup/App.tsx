@@ -1,32 +1,36 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Braces, Check, Cookie, ExternalLink, Network, Radio, RefreshCw,
-  ShieldCheck, UserRoundCog, X,
+  AlertTriangle, Braces, Check, Cookie, ExternalLink, Gauge, Network, Radio, RefreshCw, UserRoundCog, X,
 } from 'lucide-react';
 import { browser } from 'wxt/browser';
-import { ProductBrand } from '@/components/brand/Brand';
-import { Badge } from '@/components/ui/badge';
+import { YakMark } from '@/components/brand/Brand';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
 import { HANDOFF_REASON_LABELS, waitingHandoff } from '@/features/handoff/presentation';
-import { READ_CAPABILITY_SCOPES } from '@/protocol/capabilities';
 import { isStateStorageChange } from '@/protocol/storage';
-import type { ActiveTabInfo, BridgeStatus, ExtensionState, ProxyProfile } from '@/types/models';
+import type { ActiveTabInfo, BridgeStatus, ExtensionState, UserAgentResolution } from '@/types/models';
 import { errorMessage, request } from '@/platform/messaging/runtime';
+import { CookieQuickView } from './views/CookieQuickView';
+import { OverviewQuickView } from './views/OverviewQuickView';
+import { ProxyQuickView } from './views/ProxyQuickView';
+import { UserAgentQuickView } from './views/UserAgentQuickView';
 import './App.css';
 
-const PROXY_KIND_LABELS: Record<ProxyProfile['kind'], string> = {
-  fixed_servers: '固定代理',
-  pac_script: 'PAC Script',
-  direct: '直连',
-  system: '系统代理',
+type PopupView = 'home' | 'proxy' | 'cookies' | 'user-agent';
+
+const FULL_VIEW_TARGETS: Record<PopupView, { section: string; label: string }> = {
+  home: { section: 'overview', label: '打开完整工作台' },
+  proxy: { section: 'rules', label: '打开代理策略' },
+  cookies: { section: 'cookies', label: '打开完整 Cookie Editor' },
+  'user-agent': { section: 'user-agent', label: '打开 User-Agent 管理' },
 };
 
-function proxyDetail(profile: ProxyProfile): string {
-  return profile.kind === 'fixed_servers'
-    ? `${profile.scheme}://${profile.host}:${profile.port}`
-    : PROXY_KIND_LABELS[profile.kind];
+function engineStatusLabel(state: ExtensionState, bridge: BridgeStatus): string {
+  if (bridge.state === 'connected') return '引擎在线';
+  if (bridge.state === 'connecting') return '正在连接引擎';
+  if (bridge.state === 'negotiating') return '正在验证引擎身份';
+  if (bridge.state === 'error') return bridge.message || '引擎连接失败';
+  return state.bridge.pairedEngine ? bridge.message || '引擎离线' : '尚未配对引擎';
 }
 
 function App() {
@@ -35,6 +39,9 @@ function App() {
   const [bridge, setBridge] = useState<BridgeStatus>({ state: 'disconnected', message: '未连接引擎' });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [view, setView] = useState<PopupView>('home');
+  const [cookieCount, setCookieCount] = useState(0);
+  const [uaResolution, setUaResolution] = useState<UserAgentResolution>();
 
   const load = useCallback(async () => {
     const [nextState, nextTab, nextBridge] = await Promise.all([
@@ -45,6 +52,17 @@ function App() {
     setState(nextState);
     setTab(nextTab);
     setBridge(nextBridge);
+    if (nextTab?.url?.startsWith('http')) {
+      const [cookies, resolution] = await Promise.all([
+        request('cookie.list', { url: nextTab.url }).catch(() => []),
+        request('ua.resolve', { url: nextTab.url }).catch(() => undefined),
+      ]);
+      setCookieCount(cookies.length);
+      setUaResolution(resolution);
+    } else {
+      setCookieCount(0);
+      setUaResolution(undefined);
+    }
   }, []);
 
   useEffect(() => {
@@ -54,7 +72,7 @@ function App() {
     };
     browser.runtime.onMessage.addListener(listener);
     const onStorageChange = (changes: Record<string, unknown>) => {
-      if (isStateStorageChange(changes)) void request('state.get').then(setState).catch(() => undefined);
+      if (isStateStorageChange(changes)) void load();
     };
     browser.storage.onChanged.addListener(onStorageChange);
     return () => {
@@ -63,14 +81,21 @@ function App() {
     };
   }, [load]);
 
+  useEffect(() => {
+    if (!notice) return undefined;
+    const timer = globalThis.setTimeout(() => setNotice(''), 2_400);
+    return () => globalThis.clearTimeout(timer);
+  }, [notice]);
+
   const grantActive = Boolean(state?.activeGrant && state.activeGrant.expiresAt > Date.now() && tab && state.activeGrant.targets.some((target) => target.tabId === tab.id));
   const handoff = waitingHandoff(state?.handoff);
 
-  const run = async (task: () => Promise<void>) => {
+  const run = async (task: () => Promise<void>, success?: string) => {
     setBusy(true);
     setNotice('');
     try {
       await task();
+      if (success) setNotice(success);
     } catch (error) {
       setNotice(errorMessage(error));
     } finally {
@@ -109,90 +134,79 @@ function App() {
   }
 
   const engineBusy = bridge.state === 'connecting' || bridge.state === 'negotiating';
+  const currentHost = (() => { try { return tab?.url ? new URL(tab.url).host : ''; } catch { return ''; } })();
+  const statusLabel = engineStatusLabel(state, bridge);
+  const statusActionLabel = bridge.state === 'connected'
+    ? `${statusLabel}，点击断开`
+    : state.bridge.pairedEngine ? `${statusLabel}，点击连接` : `${statusLabel}，点击配对`;
+  const fullViewTarget = FULL_VIEW_TARGETS[view];
 
   return (
     <TooltipProvider delayDuration={350}>
       <main className="popup-shell">
         <header className="popup-header">
-          <div className="popup-brand-row">
-            <ProductBrand compact />
+          <div className="popup-header-main">
+            <Tooltip label="Yakit Browser Agent" side="bottom">
+              <span className="popup-brand-mark" role="img" aria-label="Yakit Browser Agent">
+                <YakMark />
+              </span>
+            </Tooltip>
+            <div className="popup-target">
+              <div className="popup-target-title">
+                <span className="popup-favicon">{tab?.favIconUrl ? <img src={tab.favIconUrl} alt="" /> : <Radio size={12} />}</span>
+                <strong title={tab?.title}>{tab?.title || '当前页面不可访问'}</strong>
+              </div>
+              <span className="popup-target-host" title={tab?.url}>{currentHost || '无法读取当前标签页'}</span>
+            </div>
             <div className="popup-brand-actions">
-              <Tooltip label={bridge.state === 'connected' ? '断开引擎连接' : state.bridge.pairedEngine ? '连接引擎' : '配对本机 Yakit'}>
-                <button className={`popup-engine-pill ${bridge.state}`} disabled={busy} onClick={() => void toggleEngine()}>
-                  <i />{bridge.state === 'connected' ? '引擎在线' : engineBusy ? '连接中' : state.bridge.pairedEngine ? '引擎离线' : '配对'}
+              <Tooltip label={statusActionLabel} side="bottom">
+                <button className={`popup-engine-status ${bridge.state}`} aria-label={statusLabel} disabled={busy || engineBusy} onClick={() => void toggleEngine()}>
+                  <i aria-hidden="true" />
+                  <span>{bridge.state === 'connected' ? '在线' : engineBusy ? '连接中' : state.bridge.pairedEngine ? '离线' : '配对'}</span>
                 </button>
               </Tooltip>
-              <Tooltip label="打开完整工作台">
-                <Button size="icon" variant="ghost" aria-label="打开完整工作台" onClick={() => void openTool('overview')}>
+              <Tooltip label={fullViewTarget.label} side="bottom">
+                <Button size="icon" variant="ghost" aria-label={fullViewTarget.label} onClick={() => void openTool(fullViewTarget.section)}>
                   <ExternalLink size={16} />
                 </Button>
               </Tooltip>
             </div>
           </div>
-          <div className="popup-tab-line">
-            <span className="popup-favicon">{tab?.favIconUrl ? <img src={tab.favIconUrl} alt="" /> : <Radio size={12} />}</span>
-            <span title={tab?.url}>{tab?.title || '当前页面不可访问'}</span>
-          </div>
         </header>
 
-        {handoff && <section className="popup-handoff" aria-live="assertive">
-          <AlertTriangle size={18} />
-          <div className="popup-handoff__copy">
-            <strong>{HANDOFF_REASON_LABELS[handoff.reason]}</strong>
-            <span>{handoff.message}</span>
-            <small title={handoff.target.title}>{handoff.target.title}</small>
-          </div>
-          <div className="popup-handoff__actions">
-            <Button size="sm" variant="primary" disabled={busy} onClick={() => void run(async () => setState(await request('handoff.resolve', { id: handoff.id, outcome: 'completed' })))}><Check size={14} />完成</Button>
-            <Button size="icon" variant="ghost" disabled={busy} aria-label="取消人工接管" title="取消人工接管" onClick={() => void run(async () => setState(await request('handoff.resolve', { id: handoff.id, outcome: 'cancelled' })))}><X size={15} /></Button>
-          </div>
-        </section>}
-
-        <section className={`popup-share ${grantActive ? 'is-active' : ''}`}>
-          <div className="popup-share-copy">
-            <ShieldCheck size={18} />
-            <div>
-              <strong>共享当前标签页</strong>
-              <span>{grantActive ? `只读会话 ${new Date(state.activeGrant!.expiresAt).toLocaleTimeString()} 到期` : '创建 30 分钟只读会话'}</span>
+        <div className="popup-body">
+          <nav className="popup-rail" aria-label="Popup 工具导航">
+            <div className="popup-rail-main">
+              <Tooltip label="运行概览" side="right"><button className={view === 'home' ? 'is-active' : ''} aria-label="运行概览" aria-current={view === 'home' ? 'page' : undefined} onClick={() => setView('home')}><Gauge size={18} /></button></Tooltip>
+              <Tooltip label="代理" side="right"><button className={view === 'proxy' ? 'is-active' : ''} aria-label="代理" aria-current={view === 'proxy' ? 'page' : undefined} onClick={() => setView('proxy')}><Network size={18} /></button></Tooltip>
+              <Tooltip label="Cookie Editor" side="right"><button className={view === 'cookies' ? 'is-active' : ''} aria-label="Cookie Editor" aria-current={view === 'cookies' ? 'page' : undefined} onClick={() => setView('cookies')}><Cookie size={18} /></button></Tooltip>
+              <Tooltip label="User-Agent" side="right"><button className={view === 'user-agent' ? 'is-active' : ''} aria-label="User-Agent" aria-current={view === 'user-agent' ? 'page' : undefined} onClick={() => setView('user-agent')}><UserRoundCog size={18} /></button></Tooltip>
             </div>
-          </div>
-          <Switch checked={grantActive} disabled={!tab || busy} aria-label="共享当前浏览器上下文" onCheckedChange={(checked) => void run(async () => {
-            const updated = checked
-              ? await request('grant.create', { targets: [{ tabId: tab!.id, frameId: 0 }], scopes: READ_CAPABILITY_SCOPES, durationMinutes: 30 })
-              : await request('grant.revoke');
-            setState(updated);
-          })} />
-        </section>
+            <div className="popup-rail-bottom">
+              <Tooltip label="登录态工作区" side="right"><button aria-label="打开登录态工作区" onClick={() => void openTool('context')}><Braces size={18} /></button></Tooltip>
+            </div>
+          </nav>
 
-        <section className="popup-proxy">
-          <div className="popup-section-label"><Network size={14} /><span>当前代理</span>{state.activeProxyId === 'rules' && <Badge>规则分流</Badge>}</div>
-          <div className="popup-proxy-list" role="radiogroup" aria-label="代理出口">
-            {state.proxyProfiles.map((profile) => {
-              const active = state.activeProxyId === profile.id;
-              return <button key={profile.id} role="radio" aria-checked={active} className={active ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.switch', { id: profile.id })))}>
-                <i className="popup-radio" />
-                <span><strong>{profile.name}</strong><small>{proxyDetail(profile)}</small></span>
-              </button>;
-            })}
-            {state.proxyRules.length > 0 && <button role="radio" aria-checked={state.activeProxyId === 'rules'} className={state.activeProxyId === 'rules' ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.rules.apply')))}>
-              <i className="popup-radio" />
-              <span><strong>按规则分流</strong><small>{state.proxyRules.filter((rule) => rule.enabled).length} 条启用规则</small></span>
-            </button>}
-          </div>
-        </section>
-
-        {!handoff && <nav className="popup-tools" aria-label="安全测试工具">
-          <button onClick={() => void openTool('cookies')}><Cookie size={17} /><span>Cookie</span></button>
-          <button onClick={() => void openTool('user-agent')}><UserRoundCog size={17} /><span>User-Agent</span></button>
-          <button onClick={() => void openTool('context')}><Braces size={17} /><span>登录态</span></button>
-        </nav>}
-
-        <footer className="popup-footer">
-          <Button className="popup-capture" variant="primary" disabled={busy || !tab?.url?.startsWith('http')} onClick={() => void capture()}>
-            {busy ? <RefreshCw className="spin" size={15} /> : <Radio size={15} />}采集并复制上下文
-          </Button>
-          {notice && <span className="popup-notice">{notice}</span>}
-        </footer>
+          <section className="popup-workspace">
+            {handoff && <section className="popup-handoff" aria-live="assertive">
+              <AlertTriangle size={18} />
+              <div className="popup-handoff__copy">
+                <strong>{HANDOFF_REASON_LABELS[handoff.reason]}</strong>
+                <span>{handoff.message}</span>
+                <small title={handoff.target.title}>{handoff.target.title}</small>
+              </div>
+              <div className="popup-handoff__actions">
+                <Button size="sm" variant="primary" disabled={busy} onClick={() => void run(async () => setState(await request('handoff.resolve', { id: handoff.id, outcome: 'completed' })))}><Check size={14} />完成</Button>
+                <Button size="icon" variant="ghost" disabled={busy} aria-label="取消人工接管" title="取消人工接管" onClick={() => void run(async () => setState(await request('handoff.resolve', { id: handoff.id, outcome: 'cancelled' })))}><X size={15} /></Button>
+              </div>
+            </section>}
+            {view === 'home' && <OverviewQuickView state={state} tab={tab} grantActive={grantActive} busy={busy} run={run} setState={setState} cookieCount={cookieCount} uaResolution={uaResolution} onNavigate={setView} onOpenContext={() => void openTool('context')} onCapture={() => void capture()} />}
+            {view === 'proxy' && <ProxyQuickView state={state} setState={setState} busy={busy} run={run} tab={tab} onOpenFull={() => void openTool('rules')} />}
+            {view === 'cookies' && <CookieQuickView tab={tab} busy={busy} run={run} onCountChange={setCookieCount} />}
+            {view === 'user-agent' && <UserAgentQuickView tab={tab} state={state} setState={setState} busy={busy} run={run} onResolutionChange={setUaResolution} />}
+          </section>
+        </div>
+        {notice && <span className="popup-global-notice" role="status">{notice}</span>}
       </main>
     </TooltipProvider>
   );

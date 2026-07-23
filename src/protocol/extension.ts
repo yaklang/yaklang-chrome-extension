@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import type { ExtensionAction, ExtensionRequest } from '@/types/messages';
 import type { CapabilityScope } from '@/types/models';
+import { browserTransformExecuteSchema, browserTransformProfileInputSchema } from './transform';
 
 const id = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
 const shortText = v.pipe(v.string(), v.trim(), v.maxLength(240));
@@ -11,6 +12,44 @@ const documentId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160)
 const captureId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
 const nodeId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80));
 const targetFields = { tabId: v.optional(tabId), frameId: v.optional(frameId), documentId: v.optional(documentId) };
+const businessFrameHints = v.optional(v.pipe(v.array(v.strictObject({
+  functionName: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(240)),
+  url: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(4_096))),
+  support: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(8)),
+  averageDepth: v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(16)),
+})), v.maxLength(8)));
+const deepCaptureMatcher = v.variant('kind', [
+  v.strictObject({
+    kind: v.literal('crypto'),
+    adapterId: v.pipe(v.string(), v.trim(), v.regex(/^[a-z0-9][a-z0-9.-]{0,63}$/)),
+    operation: v.pipe(v.string(), v.trim(), v.regex(/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,159}$/)),
+    wrapperHandleId: id,
+    scriptUrl: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(4_096))),
+    frameHints: businessFrameHints,
+  }),
+  v.strictObject({
+    kind: v.literal('boundary'),
+    eventKind: v.picklist(['beacon', 'worker', 'message']),
+    operation: v.pipe(v.string(), v.trim(), v.regex(/^[A-Za-z0-9_$][A-Za-z0-9_$.-]{0,159}$/)),
+    wrapperHandleId: id,
+    scriptUrl: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(4_096))),
+    frameHints: businessFrameHints,
+  }),
+  v.strictObject({
+    kind: v.literal('request'),
+    urlPattern: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(2_048)),
+    frameHints: businessFrameHints,
+  }),
+]);
+const pageRequestTransaction = v.strictObject({
+  request: v.strictObject({
+    method: v.pipe(v.string(), v.trim(), v.toUpperCase(), v.regex(/^[A-Z]{1,16}$/)),
+    url: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(4_096)),
+    expectedDestinations: v.pipe(v.array(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(512))), v.minLength(1), v.maxLength(64)),
+  }),
+  inputMode: v.literal('auto'),
+  boundaries: v.pipe(v.array(v.picklist(['fetch', 'xhr', 'beacon', 'form'])), v.minLength(1), v.maxLength(4)),
+});
 const port = v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(65_535));
 const proxyHost = v.pipe(
   v.string(),
@@ -48,13 +87,61 @@ const proxyProfile = v.pipe(v.strictObject({
   return true;
 }, '代理配置缺少当前类型所需的主机、端口或 PAC 内容'));
 
+const proxyCondition = v.strictObject({
+  type: v.picklist(['host_exact', 'host_suffix', 'host_wildcard', 'host_regex', 'url_prefix', 'url_wildcard', 'url_regex', 'keyword']),
+  value: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(8_192)),
+});
+
+const timestamp = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
+const nonNegativeInteger = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
+const sourceFormat = v.picklist(['auto', 'autoproxy', 'switchyomega', 'hosts']);
+const sourceStatus = v.picklist(['idle', 'updating', 'ready', 'error']);
+
 const proxyRule = v.strictObject({
   id,
   name: v.pipe(shortText, v.minLength(1)),
   enabled: v.boolean(),
-  patterns: stringList(500, 2_048),
+  condition: proxyCondition,
   proxyProfileId: id,
-  priority: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(1_000_000)),
+  order: nonNegativeInteger,
+  createdAt: timestamp,
+  updatedAt: timestamp,
+});
+
+const proxyRuleSourceInput = v.strictObject({
+  id: v.optional(id),
+  name: v.pipe(shortText, v.minLength(1)),
+  url: httpUrl,
+  format: sourceFormat,
+  enabled: v.boolean(),
+  matchProfileId: id,
+  bypassProfileId: id,
+  order: v.optional(nonNegativeInteger),
+  updateIntervalMinutes: v.pipe(v.number(), v.safeInteger(), v.minValue(15), v.maxValue(43_200)),
+});
+
+const proxyRuleSource = v.strictObject({
+  id,
+  name: v.pipe(shortText, v.minLength(1)),
+  url: httpUrl,
+  format: sourceFormat,
+  enabled: v.boolean(),
+  matchProfileId: id,
+  bypassProfileId: id,
+  order: nonNegativeInteger,
+  updateIntervalMinutes: v.pipe(v.number(), v.safeInteger(), v.minValue(15), v.maxValue(43_200)),
+  revision: v.optional(id),
+  contentHash: v.optional(id),
+  etag: v.optional(v.pipe(v.string(), v.maxLength(1_024))),
+  lastModified: v.optional(v.pipe(v.string(), v.maxLength(1_024))),
+  lastCheckedAt: v.optional(timestamp),
+  lastUpdatedAt: v.optional(timestamp),
+  status: sourceStatus,
+  totalRuleCount: nonNegativeInteger,
+  supportedRuleCount: nonNegativeInteger,
+  ignoredRuleCount: nonNegativeInteger,
+  invalidRuleCount: nonNegativeInteger,
+  error: v.optional(v.pipe(v.string(), v.maxLength(16_384))),
 });
 
 const proxyRouting = v.strictObject({
@@ -63,18 +150,25 @@ const proxyRouting = v.strictObject({
 });
 
 const proxyConfiguration = v.strictObject({
-  version: v.literal(1),
+  version: v.literal(2),
   profiles: v.pipe(v.array(proxyProfile), v.minLength(1), v.maxLength(500)),
   rules: v.pipe(v.array(proxyRule), v.maxLength(5_000)),
+  sources: v.pipe(v.array(v.strictObject({
+    source: proxyRuleSource,
+    content: v.optional(v.pipe(v.string(), v.maxLength(10 * 1024 * 1024))),
+  })), v.maxLength(200)),
   routing: proxyRouting,
 });
 
-const userAgentRule = v.strictObject({
-  id,
+const userAgentValue = v.pipe(
+  v.string(), v.trim(), v.minLength(1), v.maxLength(1_024),
+  v.check((value) => !/[\r\n]/.test(value), 'User-Agent 不能包含换行符'),
+);
+
+const userAgentProfileInput = v.strictObject({
+  id: v.optional(id),
   name: v.pipe(shortText, v.minLength(1)),
-  enabled: v.boolean(),
-  userAgent: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(4_096)),
-  domains: stringList(500, 253),
+  userAgent: userAgentValue,
 });
 
 const bridgeConfig = v.strictObject({
@@ -147,9 +241,15 @@ const capabilityScopes: readonly CapabilityScope[] = [
   'browser.network.read',
   'browser.network.capture',
   'browser.network.sensitive.read',
-  'browser.observation.read',
-  'browser.observation.control',
-  'browser.observation.sensitive.read',
+  'browser.recording.read',
+  'browser.recording.control',
+  'browser.recording.sensitive.read',
+  'browser.callable.execute',
+  'browser.debugger.read',
+  'browser.debugger.control',
+  'browser.transform.read',
+  'browser.transform.manage',
+  'browser.transform.execute',
   'browser.proxy.read',
   'browser.proxy.write',
 ];
@@ -165,13 +265,23 @@ const payloadSchemas = {
   'proxy.switch': v.strictObject({ id }),
   'proxy.rule.save': proxyRule,
   'proxy.rule.delete': v.strictObject({ id }),
-  'proxy.rules.apply': noPayload,
+  'proxy.auto.apply': noPayload,
   'proxy.rules.preview': v.strictObject({ url: httpUrl }),
   'proxy.rules.compile': noPayload,
   'proxy.rules.reorder': v.strictObject({ ids: v.pipe(v.array(id), v.maxLength(5_000)) }),
   'proxy.rules.settings': proxyRouting,
-  'proxy.rules.stats': noPayload,
-  'proxy.rules.stats.clear': noPayload,
+  'proxy.source.save': proxyRuleSourceInput,
+  'proxy.source.refresh': v.strictObject({ id }),
+  'proxy.source.delete': v.strictObject({ id }),
+  'proxy.sources.reorder': v.strictObject({ ids: v.pipe(v.array(id), v.maxLength(200)) }),
+  'proxy.source.rules': v.strictObject({
+    id,
+    offset: nonNegativeInteger,
+    limit: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500)),
+    query: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(2_048))),
+  }),
+  'proxy.site.route': v.strictObject({ url: httpUrl, profileId: id }),
+  'proxy.site.route.clear': v.strictObject({ url: httpUrl }),
   'proxy.auth.set': v.strictObject({ profileId: id, password: v.pipe(v.string(), v.maxLength(4_096)) }),
   'proxy.auth.status': v.strictObject({ profileId: id }),
   'proxy.config.export': noPayload,
@@ -182,9 +292,12 @@ const payloadSchemas = {
   'cookie.removeMany': v.strictObject({ cookies: v.pipe(v.array(cookieRemoveInput), v.minLength(1), v.maxLength(1_000)) }),
   'cookie.import': v.strictObject({ url, format: v.picklist(['json', 'netscape', 'set-cookie']), text: v.pipe(v.string(), v.maxLength(2 * 1024 * 1024)) }),
   'cookie.export': v.strictObject({ url, format: v.picklist(['json', 'netscape', 'set-cookie']), includeValues: v.boolean() }),
-  'ua.save': userAgentRule,
-  'ua.delete': v.strictObject({ id }),
-  'ua.apply': noPayload,
+  'ua.catalog': noPayload,
+  'ua.resolve': v.strictObject({ url: httpUrl }),
+  'ua.profile.save': userAgentProfileInput,
+  'ua.profile.delete': v.strictObject({ id }),
+  'ua.site.apply': v.strictObject({ url: httpUrl, profileId: id }),
+  'ua.site.reset': v.strictObject({ url: httpUrl }),
   'context.capture': v.strictObject(contextOptions),
   'context.node.inspect': v.strictObject({ ...targetFields, captureId, nodeId }),
   'context.node.action': v.pipe(v.strictObject({
@@ -243,16 +356,51 @@ const payloadSchemas = {
   'network.capture.send': v.strictObject({ ...targetFields, id }),
   'network.capture.poc': v.strictObject({ ...targetFields, id }),
   'network.capture.analysis': v.strictObject({ ...targetFields, id }),
-  'observation.start': v.strictObject({
+  'recording.start': v.strictObject({
     ...targetFields,
     captureValues: v.optional(v.boolean()),
-    maxEntries: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(10), v.maxValue(200))),
+    maxEntries: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(20), v.maxValue(500))),
     maxValueBytes: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(256), v.maxValue(8_192))),
   }),
-  'observation.status': v.strictObject(targetFields),
-  'observation.list': v.strictObject({ ...targetFields, limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200))) }),
-  'observation.clear': v.strictObject(targetFields),
-  'observation.stop': v.strictObject(targetFields),
+  'recording.status': v.strictObject(targetFields),
+  'recording.get': v.strictObject({ ...targetFields, limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500))) }),
+  'recording.clear': v.strictObject(targetFields),
+  'recording.stop': v.strictObject(targetFields),
+  'callable.create': v.union([
+    v.strictObject({
+      ...targetFields, source: v.literal('recording'), callHandleId: id,
+      name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120)),
+    }),
+    v.strictObject({
+      ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
+      strategy: v.literal('selected-frame'),
+      name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+    }),
+    v.strictObject({
+      ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
+      strategy: v.literal('request-transaction'),
+      name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+      transaction: pageRequestTransaction,
+    }),
+    v.strictObject({
+      ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
+      strategy: v.literal('expression'),
+      name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120)),
+      functionExpression: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(4_096)),
+    }),
+  ]),
+  'callable.list': v.strictObject(targetFields),
+  'callable.execute': v.strictObject({ ...targetFields, callableId: id, args: v.pipe(v.array(v.unknown()), v.maxLength(64)) }),
+  'callable.delete': v.strictObject({ ...targetFields, callableId: id }),
+  'deep.capture.start': v.strictObject({ ...targetFields, matcher: deepCaptureMatcher }),
+  'deep.capture.status': v.strictObject(targetFields),
+  'deep.capture.keepalive': v.strictObject(targetFields),
+  'deep.capture.resume': v.strictObject(targetFields),
+  'deep.capture.detach': v.strictObject(targetFields),
+  'transform.profile.list': v.strictObject(targetFields),
+  'transform.profile.save': browserTransformProfileInputSchema,
+  'transform.profile.delete': v.strictObject({ id }),
+  'transform.execute': browserTransformExecuteSchema,
   'audit.list': v.strictObject({ limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500))) }),
   'audit.clear': noPayload,
   'agent.runtime.get': noPayload,

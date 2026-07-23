@@ -1,11 +1,10 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { browser, type Browser } from 'wxt/browser';
 import {
-  Activity, AlertTriangle, Bot, Braces, Check, ChevronRight, CircleGauge, Cookie, Copy,
-  Database, Download, Eye, EyeOff, GripVertical, History, KeyRound, MousePointer2, Network, Play, Plus, Power, Radio,
-  RefreshCw, Route, Save, Search, Send, Server, ShieldCheck, Square, Trash2, Upload, UserRoundCog, X,
+  Activity, AlertTriangle, Bot, Braces, Check, ChevronRight, CircleGauge, CloudDownload, Cookie, Copy,
+  Database, Download, Eye, History, KeyRound, MousePointer2, Network, Play, Power, Radio,
+  RefreshCw, Route, Save, Search, Send, Server, ShieldCheck, Square, Trash2, Upload, UserRoundCog, Wrench, X,
 } from 'lucide-react';
-import { v7 as uuidv7 } from 'uuid';
 import { ProductBrand, YakitMark } from '@/components/brand/Brand';
 import { Button } from '@/components/ui/button';
 import { Field } from '@/components/ui/field';
@@ -14,38 +13,54 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   AUDIT_CATEGORY_LABELS, AUDIT_OUTCOME_LABELS, HANDOFF_REASON_LABELS, waitingHandoff,
 } from '@/features/handoff/presentation';
+import { cookieKey, cookieRemovalInput } from '@/features/cookies/presentation';
+import { AutoSwitchView } from '@/features/proxy/ui/AutoSwitchView';
+import { ProxyProfilesView } from '@/features/proxy/ui/ProxyProfilesView';
+import { RuleSourcesView } from '@/features/proxy/ui/RuleSourcesView';
+import { RecordingWorkspace } from '@/features/browser-recording/RecordingWorkspace';
 import { CAPABILITY_LABELS, CONTROL_CAPABILITY_SCOPES, READ_CAPABILITY_SCOPES, isControlScopeSet } from '@/protocol/capabilities';
 import { AGENT_RUNTIME_STORAGE_KEY, AUDIT_STORAGE_KEY, isStateStorageChange } from '@/protocol/storage';
 import type {
   ActiveTabInfo, AgentRuntime, AuditEvent, BridgePairingStatus, BridgeStatus, BrowserCookie, BrowserRequestAnalysisBundle, CookieInput, CookieTransferFormat, EnterprisePolicyStatus, ExtensionState, HumanHandoff,
   NetworkCaptureStatus, NetworkRequestExport, NetworkRequestRecord, PageContext, PageEvalResult,
-  PageFrameSummary, PageNodeDetails, PageNodeSummary, PageObservationRecord, PageObservationStatus,
-  ProxyConfiguration, ProxyProfile, ProxyRule, ProxyRulePreview, ProxyRuleStats, UserAgentRule, YakPocGenerateResult,
+  PageFrameSummary, PageNodeDetails, PageNodeSummary,
+  UserAgentProfile, UserAgentProfileInput, YakPocGenerateResult,
 } from '@/types/models';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import { APPEARANCE_STORAGE_KEY, getAppearance, setThemePreference, type ThemePreference } from '@/platform/storage/appearance';
 import './App.css';
 
-type Section = 'overview' | 'proxies' | 'rules' | 'cookies' | 'user-agent' | 'network' | 'context' | 'engine' | 'activity';
+type Section = 'overview' | 'proxies' | 'rules' | 'sources' | 'cookies' | 'user-agent' | 'network' | 'context' | 'engine' | 'activity';
 const FIREFOX_AMO_BUILD = import.meta.env.FIREFOX && import.meta.env.MODE === 'store';
 
-const SECTIONS: Array<{ id: Section; label: string; icon: ReactNode }> = [
-  { id: 'overview', label: '运行概览', icon: <CircleGauge size={17} /> },
-  { id: 'proxies', label: '代理配置', icon: <Network size={17} /> },
-  { id: 'rules', label: '代理规则', icon: <Route size={17} /> },
-  { id: 'cookies', label: 'Cookie Editor', icon: <Cookie size={17} /> },
-  { id: 'user-agent', label: 'UA 请求头', icon: <UserRoundCog size={17} /> },
-  { id: 'network', label: '网络活动', icon: <Activity size={17} /> },
-  { id: 'context', label: '登录态工作区', icon: <KeyRound size={17} /> },
-  { id: 'engine', label: '引擎连接', icon: <Server size={17} /> },
-  { id: 'activity', label: '操作记录', icon: <History size={17} /> },
+const NAVIGATION: Array<{ label: string; icon?: ReactNode; items: Array<{ id: Section; label: string; icon: ReactNode }> }> = [
+  { label: '工作区', items: [{ id: 'overview', label: '运行概览', icon: <CircleGauge size={17} /> }] },
+  {
+    label: '网络与流量',
+    items: [
+      { id: 'proxies', label: '代理出口', icon: <Network size={17} /> },
+      { id: 'rules', label: '自动切换', icon: <Route size={17} /> },
+      { id: 'sources', label: '规则订阅', icon: <CloudDownload size={17} /> },
+      { id: 'network', label: '网络活动', icon: <Activity size={17} /> },
+    ],
+  },
+  {
+    label: '常用工具', icon: <Wrench size={13} />,
+    items: [
+      { id: 'cookies', label: 'Cookie Editor', icon: <Cookie size={17} /> },
+      { id: 'user-agent', label: 'UA 快速切换', icon: <UserRoundCog size={17} /> },
+    ],
+  },
+  {
+    label: 'Agent 与系统',
+    items: [
+      { id: 'context', label: '登录态工作区', icon: <KeyRound size={17} /> },
+      { id: 'engine', label: '引擎连接', icon: <Server size={17} /> },
+      { id: 'activity', label: '操作记录', icon: <History size={17} /> },
+    ],
+  },
 ];
-
-const UA_PRESETS = [
-  ['Chrome / Windows', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'],
-  ['Safari / iPhone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1'],
-  ['Googlebot', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'],
-] as const;
+const SECTIONS = NAVIGATION.flatMap((group) => group.items);
 
 const CONTEXT_SECTION_LABELS: Record<PageContext['diff']['changedSections'][number], string> = {
   capture_options: '采集范围',
@@ -183,7 +198,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand"><ProductBrand /></div>
-        <nav>{SECTIONS.map((item) => <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => navigate(item.id)}>{item.icon}<span>{item.label}</span><ChevronRight size={14} /></button>)}</nav>
+        <nav>{NAVIGATION.map((group) => <div className="sidebar-group" key={group.label}><span className="sidebar-group__label">{group.icon}{group.label}</span>{group.items.map((item) => <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => navigate(item.id)}>{item.icon}<span>{item.label}</span><ChevronRight size={14} /></button>)}</div>)}</nav>
         <div className="sidebar-theme">
           <span>外观</span>
           <select aria-label="界面主题" value={theme} onChange={(event) => { const next = event.target.value as ThemePreference; setTheme(next); void setThemePreference(next); }}>
@@ -208,10 +223,11 @@ function App() {
 
         <div className="content-area">
           {section === 'overview' && <Overview state={state} bridge={bridge} tab={tab} navigate={navigate} run={run} busy={busy} />}
-          {section === 'proxies' && <ProxyProfiles state={state} setState={setState} run={run} busy={busy} />}
-          {section === 'rules' && <ProxyRules state={state} setState={setState} tab={tab} run={run} busy={busy} />}
+          {section === 'proxies' && <ProxyProfilesView state={state} setState={setState} run={run} busy={busy} tab={tab} />}
+          {section === 'rules' && <AutoSwitchView state={state} setState={setState} tab={tab} run={run} busy={busy} />}
+          {section === 'sources' && <RuleSourcesView state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'cookies' && <CookieEditor key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
-          {section === 'user-agent' && <UserAgents state={state} setState={setState} run={run} busy={busy} />}
+          {section === 'user-agent' && <UserAgents state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'network' && <NetworkActivity key={tab?.id || 0} tab={tab} bridge={bridge} run={run} busy={busy} />}
           {section === 'context' && <ContextTool key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'engine' && <EngineSettings state={state} setState={setState} bridge={bridge} setBridge={setBridge} tabs={tabs} run={run} busy={busy} />}
@@ -304,7 +320,7 @@ function ActivityLog({ run, busy }: { run: (task: () => Promise<void>, success?:
 }
 
 function Overview({ state, bridge, tab, navigate, run, busy }: { state: ExtensionState; bridge: BridgeStatus; tab?: ActiveTabInfo; navigate: (value: Section) => void; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
-  const activeProxy = state.proxyProfiles.find((profile) => profile.id === state.activeProxyId)?.name || (state.activeProxyId === 'rules' ? '按规则分流' : '未知');
+  const activeProxy = state.proxyProfiles.find((profile) => profile.id === state.activeProxyId)?.name || (state.activeProxyId === 'auto' ? '自动切换' : '未知');
   const [runtime, setRuntime] = useState<AgentRuntime>({ state: 'idle', updatedAt: Date.now(), actions: [] });
   const [network, setNetwork] = useState<NetworkCaptureStatus>();
   const [loginContext, setLoginContext] = useState<PageContext>();
@@ -338,99 +354,18 @@ function Overview({ state, bridge, tab, navigate, run, busy }: { state: Extensio
     </div>
     <div className="task-status-grid">
       <section><span>浏览器现场</span><strong>{loginContext ? `${loginContext.document?.forms.length || 0} 表单 / ${loginContext.document?.interactive.length || 0} 节点` : '尚未采集'}</strong><small>{loginContext?.authentication.evidence[0] || 'Cookie、Storage 与认证信号仅在用户点击后读取'}</small><button onClick={() => navigate('context')}>打开上下文<ChevronRight size={15} /></button></section>
-      <section><span>代理与流量</span><strong>{activeProxy}</strong><small>{network?.active ? `${network.count} 条请求，${network.droppedCount} 条丢弃` : `${state.proxyRules.filter((rule) => rule.enabled).length} 条分流规则 · 捕获未启动`}</small><button onClick={() => navigate(network?.active ? 'network' : 'rules')}>查看流量策略<ChevronRight size={15} /></button></section>
+      <section><span>代理与流量</span><strong>{activeProxy}</strong><small>{network?.active ? `${network.count} 条请求，${network.droppedCount} 条丢弃` : `${state.proxyRules.filter((rule) => rule.enabled).length} 条手动规则 · ${state.proxyRuleSources.filter((source) => source.enabled).length} 个订阅源`}</small><button onClick={() => navigate(network?.active ? 'network' : 'rules')}>查看流量策略<ChevronRight size={15} /></button></section>
       <section><span>Agent 会话</span><strong>{state.activeGrant ? `${isControlScopeSet(state.activeGrant.scopes) ? '控制' : '只读'} · ${runtime.state}` : '未共享'}</strong><small>{state.activeGrant ? `${state.activeGrant.targets.length} 个 frame · ${new Date(state.activeGrant.expiresAt).toLocaleTimeString()} 到期` : '创建 task-bound grant 后才允许远程读取'}</small><button onClick={() => navigate('activity')}>查看动作时间线<ChevronRight size={15} /></button></section>
       <section className={state.handoff?.state === 'waiting_for_user' ? 'needs-attention' : ''}><span>需要用户处理</span><strong>{state.handoff?.state === 'waiting_for_user' ? HANDOFF_REASON_LABELS[state.handoff.reason] : runtime.state === 'paused' ? 'Agent 已暂停' : '没有待办步骤'}</strong><small>{state.handoff?.state === 'waiting_for_user' ? state.handoff.message : latestAction ? `最近 ${latestAction.method} · ${latestAction.state}` : '二维码、MFA 与 CAPTCHA 会在这里出现'}</small><button onClick={() => navigate('activity')}>会话控制<ChevronRight size={15} /></button></section>
     </div>
     <div className="task-workflow-list">
-      <button onClick={() => navigate('cookies')}><Cookie size={18} /><span><strong>检查 Cookie 与登录线索</strong><small>值默认隐藏，导出默认脱敏。</small></span><ChevronRight size={16} /></button>
+      <button onClick={() => navigate('cookies')}><Cookie size={18} /><span><strong>检查 Cookie 与登录线索</strong><small>直接检查原始值，导出默认脱敏。</small></span><ChevronRight size={16} /></button>
       <button onClick={() => navigate('network')}><Send size={18} /><span><strong>请求转到 Yakit</strong><small>选择捕获记录后打开 Web Fuzzer、生成 Yak PoC 或准备 AI 分析。</small></span><ChevronRight size={16} /></button>
-      <button onClick={() => navigate('context')}><Braces size={18} /><span><strong>观测签名与加解密</strong><small>短时观测 WebCrypto、CryptoJS、WebSocket 和请求调用栈。</small></span><ChevronRight size={16} /></button>
+      <button onClick={() => navigate('context')}><Braces size={18} /><span><strong>观测签名与加解密</strong><small>短时观测 WebCrypto、CryptoJS、JSEncrypt、WebSocket 和请求调用栈。</small></span><ChevronRight size={16} /></button>
     </div>
   </div>;
 }
 
-function ProxyProfiles({ state, setState, run, busy }: { state: ExtensionState; setState: (state: ExtensionState) => void; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
-  const empty: ProxyProfile = { id: '', name: '', kind: 'fixed_servers', scheme: 'http', host: '127.0.0.1', port: 8083, bypass: ['localhost', '127.0.0.1', '<local>'] };
-  const [draft, setDraft] = useState<ProxyProfile>();
-  const [authPassword, setAuthPassword] = useState('');
-  const [authConfigured, setAuthConfigured] = useState(false);
-  const selectDraft = (profile: ProxyProfile) => {
-    setDraft(profile);
-    setAuthPassword('');
-    void request('proxy.auth.status', { profileId: profile.id }).then((result) => setAuthConfigured(result.configured));
-  };
-  const saveProfile = () => run(async () => {
-    if (!draft) return;
-    setState(await request('proxy.save', draft));
-    if (draft.authEnabled && authPassword) {
-      const result = await request('proxy.auth.set', { profileId: draft.id, password: authPassword });
-      setAuthConfigured(result.configured);
-      setAuthPassword('');
-    } else if (!draft.authEnabled) {
-      await request('proxy.auth.set', { profileId: draft.id, password: '' });
-      setAuthConfigured(false);
-    }
-  }, '代理配置已保存');
-  return <div className="section-view split-view">
-    <div className="list-pane">
-      <div className="page-heading"><div><h1>代理配置</h1><p>固定代理、SOCKS、PAC 与会话级认证出口。</p></div><button className="primary-button" onClick={() => { setDraft({ ...empty, id: uuidv7() }); setAuthConfigured(false); setAuthPassword(''); }}><Plus size={16} />新建代理</button></div>
-      <div className="data-list">{state.proxyProfiles.map((profile) => <button key={profile.id} className={`data-row ${state.activeProxyId === profile.id ? 'selected' : ''}`} onClick={() => selectDraft(profile)}><span className="row-icon"><Network size={16} /></span><span><strong>{profile.name}</strong><small>{profile.kind === 'fixed_servers' ? `${profile.scheme}://${profile.host}:${profile.port}` : profile.kind}</small></span>{profile.authEnabled && <span className="active-label">认证</span>}{state.activeProxyId === profile.id && <span className="active-label">使用中</span>}<ChevronRight size={15} /></button>)}</div>
-    </div>
-    <div className="editor-pane">{draft ? <>
-      <div className="editor-heading"><div><h2>{draft.builtin ? '内置代理' : '编辑代理'}</h2><p>{draft.id}</p></div><button className="icon-button" title="关闭编辑" onClick={() => setDraft(undefined)}><X size={17} /></button></div>
-      <div className="form-grid">
-        <Field label="名称"><input value={draft.name} disabled={draft.builtin} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
-        <Field label="类型"><select value={draft.kind} disabled={draft.builtin} onChange={(event) => setDraft({ ...draft, kind: event.target.value as ProxyProfile['kind'] })}><option value="fixed_servers">固定代理</option><option value="pac_script">PAC Script</option><option value="direct">直接连接</option><option value="system">系统代理</option></select></Field>
-        {draft.kind === 'fixed_servers' && <><Field label="协议"><select value={draft.scheme} onChange={(event) => setDraft({ ...draft, scheme: event.target.value as ProxyProfile['scheme'] })}><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks4">SOCKS4</option><option value="socks5">SOCKS5</option></select></Field><Field label="主机"><input value={draft.host || ''} onChange={(event) => setDraft({ ...draft, host: event.target.value })} /></Field><Field label="端口"><input type="number" min="1" max="65535" value={draft.port || ''} onChange={(event) => setDraft({ ...draft, port: Number(event.target.value) })} /></Field><Field label="绕过地址" hint="每行一个域名、IP 或 <local>"><textarea rows={5} value={draft.bypass.join('\n')} onChange={(event) => setDraft({ ...draft, bypass: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) })} /></Field><label className="check-row"><input type="checkbox" checked={draft.authEnabled || false} onChange={(event) => setDraft({ ...draft, authEnabled: event.target.checked })} />代理认证</label>{draft.authEnabled && <><Field label="用户名"><input value={draft.authUsername || ''} onChange={(event) => setDraft({ ...draft, authUsername: event.target.value })} /></Field><Field label="会话密码" hint={authConfigured ? '已配置；留空保持当前密码' : '仅保存在当前浏览器会话'}><input type="password" autoComplete="new-password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /></Field></>}</>}
-        {draft.kind === 'pac_script' && <><Field label="PAC URL"><input value={draft.pacUrl || ''} onChange={(event) => setDraft({ ...draft, pacUrl: event.target.value })} placeholder="https://example.test/proxy.pac" /></Field><Field label="内联 PAC"><textarea rows={10} value={draft.pacScript || ''} onChange={(event) => setDraft({ ...draft, pacScript: event.target.value })} /></Field></>}
-      </div>
-      <div className="editor-actions"><button className="primary-button" disabled={busy || !draft.name || Boolean(draft.authEnabled && !draft.authUsername)} onClick={() => void saveProfile()}><Save size={16} />保存</button><button disabled={busy} onClick={() => void run(async () => setState(await request('proxy.switch', { id: draft.id })), '代理已切换')}><Power size={16} />立即使用</button>{!draft.builtin && <button className="danger-button" disabled={busy} onClick={() => void run(async () => { setState(await request('proxy.delete', { id: draft.id })); await request('proxy.auth.set', { profileId: draft.id, password: '' }); setDraft(undefined); }, '代理已删除')}><Trash2 size={16} />删除</button>}</div>
-    </> : <Empty>选择一个代理配置，或创建新的出口。</Empty>}</div>
-  </div>;
-}
-
-function ProxyRules({ state: fullState, setState, tab, run, busy }: { state: ExtensionState; setState: (state: ExtensionState) => void; tab?: ActiveTabInfo; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
-  const state = { ...fullState, proxyProfiles: fullState.proxyProfiles.filter((profile) => ['direct', 'fixed_servers'].includes(profile.kind)) };
-  const freshRule = (): ProxyRule => ({ id: uuidv7(), name: '', enabled: true, patterns: [], proxyProfileId: state.proxyProfiles[2]?.id || 'direct', priority: Math.max(10, ...state.proxyRules.map((rule) => rule.priority + 10)) });
-  const [draft, setDraft] = useState<ProxyRule>(freshRule);
-  const [previewUrl, setPreviewUrl] = useState(tab?.url || 'https://example.com/');
-  const [preview, setPreview] = useState<ProxyRulePreview>();
-  const [stats, setStats] = useState<ProxyRuleStats[]>([]);
-  const [pacScript, setPacScript] = useState('');
-  const [configurationText, setConfigurationText] = useState('');
-  const [draggedId, setDraggedId] = useState('');
-  const orderedRules = [...state.proxyRules].sort((left, right) => right.priority - left.priority);
-  const refreshOperationalData = useCallback(async () => {
-    setStats(await request('proxy.rules.stats'));
-    if (previewUrl.startsWith('http')) setPreview(await request('proxy.rules.preview', { url: previewUrl }));
-  }, [previewUrl]);
-  useEffect(() => { void refreshOperationalData(); }, [refreshOperationalData, state.proxyRules, state.proxyRouting]);
-  const save = () => run(async () => { setState(await request('proxy.rule.save', draft)); setDraft(freshRule()); }, '代理规则已保存');
-  const reorder = (sourceId: string, targetId: string) => run(async () => {
-    const ids = orderedRules.map((rule) => rule.id);
-    const source = ids.indexOf(sourceId);
-    const target = ids.indexOf(targetId);
-    if (source < 0 || target < 0 || source === target) return;
-    ids.splice(target, 0, ids.splice(source, 1)[0]);
-    setState(await request('proxy.rules.reorder', { ids }));
-  }, '规则优先级已更新');
-  const importConfiguration = () => run(async () => {
-    const configuration = JSON.parse(configurationText) as ProxyConfiguration;
-    setState(await request('proxy.config.import', { configuration }));
-  }, '代理配置已导入');
-  return <div className="section-view">
-    <div className="page-heading"><div><h1>代理规则</h1><p>确定性优先级、冲突预览、PAC 路由与命中统计。</p></div><button className="primary-button" disabled={busy || state.proxyRules.length === 0} onClick={() => void run(async () => setState(await request('proxy.rules.apply')), '分流规则已应用')}><Route size={16} />应用规则</button></div>
-    <div className="proxy-routing-bar"><Field label="默认出口"><select value={state.proxyRouting.defaultProfileId} onChange={(event) => void run(async () => setState(await request('proxy.rules.settings', { ...state.proxyRouting, defaultProfileId: event.target.value })), '默认出口已更新')}>{state.proxyProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field><Field label="失败策略"><select value={state.proxyRouting.failMode} onChange={(event) => void run(async () => setState(await request('proxy.rules.settings', { ...state.proxyRouting, failMode: event.target.value as 'open' | 'closed' })), '失败策略已更新')}><option value="closed">Fail closed</option><option value="open">Fail open → DIRECT</option></select></Field><div className="proxy-preview-input"><label>当前 URL 预览</label><div><input value={previewUrl} onChange={(event) => setPreviewUrl(event.target.value)} /><Button size="icon" variant="ghost" title="刷新命中预览" aria-label="刷新命中预览" onClick={() => void refreshOperationalData()}><RefreshCw size={14} /></Button></div></div><div className={`proxy-preview-result ${preview?.conflict ? 'conflict' : ''}`}><small>{preview?.effectiveRuleId ? '命中规则' : '默认出口'}</small><strong>{state.proxyProfiles.find((profile) => profile.id === preview?.effectiveProfileId)?.name || '—'}</strong><span>{preview?.effectiveProxy || '—'}</span>{preview?.conflict && <i>多个出口冲突，使用最高优先级</i>}</div></div>
-    <div className="rule-layout"><div className="rule-table proxy-rule-table"><div className="table-head proxy-rule-row"><span /><span>规则 / 优先级</span><span>匹配</span><span>出口</span><span>命中</span><span>状态</span><span /></div>{orderedRules.length === 0 ? <Empty>还没有代理分流规则。</Empty> : orderedRules.map((rule) => {
-      const stat = stats.find((item) => item.ruleId === rule.id);
-      return <div className="table-row proxy-rule-row" key={rule.id} draggable onDragStart={() => setDraggedId(rule.id)} onDragOver={(event) => event.preventDefault()} onDrop={() => void reorder(draggedId, rule.id)}><GripVertical size={15} /><button className="proxy-rule-name" onClick={() => setDraft(rule)}><strong>{rule.name}</strong><small>priority {rule.priority}</small></button><span title={rule.patterns.join(', ')}>{rule.patterns.join(', ')}</span><span>{state.proxyProfiles.find((profile) => profile.id === rule.proxyProfileId)?.name || '已删除'}</span><span title={stat?.lastUrl}>{stat?.hits || 0}</span><span className={rule.enabled ? 'status-good' : 'status-muted'}>{rule.enabled ? '启用' : '停用'}</span><button className="icon-button danger" title="删除规则" onClick={() => void run(async () => setState(await request('proxy.rule.delete', { id: rule.id })), '规则已删除')}><Trash2 size={15} /></button></div>;
-    })}</div>
-      <div className="rule-editor"><h2>{state.proxyRules.some((rule) => rule.id === draft.id) ? '编辑规则' : '新建规则'}</h2><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="登录域名走 MITM" /></Field><Field label="优先级"><input type="number" min="1" max="1000000" value={draft.priority} onChange={(event) => setDraft({ ...draft, priority: Number(event.target.value) })} /></Field><Field label="域名 / URL 模式" hint="每行一个，例如 *.example.com 或 https://api.example.com/*"><textarea rows={7} value={draft.patterns.join('\n')} onChange={(event) => setDraft({ ...draft, patterns: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) })} /></Field><Field label="代理出口"><select value={draft.proxyProfileId} onChange={(event) => setDraft({ ...draft, proxyProfileId: event.target.value })}>{state.proxyProfiles.map((profile) => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></Field><label className="check-row"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用这条规则</label><div className="editor-actions"><button className="primary-button" disabled={busy || !draft.name || draft.patterns.length === 0} onClick={() => void save()}><Save size={16} />保存规则</button><button onClick={() => setDraft(freshRule())}><Plus size={16} />新规则</button></div></div>
-    </div>
-    <div className="proxy-tools"><section><div><h2>PAC 编译结果</h2><Button variant="ghost" onClick={() => void run(async () => setPacScript(await request('proxy.rules.compile')), 'PAC 已编译')}><Braces size={14} />编译</Button></div><pre>{pacScript || 'function FindProxyForURL(url, host) { … }'}</pre></section><section><div><h2>配置交换</h2><div><Button variant="ghost" onClick={() => void run(async () => setConfigurationText(JSON.stringify(await request('proxy.config.export'), null, 2)), '代理配置已导出到编辑区')}><Download size={14} />导出</Button><Button variant="ghost" disabled={!configurationText.trim()} onClick={() => void importConfiguration()}><Upload size={14} />导入</Button></div></div><textarea value={configurationText} onChange={(event) => setConfigurationText(event.target.value)} placeholder="代理配置 JSON" /></section><section className="proxy-stats"><div><h2>规则命中</h2><Button variant="ghost" disabled={stats.length === 0} onClick={() => void run(async () => { await request('proxy.rules.stats.clear'); setStats([]); }, '命中统计已清空')}><Trash2 size={14} />清空</Button></div>{stats.length === 0 ? <span>暂无命中</span> : stats.map((item) => <p key={item.ruleId}><strong>{state.proxyRules.find((rule) => rule.id === item.ruleId)?.name || item.ruleId}</strong><span>{item.hits}</span></p>)}</section></div>
-  </div>;
-}
 
 function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
   const [url, setUrl] = useState(tab?.url || '');
@@ -439,9 +374,7 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
   const [filter, setFilter] = useState<'all' | 'session' | 'persistent' | 'httpOnly' | 'partitioned'>('all');
   const [sort, setSort] = useState<'name' | 'domain' | 'expires' | 'size'>('name');
   const [group, setGroup] = useState<'none' | 'domain' | 'path'>('domain');
-  const [revealed, setRevealed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [editorValueVisible, setEditorValueVisible] = useState(false);
   const [transferFormat, setTransferFormat] = useState<CookieTransferFormat>('json');
   const [includeExportValues, setIncludeExportValues] = useState(false);
   const [importText, setImportText] = useState('');
@@ -449,25 +382,18 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
   const [draft, setDraft] = useState<Omit<CookieInput, 'url'>>({
     name: '', value: '', path: '/', secure: url.startsWith('https:'), httpOnly: false, sameSite: 'unspecified',
   });
-  const keyOf = (cookie: BrowserCookie) => `${cookie.storeId}:${cookie.partitionKey?.topLevelSite || ''}:${cookie.domain}:${cookie.path}:${cookie.name}`;
+  const keyOf = cookieKey;
   const reload = () => run(async () => {
     setCookies(await request('cookie.list', { url }));
     setSelected(new Set());
-    setRevealed(new Set());
   });
   const editCookie = (cookie: BrowserCookie) => {
-    setEditorValueVisible(false);
     setDraft({
       name: cookie.name, value: cookie.value, domain: cookie.hostOnly ? undefined : cookie.domain,
       path: cookie.path, secure: cookie.secure, httpOnly: cookie.httpOnly,
       sameSite: cookie.sameSite as CookieInput['sameSite'], expirationDate: cookie.expirationDate,
       storeId: cookie.storeId, firstPartyDomain: cookie.firstPartyDomain, partitionKey: cookie.partitionKey,
     });
-  };
-  const cookieUrl = (cookie: BrowserCookie) => {
-    const domain = cookie.domain.replace(/^\./, '');
-    const path = cookie.path.startsWith('/') ? cookie.path : `/${cookie.path}`;
-    return `${cookie.secure ? 'https' : 'http'}://${domain}${path}`;
   };
   const visibleCookies = cookies.filter((cookie) => {
     const needle = query.trim().toLowerCase();
@@ -486,10 +412,7 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
     const key = group === 'domain' ? cookie.domain : group === 'path' ? cookie.path : '全部 Cookie';
     groupedCookies.set(key, [...(groupedCookies.get(key) || []), cookie]);
   }
-  const removeInputs = (items: BrowserCookie[]) => items.map((cookie) => ({
-    url: cookieUrl(cookie), name: cookie.name, storeId: cookie.storeId,
-    firstPartyDomain: cookie.firstPartyDomain, partitionKey: cookie.partitionKey,
-  }));
+  const removeInputs = (items: BrowserCookie[]) => items.map(cookieRemovalInput);
   const downloadExport = async () => {
     const text = await request('cookie.export', { url, format: transferFormat, includeValues: includeExportValues });
     const blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
@@ -506,20 +429,62 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
     <div className="cookie-toolbar"><div className="network-search"><Search size={14} /><input aria-label="搜索 Cookie" placeholder="搜索名称、Domain 或 Path" value={query} onChange={(event) => setQuery(event.target.value)} /></div><select aria-label="Cookie 筛选" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}><option value="all">全部</option><option value="session">Session</option><option value="persistent">持久</option><option value="httpOnly">HttpOnly</option><option value="partitioned">Partitioned</option></select><select aria-label="Cookie 排序" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="name">按名称</option><option value="domain">按 Domain</option><option value="expires">按过期时间</option><option value="size">按值大小</option></select><select aria-label="Cookie 分组" value={group} onChange={(event) => setGroup(event.target.value as typeof group)}><option value="domain">Domain 分组</option><option value="path">Path 分组</option><option value="none">不分组</option></select><Button variant="danger" disabled={busy || selected.size === 0} onClick={() => void run(async () => { const result = await request('cookie.removeMany', { cookies: removeInputs(cookies.filter((cookie) => selected.has(keyOf(cookie)))) }); setTransferStatus(`删除 ${result.removed}，失败 ${result.failed}`); setCookies(await request('cookie.list', { url })); setSelected(new Set()); }, '已执行批量删除')}><Trash2 size={14} />删除 {selected.size || ''}</Button></div>
     <div className="cookie-layout"><div className="cookie-table"><div className="table-head cookie-columns"><input aria-label="选择全部可见 Cookie" type="checkbox" checked={visibleCookies.length > 0 && visibleCookies.every((cookie) => selected.has(keyOf(cookie)))} onChange={(event) => setSelected(event.target.checked ? new Set(visibleCookies.map(keyOf)) : new Set())} /><span>名称</span><span>值</span><span>Domain / Path</span><span>属性</span><span /></div>{visibleCookies.length === 0 ? <Empty>没有符合条件的 Cookie。</Empty> : [...groupedCookies].map(([groupName, items]) => <div className="cookie-group" key={groupName}><div className="cookie-group__heading"><strong>{groupName}</strong><span>{items.length}</span></div>{items.map((cookie) => {
         const cookieKey = keyOf(cookie);
-        const valueVisible = revealed.has(cookieKey);
-        return <div className="table-row cookie-columns" key={cookieKey}><input aria-label={`选择 ${cookie.name}`} type="checkbox" checked={selected.has(cookieKey)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(cookieKey); else next.delete(cookieKey); return next; })} /><button className="cookie-name-button" title="编辑 Cookie" onClick={() => editCookie(cookie)}><strong>{cookie.name}</strong></button><button className="cookie-value-button" title={valueVisible ? '隐藏 Cookie 值' : '显示 Cookie 值'} onClick={() => setRevealed((current) => { const next = new Set(current); if (next.has(cookieKey)) next.delete(cookieKey); else next.add(cookieKey); return next; })}><code>{valueVisible ? cookie.value : `[hidden ${cookie.value.length}]`}</code>{valueVisible ? <EyeOff size={13} /> : <Eye size={13} />}</button><span><small>{cookie.domain}</small><small>{cookie.path}</small></span><span className="tag-list">{cookie.httpOnly && <i>HttpOnly</i>}{cookie.secure && <i>Secure</i>}{cookie.partitionKey && <i>Partitioned</i>}{cookie.sameSite && <i>{cookie.sameSite}</i>}{cookie.priority && <i>{cookie.priority}</i>}{cookie.sameParty && <i>SameParty</i>}</span><button className="icon-button danger" title="删除 Cookie" onClick={() => void run(async () => { await request('cookie.remove', removeInputs([cookie])[0]); setCookies(await request('cookie.list', { url })); }, 'Cookie 已删除')}><Trash2 size={15} /></button></div>;
+        return <div className="table-row cookie-columns" key={cookieKey}><input aria-label={`选择 ${cookie.name}`} type="checkbox" checked={selected.has(cookieKey)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(cookieKey); else next.delete(cookieKey); return next; })} /><button className="cookie-name-button" title="编辑 Cookie" onClick={() => editCookie(cookie)}><strong>{cookie.name}</strong></button><code className="cookie-value" title={cookie.value}>{cookie.value}</code><span><small>{cookie.domain}</small><small>{cookie.path}</small></span><span className="tag-list">{cookie.httpOnly && <i>HttpOnly</i>}{cookie.secure && <i>Secure</i>}{cookie.partitionKey && <i>Partitioned</i>}{cookie.sameSite && <i>{cookie.sameSite}</i>}{cookie.priority && <i>{cookie.priority}</i>}{cookie.sameParty && <i>SameParty</i>}</span><button className="icon-button danger" title="删除 Cookie" onClick={() => void run(async () => { await request('cookie.remove', removeInputs([cookie])[0]); setCookies(await request('cookie.list', { url })); }, 'Cookie 已删除')}><Trash2 size={15} /></button></div>;
       })}</div>)}</div>
-      <div className="rule-editor cookie-editor-pane"><h2>写入 Cookie</h2><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="值"><div className={`secret-field ${editorValueVisible ? '' : 'masked'}`}><textarea rows={4} value={draft.value} onChange={(event) => setDraft({ ...draft, value: event.target.value })} /><Button size="icon" variant="ghost" title={editorValueVisible ? '隐藏值' : '显示值'} aria-label={editorValueVisible ? '隐藏值' : '显示值'} onClick={() => setEditorValueVisible(!editorValueVisible)}>{editorValueVisible ? <EyeOff size={14} /> : <Eye size={14} />}</Button></div></Field><Field label="Domain" hint="留空创建 HostOnly Cookie"><input value={draft.domain || ''} onChange={(event) => setDraft({ ...draft, domain: event.target.value || undefined })} /></Field><Field label="Path"><input value={draft.path} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></Field><Field label="过期时间"><input type="datetime-local" value={draft.expirationDate ? new Date(draft.expirationDate * 1_000).toISOString().slice(0, 16) : ''} onChange={(event) => setDraft({ ...draft, expirationDate: event.target.value ? new Date(event.target.value).getTime() / 1_000 : undefined })} /></Field><Field label="SameSite"><select value={draft.sameSite} onChange={(event) => setDraft({ ...draft, sameSite: event.target.value as CookieInput['sameSite'] })}><option value="unspecified">Unspecified</option><option value="lax">Lax</option><option value="strict">Strict</option><option value="no_restriction">None</option></select></Field><Field label="Partition top-level site"><input placeholder="https://top.example" value={draft.partitionKey?.topLevelSite || ''} onChange={(event) => setDraft({ ...draft, partitionKey: event.target.value ? { ...draft.partitionKey, topLevelSite: event.target.value } : undefined })} /></Field><label className="check-row"><input type="checkbox" checked={draft.secure} onChange={(event) => setDraft({ ...draft, secure: event.target.checked })} />Secure</label><label className="check-row"><input type="checkbox" checked={draft.httpOnly} onChange={(event) => setDraft({ ...draft, httpOnly: event.target.checked })} />HttpOnly</label><label className="check-row"><input type="checkbox" disabled={!draft.partitionKey} checked={draft.partitionKey?.hasCrossSiteAncestor || false} onChange={(event) => setDraft({ ...draft, partitionKey: { ...draft.partitionKey, hasCrossSiteAncestor: event.target.checked } })} />Cross-site ancestor</label><button className="primary-button" disabled={busy || !url || !draft.name} onClick={() => void run(async () => { await request('cookie.set', { url, ...draft }); setCookies(await request('cookie.list', { url })); }, 'Cookie 已写入')}><Save size={16} />保存 Cookie</button><div className="cookie-transfer"><h2>导入 / 导出</h2><div><select value={transferFormat} onChange={(event) => setTransferFormat(event.target.value as CookieTransferFormat)}><option value="json">JSON</option><option value="netscape">Netscape</option><option value="set-cookie">Set-Cookie</option></select><label className="check-row"><input type="checkbox" checked={includeExportValues} onChange={(event) => setIncludeExportValues(event.target.checked)} />导出原始值</label></div><textarea rows={6} value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴 Cookie 数据" /><div className="editor-actions"><Button variant="primary" disabled={busy || !importText.trim()} onClick={() => void run(async () => { const result = await request('cookie.import', { url, format: transferFormat, text: importText }); setTransferStatus(`导入 ${result.imported}，失败 ${result.failed}${result.warnings.length ? `；${result.warnings.join('；')}` : ''}`); setCookies(await request('cookie.list', { url })); }, 'Cookie 导入完成')}><Upload size={14} />导入</Button><Button variant="ghost" disabled={busy || cookies.length === 0} onClick={() => void run(downloadExport, includeExportValues ? 'Cookie 已导出（包含值）' : 'Cookie 已脱敏导出')}><Download size={14} />导出</Button></div>{transferStatus && <p className="transfer-status">{transferStatus}</p>}</div></div>
+      <div className="rule-editor cookie-editor-pane"><h2>写入 Cookie</h2><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="值"><textarea rows={4} value={draft.value} onChange={(event) => setDraft({ ...draft, value: event.target.value })} /></Field><Field label="Domain" hint="留空创建 HostOnly Cookie"><input value={draft.domain || ''} onChange={(event) => setDraft({ ...draft, domain: event.target.value || undefined })} /></Field><Field label="Path"><input value={draft.path} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></Field><Field label="过期时间"><input type="datetime-local" value={draft.expirationDate ? new Date(draft.expirationDate * 1_000).toISOString().slice(0, 16) : ''} onChange={(event) => setDraft({ ...draft, expirationDate: event.target.value ? new Date(event.target.value).getTime() / 1_000 : undefined })} /></Field><Field label="SameSite"><select value={draft.sameSite} onChange={(event) => setDraft({ ...draft, sameSite: event.target.value as CookieInput['sameSite'] })}><option value="unspecified">Unspecified</option><option value="lax">Lax</option><option value="strict">Strict</option><option value="no_restriction">None</option></select></Field><Field label="Partition top-level site"><input placeholder="https://top.example" value={draft.partitionKey?.topLevelSite || ''} onChange={(event) => setDraft({ ...draft, partitionKey: event.target.value ? { ...draft.partitionKey, topLevelSite: event.target.value } : undefined })} /></Field><label className="check-row"><input type="checkbox" checked={draft.secure} onChange={(event) => setDraft({ ...draft, secure: event.target.checked })} />Secure</label><label className="check-row"><input type="checkbox" checked={draft.httpOnly} onChange={(event) => setDraft({ ...draft, httpOnly: event.target.checked })} />HttpOnly</label><label className="check-row"><input type="checkbox" disabled={!draft.partitionKey} checked={draft.partitionKey?.hasCrossSiteAncestor || false} onChange={(event) => setDraft({ ...draft, partitionKey: { ...draft.partitionKey, hasCrossSiteAncestor: event.target.checked } })} />Cross-site ancestor</label><button className="primary-button" disabled={busy || !url || !draft.name} onClick={() => void run(async () => { await request('cookie.set', { url, ...draft }); setCookies(await request('cookie.list', { url })); }, 'Cookie 已写入')}><Save size={16} />保存 Cookie</button><div className="cookie-transfer"><h2>导入 / 导出</h2><div><select value={transferFormat} onChange={(event) => setTransferFormat(event.target.value as CookieTransferFormat)}><option value="json">JSON</option><option value="netscape">Netscape</option><option value="set-cookie">Set-Cookie</option></select><label className="check-row"><input type="checkbox" checked={includeExportValues} onChange={(event) => setIncludeExportValues(event.target.checked)} />导出原始值</label></div><textarea rows={6} value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴 Cookie 数据" /><div className="editor-actions"><Button variant="primary" disabled={busy || !importText.trim()} onClick={() => void run(async () => { const result = await request('cookie.import', { url, format: transferFormat, text: importText }); setTransferStatus(`导入 ${result.imported}，失败 ${result.failed}${result.warnings.length ? `；${result.warnings.join('；')}` : ''}`); setCookies(await request('cookie.list', { url })); }, 'Cookie 导入完成')}><Upload size={14} />导入</Button><Button variant="ghost" disabled={busy || cookies.length === 0} onClick={() => void run(downloadExport, includeExportValues ? 'Cookie 已导出（包含值）' : 'Cookie 已脱敏导出')}><Download size={14} />导出</Button></div>{transferStatus && <p className="transfer-status">{transferStatus}</p>}</div></div>
     </div>
   </div>;
 }
 
-function UserAgents({ state, setState, run, busy }: { state: ExtensionState; setState: (state: ExtensionState) => void; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
-  const [draft, setDraft] = useState<UserAgentRule>({ id: uuidv7(), name: UA_PRESETS[0][0], enabled: true, userAgent: UA_PRESETS[0][1], domains: [] });
-  return <div className="section-view">
-    <div className="page-heading"><div><h1>User-Agent 请求头</h1><p>通过 Manifest V3 动态规则修改真实网络请求头，可按域名限定；不伪装页面 JS 设备指纹。</p></div></div>
-    <div className="rule-layout"><div className="rule-table"><div className="table-head"><span>名称</span><span>User-Agent</span><span>域名</span><span>状态</span><span /></div>{state.userAgentRules.length === 0 ? <Empty>还没有 User-Agent 规则。</Empty> : state.userAgentRules.map((rule) => <div className="table-row" key={rule.id}><span><strong>{rule.name}</strong></span><code title={rule.userAgent}>{rule.userAgent}</code><span>{rule.domains.length ? rule.domains.join(', ') : '所有站点'}</span><span className={rule.enabled ? 'status-good' : 'status-muted'}>{rule.enabled ? '启用' : '停用'}</span><button className="icon-button danger" title="删除 UA 规则" onClick={() => void run(async () => setState(await request('ua.delete', { id: rule.id })), 'UA 规则已删除')}><Trash2 size={15} /></button></div>)}</div>
-      <div className="rule-editor"><h2>新建 UA 规则</h2><Field label="预设"><select onChange={(event) => { const preset = UA_PRESETS[Number(event.target.value)]; setDraft({ ...draft, name: preset[0], userAgent: preset[1] }); }}>{UA_PRESETS.map((preset, index) => <option key={preset[0]} value={index}>{preset[0]}</option>)}</select></Field><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="User-Agent"><textarea rows={5} value={draft.userAgent} onChange={(event) => setDraft({ ...draft, userAgent: event.target.value })} /></Field><Field label="限定域名" hint="每行一个，留空表示所有站点"><textarea rows={4} value={draft.domains.join('\n')} onChange={(event) => setDraft({ ...draft, domains: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) })} /></Field><button className="primary-button" disabled={busy || !draft.name || !draft.userAgent} onClick={() => void run(async () => { setState(await request('ua.save', draft)); setDraft({ ...draft, id: uuidv7() }); }, 'UA 规则已生效')}><Save size={16} />保存并应用</button></div>
+function UserAgents({ state, setState, tab, run, busy }: { state: ExtensionState; setState: (state: ExtensionState) => void; tab?: ActiveTabInfo; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
+  const [profiles, setProfiles] = useState<UserAgentProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState('chrome-windows');
+  const [draft, setDraft] = useState<UserAgentProfileInput>({ name: '', userAgent: '' });
+  const url = tab?.url?.startsWith('http') ? tab.url : '';
+  let hostname = '';
+  try { hostname = url ? new URL(url).hostname : ''; } catch { hostname = ''; }
+  const currentAssignment = state.userAgentAssignments.find((assignment) => assignment.hostname === hostname);
+  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
+  const selectedProfile = profileMap.get(selectedProfileId);
+  const effectiveProfile = currentAssignment ? profileMap.get(currentAssignment.profileId) : undefined;
+
+  const loadProfiles = useCallback(async () => {
+    const next = await request('ua.catalog');
+    setProfiles(next);
+    const current = state.userAgentAssignments.find((assignment) => assignment.hostname === hostname);
+    if (current && next.some((profile) => profile.id === current.profileId)) setSelectedProfileId(current.profileId);
+  }, [hostname, state.userAgentAssignments]);
+  useEffect(() => { void loadProfiles(); }, [loadProfiles, state.customUserAgentProfiles]);
+
+  const applyAndReload = () => run(async () => {
+    if (!tab || !url || !selectedProfile) throw new Error('请选择可访问的目标页面和 User-Agent 预设');
+    setState(await request('ua.site.apply', { url, profileId: selectedProfile.id }));
+    await browser.tabs.reload(tab.id);
+  }, `${selectedProfile?.name || 'User-Agent'} 已应用并刷新页面`);
+  const resetAndReload = () => run(async () => {
+    if (!tab || !url) throw new Error('请选择可访问的目标页面');
+    setState(await request('ua.site.reset', { url }));
+    await browser.tabs.reload(tab.id);
+  }, '已恢复浏览器默认 User-Agent 并刷新页面');
+  const saveProfile = () => run(async () => {
+    const saved = await request('ua.profile.save', draft);
+    const next = await request('ua.catalog');
+    setProfiles(next);
+    setSelectedProfileId(saved.id);
+    setDraft({ name: '', userAgent: '' });
+  }, '自定义 User-Agent 预设已保存');
+
+  return <div className="section-view ua-view">
+    <div className="page-heading"><div><span className="page-eyebrow">常用工具</span><h1>User-Agent 快速切换</h1><p>为单个 hostname 修改真实网络请求头；不伪装 Navigator、Client Hints、屏幕或 TLS 指纹。</p></div></div>
+    <section className="ua-current-site">
+      <div><span>当前目标</span><strong>{hostname || '当前标签页不可配置'}</strong><small>{effectiveProfile ? `正在使用 ${effectiveProfile.name}` : '使用浏览器默认 User-Agent'}</small></div>
+      <select aria-label="当前站点 User-Agent" disabled={!hostname || busy} value={selectedProfileId} onChange={(event) => setSelectedProfileId(event.target.value)}>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.builtin ? '' : ' · 自定义'}</option>)}</select>
+      <div className="editor-actions"><Button variant="ghost" disabled={!currentAssignment || busy} onClick={() => void resetAndReload()}>恢复默认</Button><Button variant="primary" disabled={!hostname || !selectedProfile || busy} onClick={() => void applyAndReload()}><RefreshCw size={14} />应用并刷新</Button></div>
+    </section>
+    <div className="ua-management">
+      <section className="ua-assignments"><div className="context-section-heading"><div><h2>站点绑定</h2><span>每个 hostname 只保留一个生效预设</span></div></div>{state.userAgentAssignments.length === 0 ? <Empty>还没有站点 User-Agent 绑定。</Empty> : <div className="ua-assignment-list">{[...state.userAgentAssignments].sort((left, right) => left.hostname.localeCompare(right.hostname)).map((assignment) => { const profile = profileMap.get(assignment.profileId); return <div key={assignment.id}><span><strong>{assignment.hostname}</strong><small>{profile?.name || '预设已删除'}</small></span><code title={profile?.userAgent}>{profile?.userAgent || assignment.profileId}</code><Button size="icon" variant="ghost" title="恢复该站点默认 UA" aria-label={`移除 ${assignment.hostname} 的 UA 绑定`} onClick={() => void run(async () => setState(await request('ua.site.reset', { url: `https://${assignment.hostname}/` })), '站点 UA 绑定已移除')}><Trash2 size={14} /></Button></div>; })}</div>}
+      </section>
+      <aside className="ua-profile-editor"><div className="context-section-heading"><div><h2>{draft.id ? '编辑自定义预设' : '自定义预设'}</h2><span>保存后可在 Popup 和当前站点中复用</span></div></div><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如 API Client" /></Field><Field label="User-Agent"><textarea rows={5} value={draft.userAgent} onChange={(event) => setDraft({ ...draft, userAgent: event.target.value })} placeholder="Custom-Agent/1.0" /></Field><div className="editor-actions">{draft.id && <Button variant="ghost" onClick={() => setDraft({ name: '', userAgent: '' })}>取消编辑</Button>}<Button variant="primary" disabled={busy || !draft.name.trim() || !draft.userAgent.trim()} onClick={() => void saveProfile()}><Save size={14} />保存预设</Button></div><div className="custom-ua-list">{profiles.filter((profile) => !profile.builtin).map((profile) => <div key={profile.id}><button onClick={() => setDraft({ id: profile.id, name: profile.name, userAgent: profile.userAgent })}><strong>{profile.name}</strong><small>{profile.userAgent}</small></button><Button size="icon" variant="ghost" title="删除自定义预设" aria-label={`删除 ${profile.name}`} onClick={() => void run(async () => { setState(await request('ua.profile.delete', { id: profile.id })); await loadProfiles(); }, '自定义 UA 预设已删除')}><Trash2 size={14} /></Button></div>)}</div></aside>
     </div>
   </div>;
 }
@@ -545,11 +510,6 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
   const [captureHeaders, setCaptureHeaders] = useState(false);
   const [captureBody, setCaptureBody] = useState(false);
   const [query, setQuery] = useState('');
-  const [observationStatus, setObservationStatus] = useState<PageObservationStatus>();
-  const [observations, setObservations] = useState<PageObservationRecord[]>([]);
-  const [selectedObservationId, setSelectedObservationId] = useState('');
-  const [captureObservationValues, setCaptureObservationValues] = useState(false);
-  const [observationError, setObservationError] = useState('');
 
   const load = useCallback(async () => {
     if (!tab) return;
@@ -581,30 +541,6 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
     return () => browser.runtime.onMessage.removeListener(listener);
   }, [load, tab?.id]);
 
-  const loadObservations = useCallback(async () => {
-    if (!tab) return;
-    try {
-      setObservationError('');
-      const nextStatus = await request('observation.status', { tabId: tab.id });
-      setObservationStatus(nextStatus);
-      if (nextStatus.options) setCaptureObservationValues(nextStatus.options.captureValues);
-      const nextRecords = nextStatus.startedAt
-        ? await request('observation.list', { ...nextStatus.target, limit: 200 })
-        : [];
-      setObservations(nextRecords);
-      setSelectedObservationId((current) => nextRecords.some((item) => item.id === current) ? current : nextRecords.at(-1)?.id || '');
-    } catch (error) {
-      setObservationError(errorMessage(error));
-    }
-  }, [tab]);
-
-  useEffect(() => { void loadObservations(); }, [loadObservations]);
-  useEffect(() => {
-    if (!observationStatus?.active) return undefined;
-    const timer = window.setInterval(() => void loadObservations(), 1_000);
-    return () => window.clearInterval(timer);
-  }, [loadObservations, observationStatus?.active]);
-
   const selected = records.find((record) => record.id === selectedId);
   useEffect(() => {
     setExported(undefined);
@@ -626,8 +562,6 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
   const canGeneratePoc = bridge.state === 'connected' && Boolean(bridge.capabilities?.includes('yakit.poc.generate'));
   const canPrepareAnalysis = bridge.state === 'connected' && Boolean(bridge.capabilities?.includes('yakit.browser_request.prepare_analysis'));
   const captureTarget = status?.active ? status.target : tab ? { tabId: tab.id } : undefined;
-  const observationTarget = observationStatus?.startedAt ? observationStatus.target : tab ? { tabId: tab.id } : undefined;
-  const selectedObservation = observations.find((item) => item.id === selectedObservationId);
 
   const start = () => run(async () => {
     if (!tab) throw new Error('请选择目标标签页');
@@ -638,16 +572,6 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
     setRecords([]);
     setSelectedId('');
   }, captureHeaders || captureBody ? '网络捕获已开始，敏感字段仅保存在本次浏览器会话' : '网络元数据捕获已开始');
-
-  const startObservation = () => run(async () => {
-    if (!tab) throw new Error('请选择目标标签页');
-    const next = await request('observation.start', {
-      tabId: tab.id, captureValues: captureObservationValues, maxEntries: 100, maxValueBytes: 2_048,
-    });
-    setObservationStatus(next);
-    setObservations([]);
-    setSelectedObservationId('');
-  }, captureObservationValues ? '页面观测已开始，值预览将在授权到期或停止时销毁' : '页面元数据观测已开始');
 
   return <div className="section-view network-view">
     <div className="page-heading"><div><h1>网络活动</h1><p>HTTP 请求、表单导航、实时通信与前端加密调用。</p></div><div className="network-heading-actions">
@@ -690,39 +614,7 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
       </aside>
     </div>}
 
-    <section className="observation-section">
-      <div className="observation-heading">
-        <div><span>页面行为观测</span><h2>加密与实时通信</h2></div>
-        <div className="network-heading-actions">
-          <span className={`capture-state ${observationStatus?.active ? 'active' : ''}`}><i />{observationStatus?.active ? `${observationStatus.count} 条事件` : observationStatus?.startedAt ? '已停止' : '未观测'}</span>
-          {observationStatus?.active
-            ? <Button variant="ghost" disabled={busy || !observationTarget} onClick={() => void run(async () => { setObservationStatus(await request('observation.stop', observationTarget!)); await loadObservations(); }, '页面观测已停止')}><Square size={14} />停止</Button>
-            : <Button variant="primary" disabled={busy || !tab?.url?.startsWith('http')} onClick={() => void startObservation()}><Play size={14} />开始观测</Button>}
-        </div>
-      </div>
-      <div className="network-control-bar observation-controls">
-        <label><Switch checked={captureObservationValues} disabled={observationStatus?.active || busy} onCheckedChange={setCaptureObservationValues} /><span><strong>短时值预览</strong><small>关闭时仅记录算法、大小、方向和调用来源</small></span></label>
-        <span className="observation-kinds">Fetch / XHR / Form · WebSocket · WebCrypto · CryptoJS</span>
-        <Button size="icon" variant="ghost" title="刷新页面观测" aria-label="刷新页面观测" onClick={() => void loadObservations()}><RefreshCw size={15} /></Button>
-        <Button size="icon" variant="ghost" title="清空页面观测" aria-label="清空页面观测" disabled={!observationTarget || observations.length === 0 || busy} onClick={() => void run(async () => { setObservationStatus(await request('observation.clear', observationTarget!)); setObservations([]); setSelectedObservationId(''); }, '页面观测记录已清空')}><Trash2 size={15} /></Button>
-      </div>
-      {observationError ? <div className="network-error"><AlertTriangle size={15} />{observationError}<Button size="sm" variant="ghost" onClick={() => void loadObservations()}>重试</Button></div> : <div className="observation-layout">
-        <div className="observation-timeline">
-          <div className="observation-table-head"><span>类型</span><span>操作</span><span>目标 / 算法</span><span>数据</span><span>时间</span></div>
-          {observations.length === 0 ? <Empty>{observationStatus?.active ? '等待页面行为事件。' : '当前文档没有观测记录。'}</Empty> : observations.map((item) => <button key={item.id} className={`observation-row ${item.id === selectedObservationId ? 'selected' : ''}`} onClick={() => setSelectedObservationId(item.id)}>
-            <strong>{item.kind}</strong><span>{item.direction || item.operation}</span><span className="observation-target"><strong>{item.algorithm || item.url || item.operation}</strong><small>{item.scriptUrl || item.dataType || '页面主世界'}</small></span><span>{item.byteLength === undefined ? '—' : `${item.byteLength} B`}</span><time>{new Date(item.timestamp).toLocaleTimeString()}</time>
-          </button>)}
-        </div>
-        <aside className="network-inspector observation-inspector">
-          {!selectedObservation ? <Empty>选择一条事件查看详情。</Empty> : <>
-            <div className="network-inspector__heading"><div><span>{selectedObservation.kind}</span><strong>{selectedObservation.algorithm || selectedObservation.operation}</strong><small title={selectedObservation.url || selectedObservation.scriptUrl}>{selectedObservation.url || selectedObservation.scriptUrl || '页面主世界'}</small></div><span className={selectedObservation.error ? 'status-error' : 'status-good'}>{selectedObservation.error ? 'ERROR' : `#${selectedObservation.sequence}`}</span></div>
-            <dl className="network-meta"><div><dt>方向</dt><dd>{selectedObservation.direction || '调用'}</dd></div><div><dt>数据类型</dt><dd>{selectedObservation.dataType || '未知'}</dd></div><div><dt>输入大小</dt><dd>{selectedObservation.byteLength === undefined ? '未知' : `${selectedObservation.byteLength} B`}</dd></div><div><dt>输出大小</dt><dd>{selectedObservation.resultByteLength === undefined ? '未知' : `${selectedObservation.resultByteLength} B`}</dd></div></dl>
-            {(selectedObservation.inputPreview || selectedObservation.outputPreview) && <div className="observation-values"><strong>授权值预览</strong>{selectedObservation.inputPreview && <pre>{selectedObservation.inputPreview}</pre>}{selectedObservation.outputPreview && <pre>{selectedObservation.outputPreview}</pre>}</div>}
-            <div className="observation-stack"><strong>调用来源</strong><pre>{selectedObservation.stack || selectedObservation.scriptUrl || '未提供调用栈'}</pre></div>
-          </>}
-        </aside>
-      </div>}
-    </section>
+    <RecordingWorkspace tab={tab} busy={busy} run={run} />
   </div>;
 }
 
@@ -932,7 +824,7 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
         <label className="toggle-row"><span><strong>全屏自动收起</strong><small>进入全屏、演示或视频场景时关闭展开内容</small></span><Switch checked={panelDraft.autoCollapseFullscreen} onCheckedChange={(autoCollapseFullscreen) => setPanelDraft({ ...panelDraft, autoCollapseFullscreen })} /></label>
         <div className="editor-actions"><Button disabled={busy} onClick={() => void savePanel()}><Save size={16} />保存面板策略</Button></div>
       </section>
-      <div className="grant-editor"><h2>浏览器共享会话</h2><p>只把明确勾选的 frame 和能力授权给当前 Agent；子 frame、刷新和跨来源导航不会静默继承授权。</p><div className="tab-picker">{tabs.map((tabItem) => { const frames = framesByTab[tabItem.id] || []; const mainSelected = selectedTargets.includes(`${tabItem.id}:0`); return <div className="tab-picker-group" key={tabItem.id}><label><input type="checkbox" checked={mainSelected} onChange={(event) => toggleTab(tabItem.id, event.target.checked)} /><span><strong>{tabItem.title}</strong><small>{tabItem.url}</small></span></label>{mainSelected && frames.filter((frame) => !frame.isTop).map((frame) => <label className="frame-target" key={frame.frameId}><input type="checkbox" disabled={!frame.accessible || !frame.origin} checked={selectedTargets.includes(`${tabItem.id}:${frame.frameId}`)} onChange={(event) => toggleTarget(`${tabItem.id}:${frame.frameId}`, event.target.checked)} /><span><strong>{frame.title || frame.name || `Frame ${frame.frameId}`}</strong><small>#{frame.frameId} · {frame.sameOrigin ? '同源' : '跨源'} · {frame.origin || frame.url}</small></span></label>)}</div>; })}</div><div className="grant-options"><Field label="权限预设"><select value={grantLevel} onChange={(event) => setGrantLevel(event.target.value as 'read' | 'control')}><option value="read">只读：页面、Storage、Cookie</option><option value="control">控制：节点操作、函数调用、表达式 Eval、接管、代理</option></select></Field><Field label="有效期"><select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option><option value="240">4 小时</option></select></Field></div>{grantLevel === 'control' && <label className="toggle-row grant-risk-toggle"><span><strong>允许程序 Eval</strong><small>独立高风险 scope，可执行多条语句并产生页面副作用</small></span><Switch disabled={policy.policy.allowProgramEval === false} checked={allowProgramEval && policy.policy.allowProgramEval !== false} onCheckedChange={setAllowProgramEval} /></label>}<div className="grant-scope-list">{selectedGrantScopes.filter((scope) => policy.policy.allowProgramEval !== false || scope !== 'browser.page.eval.program').map((scope) => <span key={scope}>{CAPABILITY_LABELS[scope]}</span>)}</div><div className="editor-actions"><button className="primary-button" disabled={busy || selectedTargets.length === 0} onClick={() => void run(async () => setState(await request('grant.create', { targets: selectedTargets.map((key) => { const [tabId, frameId] = key.split(':').map(Number); return { tabId, frameId }; }), scopes: selectedGrantScopes.filter((scope) => policy.policy.allowProgramEval !== false || scope !== 'browser.page.eval.program'), durationMinutes })), '共享会话已创建')}><ShieldCheck size={16} />创建会话</button>{state.activeGrant && <button className="danger-button" onClick={() => void run(async () => setState(await request('grant.revoke')), '共享会话已撤销')}><X size={16} />立即撤销</button>}</div>{state.activeGrant && <div className="grant-status"><strong>{isControlScopeSet(state.activeGrant.scopes) ? '控制会话' : '只读会话'}</strong><span>{state.activeGrant.targets.length} 个 frame · {state.activeGrant.scopes.length} 项能力 · {new Date(state.activeGrant.expiresAt).toLocaleString()} 到期</span></div>}</div></div>
+      <div className="grant-editor"><h2>浏览器共享会话</h2><p>只把明确勾选的 frame 和能力授权给当前 Agent；子 frame、刷新和跨来源导航不会静默继承授权。</p><div className="tab-picker">{tabs.map((tabItem) => { const frames = framesByTab[tabItem.id] || []; const mainSelected = selectedTargets.includes(`${tabItem.id}:0`); return <div className="tab-picker-group" key={tabItem.id}><label><input type="checkbox" checked={mainSelected} onChange={(event) => toggleTab(tabItem.id, event.target.checked)} /><span><strong>{tabItem.title}</strong><small>{tabItem.url}</small></span></label>{mainSelected && frames.filter((frame) => !frame.isTop).map((frame) => <label className="frame-target" key={frame.frameId}><input type="checkbox" disabled={!frame.accessible || !frame.origin} checked={selectedTargets.includes(`${tabItem.id}:${frame.frameId}`)} onChange={(event) => toggleTarget(`${tabItem.id}:${frame.frameId}`, event.target.checked)} /><span><strong>{frame.title || frame.name || `Frame ${frame.frameId}`}</strong><small>#{frame.frameId} · {frame.sameOrigin ? '同源' : '跨源'} · {frame.origin || frame.url}</small></span></label>)}</div>; })}</div><div className="grant-options"><Field label="权限预设"><select value={grantLevel} onChange={(event) => setGrantLevel(event.target.value as 'read' | 'control')}><option value="read">只读：页面、Storage、Cookie</option><option value="control">控制：页面操作、网络敏感字段、深度捕获、代理</option></select></Field><Field label="有效期"><select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option><option value="240">4 小时</option></select></Field></div>{grantLevel === 'control' && <label className="toggle-row grant-risk-toggle"><span><strong>允许程序 Eval</strong><small>独立高风险 scope，可执行多条语句并产生页面副作用</small></span><Switch disabled={policy.policy.allowProgramEval === false} checked={allowProgramEval && policy.policy.allowProgramEval !== false} onCheckedChange={setAllowProgramEval} /></label>}<div className="grant-scope-list">{selectedGrantScopes.filter((scope) => policy.policy.allowProgramEval !== false || scope !== 'browser.page.eval.program').map((scope) => <span key={scope}>{CAPABILITY_LABELS[scope]}</span>)}</div><div className="editor-actions"><button className="primary-button" disabled={busy || selectedTargets.length === 0} onClick={() => void run(async () => setState(await request('grant.create', { targets: selectedTargets.map((key) => { const [tabId, frameId] = key.split(':').map(Number); return { tabId, frameId }; }), scopes: selectedGrantScopes.filter((scope) => policy.policy.allowProgramEval !== false || scope !== 'browser.page.eval.program'), durationMinutes })), '共享会话已创建')}><ShieldCheck size={16} />创建会话</button>{state.activeGrant && <button className="danger-button" onClick={() => void run(async () => setState(await request('grant.revoke')), '共享会话已撤销')}><X size={16} />立即撤销</button>}</div>{state.activeGrant && <div className="grant-status"><strong>{isControlScopeSet(state.activeGrant.scopes) ? '控制会话' : '只读会话'}</strong><span>{state.activeGrant.targets.length} 个 frame · {state.activeGrant.scopes.length} 项能力 · {new Date(state.activeGrant.expiresAt).toLocaleString()} 到期</span></div>}</div></div>
       <div className="protocol-panel"><h2>Bridge 方法</h2><div><code>browser.tabs / frames</code><span>列出授权标签页与完整 frame inventory</span></div><div><code>browser.context</code><span>生成结构化快照、存储 inventory、认证信号与上下文 diff</span></div><div><code>browser.node.*</code><span>检查或操作快照内的文档绑定节点引用</span></div><div><code>browser.cookies</code><span>读取指定标签页的浏览器 Cookie</span></div><div><code>browser.network.*</code><span>控制有界网络捕获、读取请求时间线并导出重放包</span></div><div><code>browser.takeover</code><span>将页面切到前台，交给用户扫码或二次验证</span></div><div><code>browser.invoke</code><span>以控制权限调用页面已有全局函数</span></div><div><code>browser.eval</code><span>以控制权限在页面主世界执行代码，支持 Promise 和超时</span></div><div><code>proxy.list / switch</code><span>读取并切换扩展代理配置</span></div></div>
     </div>
   </div>;

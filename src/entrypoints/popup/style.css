@@ -1,2 +1,1 @@
-html, body, #root { margin: 0; min-width: 390px; }
-body { overflow: hidden; }
+html, body, #root { width: 390px; height: 600px; margin: 0; overflow: hidden; }

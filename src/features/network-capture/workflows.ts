@@ -1,4 +1,4 @@
-import { observationAnalysisWindow } from '@/features/page-observation/service';
+import { recordingAnalysisWindow } from '@/features/browser-recording/service';
 import type { BrowserTarget } from '@/types/models';
 import { exportNetworkRequest, listNetworkRequests } from './service';
 
@@ -12,7 +12,7 @@ export async function capturedRequestEnginePayload(target: BrowserTarget, id: st
     rawRequestBase64: exported.rawRequestBase64,
     isHttps: exported.isHttps,
     observations: includeObservations && record
-      ? await observationAnalysisWindow(target, record.startedAt)
+      ? await recordingAnalysisWindow(target, record.startedAt)
       : [],
   };
 }
