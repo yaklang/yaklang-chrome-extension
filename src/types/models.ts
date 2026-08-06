@@ -226,6 +226,8 @@ export interface BridgePairingStatus {
 
 export type CapabilityScope =
   | 'browser.tabs.read'
+  | 'browser.isolation.read'
+  | 'browser.isolation.manage'
   | 'browser.dom.read'
   | 'browser.dom.write'
   | 'browser.storage.read'
@@ -238,6 +240,7 @@ export type CapabilityScope =
   | 'browser.network.read'
   | 'browser.network.capture'
   | 'browser.network.sensitive.read'
+  | 'browser.network.replay'
   | 'browser.recording.read'
   | 'browser.recording.control'
   | 'browser.recording.sensitive.read'
@@ -272,6 +275,8 @@ export interface PageFrameSummary extends BrowserTarget {
 }
 
 export interface BridgeGrantTarget extends BrowserTarget {
+  isolationContextId: string;
+  cookieStoreId?: string;
   origin: string;
   grantedUrl: string;
   title: string;
@@ -323,6 +328,7 @@ export interface AgentActionRecord {
   grantId: string;
   method: string;
   targetTabId?: number;
+  isolationContextId?: string;
   state: AgentActionState;
   startedAt: number;
   completedAt?: number;
@@ -338,6 +344,10 @@ export interface AgentRuntime {
   pausedAt?: number;
   updatedAt: number;
   actions: AgentActionRecord[];
+  persistence?: 'pending' | 'persisted' | 'memory-only' | 'degraded';
+  persistenceError?: string;
+  pendingMutations?: number;
+  droppedActionCount?: number;
 }
 
 export interface NetworkCaptureOptions {
@@ -402,6 +412,11 @@ export interface NetworkCaptureStatus {
   count: number;
   droppedCount: number;
   options?: NetworkCaptureOptions;
+  retainedBytes?: number;
+  globalCount?: number;
+  globalRetainedBytes?: number;
+  persistence?: 'pending' | 'persisted' | 'memory-only' | 'degraded';
+  persistenceError?: string;
 }
 
 export interface NetworkRequestExport {
@@ -466,8 +481,9 @@ export interface BrowserRecordingNavigation {
 }
 
 export interface BrowserRecordingTransform {
-  category: 'serializer' | 'canonicalization' | 'request-builder' | 'encoding';
-  provider: 'native' | 'axios' | 'page';
+  adapterId: string;
+  providerKind: BrowserCryptoProviderKind;
+  category: 'serializer' | 'canonicalization' | 'request-builder' | 'encoding' | 'compression';
   phase?: 'input' | 'output' | 'boundary';
 }
 
@@ -524,6 +540,7 @@ export interface BrowserRecordingEvent {
   label?: string;
   url?: string;
   method?: string;
+  statusCode?: number;
   crypto?: BrowserRecordingCrypto;
   transform?: BrowserRecordingTransform;
   direction?: 'send' | 'receive';
@@ -550,12 +567,26 @@ export interface BrowserRecordingEvent {
 export interface BrowserRecordingStatus {
   active: boolean;
   target: BrowserTarget;
+  isolationContextId?: string;
+  cookieStoreId?: string;
   documentAvailable: boolean;
   pageUrl?: string;
   recordingId?: string;
   startedAt?: number;
   count: number;
   droppedCount: number;
+  budgetDroppedCount?: number;
+  previewDroppedCount?: number;
+  retentionFloorSequence?: number;
+  retainedBytes?: number;
+  retainedPreviewBytes?: number;
+  retainedCallCount?: number;
+  retainedCallBytes?: number;
+  retainedCallDroppedCount?: number;
+  globalRetainedBytes?: number;
+  globalSessionCount?: number;
+  persistence?: 'pending' | 'persisted' | 'memory-only' | 'degraded';
+  persistenceError?: string;
   options?: BrowserRecordingOptions;
   endedReason?: 'user' | 'expired' | 'authorization';
   navigation?: BrowserRecordingNavigation & {
@@ -593,6 +624,8 @@ export interface BrowserRecordingTrace {
 export type BrowserPageCallableKind = 'recorded-call' | 'business-closure' | 'request-transaction' | 'global-function';
 export type BrowserPageCallableValueEncoding = 'auto' | 'utf8' | 'hex' | 'base64' | 'json';
 export type BrowserPageCallableResultMode = 'sync' | 'promise' | 'auto';
+export type BrowserPageCallableBodyFormat = 'json' | 'form' | 'raw';
+export type BrowserPageCallableRequestBoundary = 'fetch' | 'xhr' | 'beacon' | 'form';
 
 export interface BrowserPageCallableExecutionPolicy {
   resultMode: BrowserPageCallableResultMode;
@@ -600,13 +633,29 @@ export interface BrowserPageCallableExecutionPolicy {
 }
 
 export interface BrowserPageCallableTransaction {
+  version: 2;
+  prerequisites: Array<{
+    boundary: 'fetch';
+    method: string;
+    url: string;
+    requestBodyFormat: BrowserPageCallableBodyFormat | 'none';
+    maxRequestBodyBytes: number;
+    response: {
+      statusCode: number;
+      url: string;
+      bodyFormat: BrowserPageCallableBodyFormat;
+      maxBodyBytes: number;
+      requiredPaths: string[];
+    };
+  }>;
   request: {
+    boundary: BrowserPageCallableRequestBoundary;
     method: string;
     url: string;
     expectedDestinations: string[];
+    bodyFormat: BrowserPageCallableBodyFormat;
   };
   inputMode: 'auto';
-  boundaries: Array<'fetch' | 'xhr' | 'beacon' | 'form'>;
 }
 
 export interface BrowserPageCallableInputSlot {
@@ -617,6 +666,25 @@ export interface BrowserPageCallableInputSlot {
   dataType: string;
   required: boolean;
   retained: boolean;
+}
+
+export interface BrowserTransformObservedOperation {
+  operation: string;
+  destination?: string;
+  crypto?: BrowserRecordingCrypto;
+}
+
+export interface BrowserTransformCallableAnalysis {
+  version: 1;
+  traceId: string;
+  confidence: { score: number; level: 'high' | 'medium' | 'low' };
+  flow: string[];
+  operations: BrowserTransformObservedOperation[];
+  evidence: Array<{
+    kind: BrowserProfileInferenceEvidenceKind;
+    strength: 'proven' | 'supported';
+    label: string;
+  }>;
 }
 
 export interface BrowserPageCallable {
@@ -645,6 +713,8 @@ export interface BrowserPageCallable {
     sourceUrl?: string;
     lineNumber?: number;
     functionName?: string;
+    businessFrameHints?: BrowserBusinessFrameHint[];
+    analysis?: BrowserTransformCallableAnalysis;
   };
   createdAt: number;
 }
@@ -675,6 +745,7 @@ export type BrowserProfileInferenceStatus =
 
 export type BrowserProfileInferenceEvidenceKind =
   | 'request-boundary'
+  | 'response-boundary'
   | 'exact-value'
   | 'message-boundary'
   | 'state-sequence'
@@ -714,6 +785,7 @@ export interface BrowserProfileInferenceAIContext {
     eventId: string;
     method: string;
     url: string;
+    bodyFormat?: BrowserPageCallableBodyFormat;
     destination?: string;
     serialization?: BrowserProfileInferenceSerialization;
   };
@@ -765,6 +837,7 @@ export interface BrowserProfileCapturePlan {
   frameHints: BrowserBusinessFrameHint[];
   expectedDestinations: string[];
   sourceCount: number;
+  transaction?: BrowserPageCallableTransaction;
 }
 
 export interface BrowserProfileInferenceCandidate {
@@ -777,6 +850,7 @@ export interface BrowserProfileInferenceCandidate {
     eventId: string;
     method: string;
     url: string;
+    bodyFormat?: BrowserPageCallableBodyFormat;
     destination?: string;
     serialization?: BrowserProfileInferenceSerialization;
     mappings: Array<{
@@ -826,6 +900,7 @@ export interface BrowserDeepCaptureFrame {
   functionName: string;
   scriptId: string;
   url: string;
+  sourceMapUrl?: string;
   lineNumber: number;
   columnNumber: number;
   scopes: BrowserDeepCaptureScope[];
@@ -861,13 +936,39 @@ export interface BrowserDeepCapturePause {
   };
 }
 
+export interface BrowserDeepCaptureWorkerTarget {
+  targetId: string;
+  type: 'worker' | 'shared_worker' | 'service_worker';
+  url: string;
+  state: 'attached' | 'detached' | 'error';
+  scriptCount: number;
+  attachedAt: number;
+  detachedAt?: number;
+  error?: string;
+}
+
 export interface BrowserDeepCaptureStatus {
   state: BrowserDeepCaptureState;
   target: BrowserTarget;
+  isolationContextId?: string;
+  cookieStoreId?: string;
   matcher?: BrowserDeepCaptureMatcher;
   attachedAt?: number;
   pause?: BrowserDeepCapturePause;
   error?: string;
+  recovery?: {
+    page: 'running' | 'possibly-paused';
+    debugger: 'detached' | 'still-attached';
+    trigger: string;
+  };
+  workerTargets?: BrowserDeepCaptureWorkerTarget[];
+  workerTargetError?: string;
+  boundary?: {
+    target: 'main-document';
+    sourceMaps: 'metadata-only';
+    workers: 'evidence-only' | 'unavailable';
+    wasm: 'scope-evidence-only';
+  };
 }
 
 export type BrowserTransformDirectionName = 'request' | 'response';
@@ -885,7 +986,8 @@ export type BrowserTransformBuiltinOperation =
   | 'hex.decode'
   | 'object.pick'
   | 'object.compose'
-  | 'form.compose';
+  | 'form.compose'
+  | 'form.serialize';
 
 export interface BrowserTransformNodeReference {
   nodeId: string;
@@ -925,11 +1027,66 @@ export interface BrowserTransformDirection {
   nodes: BrowserTransformPipelineNode[];
 }
 
+export interface BrowserTransformRequestTransactionBinding {
+  callableId: string;
+  transaction: BrowserPageCallableTransaction;
+}
+
+export type BrowserTransformExplanationOwner = 'webfuzzer' | 'extension' | 'page' | 'yak';
+export type BrowserTransformExplanationProof = 'configured' | 'observed' | 'supported';
+export type BrowserTransformExplanationStageKind =
+  | 'input'
+  | 'prerequisite'
+  | 'page-call'
+  | 'builtin'
+  | 'output'
+  | 'session'
+  | 'transport';
+
+export interface BrowserTransformExplanationStage {
+  id: string;
+  kind: BrowserTransformExplanationStageKind;
+  owner: BrowserTransformExplanationOwner;
+  proof: BrowserTransformExplanationProof;
+  title: string;
+  summary: string;
+  nodeIds: string[];
+  inputPaths: string[];
+  outputPaths: string[];
+  operations: BrowserTransformObservedOperation[];
+  evidence: Array<{
+    strength: 'proven' | 'supported';
+    label: string;
+  }>;
+  network?: {
+    method: string;
+    route: string;
+    statusCode?: number;
+    requiredPaths: string[];
+  };
+  source?: {
+    functionName?: string;
+    url?: string;
+    lineNumber?: number;
+  };
+}
+
+export interface BrowserTransformExplanation {
+  version: 1;
+  directions: Array<{
+    direction: BrowserTransformDirectionName;
+    summary: string;
+    stages: BrowserTransformExplanationStage[];
+  }>;
+}
+
 export interface BrowserTransformProfile {
   id: string;
   name: string;
   enabled: boolean;
   target: BrowserTarget;
+  isolationContextId: string;
+  cookieStoreId?: string;
   origin: string;
   match: {
     methods: string[];
@@ -939,13 +1096,146 @@ export interface BrowserTransformProfile {
   response: BrowserTransformDirection;
   failMode: 'closed';
   maxConcurrency: number;
+  explanation?: BrowserTransformExplanation;
+  requestTransaction?: BrowserTransformRequestTransactionBinding;
+  recovery?: BrowserTransformRecoveryPlan;
   createdAt: number;
   updatedAt: number;
 }
 
-export type BrowserTransformProfileInput = Omit<BrowserTransformProfile, 'id' | 'createdAt' | 'updatedAt'> & {
+export type BrowserTransformProfileInput = Omit<
+  BrowserTransformProfile,
+  'id' | 'isolationContextId' | 'cookieStoreId' | 'explanation' | 'requestTransaction' | 'recovery' | 'createdAt' | 'updatedAt'
+> & {
   id?: string;
 };
+
+export const BROWSER_TRANSFORM_AGENT_CONTRACT_VERSION = 1 as const;
+export const BROWSER_TRANSFORM_RECOVERY_CONTRACT_VERSION = 1 as const;
+
+export type BrowserTransformRecoveryState =
+  | 'ready'
+  | 'stale'
+  | 'capturing'
+  | 'validation-required'
+  | 'confirmation-required'
+  | 'failed';
+
+export interface BrowserTransformRecoveryGuide {
+  direction: BrowserTransformDirectionName;
+  callableId: string;
+  inputPaths: string[];
+  resultPath?: string;
+  outputKind: 'body' | 'json-field' | 'form-field' | 'header' | 'query';
+  outputField: string;
+  setFormContentType: boolean;
+}
+
+export interface BrowserTransformRecoveryBinding {
+  callableId: string;
+  name: string;
+  kind: BrowserPageCallableKind;
+  operation: string;
+  nodeIds: Array<{
+    direction: BrowserTransformDirectionName;
+    nodeId: string;
+  }>;
+  inputSemantics: Array<{
+    id: string;
+    name: string;
+    index: number;
+    role: BrowserRecordingArgumentRole;
+    dataType: string;
+    required: boolean;
+    retained: boolean;
+  }>;
+  output: {
+    dataType: string;
+    encoding: BrowserPageCallableValueEncoding;
+    shape: 'value' | 'envelope';
+    paths: string[];
+  };
+  guides: BrowserTransformRecoveryGuide[];
+  frameHints: BrowserBusinessFrameHint[];
+  transaction?: BrowserPageCallableTransaction;
+}
+
+export interface BrowserTransformRecoveryCapturePlan {
+  kind: 'request';
+  method: string;
+  url: string;
+  urlPattern: string;
+  expectedDestinations: string[];
+  bodyFormat: BrowserPageCallableBodyFormat;
+  frameHints: BrowserBusinessFrameHint[];
+  automatic: boolean;
+  reason?: string;
+}
+
+export interface BrowserTransformRecoveryPending {
+  target: BrowserTarget;
+  callableId: string;
+  callableName: string;
+  request: BrowserTransformDirection;
+  response: BrowserTransformDirection;
+  capturedAt: number;
+}
+
+export interface BrowserTransformRecoveryValidation {
+  id: string;
+  proofLevel: 'execution-only';
+  summary: string;
+  validatedAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserTransformRecoveryPlan {
+  contractVersion: typeof BROWSER_TRANSFORM_RECOVERY_CONTRACT_VERSION;
+  state: BrowserTransformRecoveryState;
+  desiredEnabled: boolean;
+  boundDocumentId?: string;
+  binding: BrowserTransformRecoveryBinding;
+  capture: BrowserTransformRecoveryCapturePlan;
+  pending?: BrowserTransformRecoveryPending;
+  validation?: BrowserTransformRecoveryValidation;
+  reason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface BrowserTransformRecoveryValidationResult {
+  recovery: BrowserTransformRecoveryPlan;
+  execution: BrowserTransformExecution;
+}
+
+export interface BrowserTransformValidationDraft {
+  contractVersion: typeof BROWSER_TRANSFORM_AGENT_CONTRACT_VERSION;
+  id: string;
+  profile: BrowserTransformProfileInput;
+  proofLevel: 'execution-only' | 'structure' | 'exact';
+  comparison?: {
+    mode: 'structure' | 'exact';
+    equivalent: boolean;
+    summary: string;
+  };
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserPacketComparisonCheck {
+  id: 'method' | 'route' | 'query' | 'content-type' | 'body-format' | 'body-shape' | 'body-value' | 'headers';
+  status: 'pass' | 'fail' | 'warning';
+  label: string;
+  actual?: unknown;
+  expected?: unknown;
+}
+
+export interface BrowserPacketComparison {
+  mode: 'structure' | 'exact';
+  equivalent: boolean;
+  checks: BrowserPacketComparisonCheck[];
+  summary: string;
+}
 
 export interface BrowserTransformHeader {
   name: string;
@@ -976,7 +1266,45 @@ export interface BrowserTransformExecution {
   logicalInput: unknown;
   logicalOutput: unknown;
   nodeDurations: Array<{ nodeId: string; durationMs: number }>;
+  nodeTrace: Array<{
+    nodeId: string;
+    kind: BrowserTransformPipelineNode['kind'];
+    name: string;
+    inputRefs: string[];
+    output: BrowserTransformValueSummary;
+    durationMs: number;
+  }>;
+  fieldChanges: Array<{
+    path: string;
+    change: 'added' | 'removed' | 'changed';
+    before?: BrowserTransformValueSummary;
+    after?: BrowserTransformValueSummary;
+  }>;
   durationMs: number;
+}
+
+export interface BrowserTransformValueSummary {
+  type: 'null' | 'undefined' | 'boolean' | 'number' | 'string' | 'bytes' | 'array' | 'object';
+  byteLength?: number;
+  itemCount?: number;
+}
+
+export interface BrowserTransformProfileProposalResult {
+  profile: BrowserTransformProfileInput;
+  proposal: Record<string, unknown>;
+  next: string;
+}
+
+export interface BrowserTransformProfileValidationResult {
+  valid: boolean;
+  saveEligible: boolean;
+  proofLevel: 'execution-only' | 'structure' | 'exact';
+  normalizedProfile: BrowserTransformProfileInput;
+  generated: BrowserTransformPacket;
+  execution: BrowserTransformExecution;
+  comparison?: BrowserPacketComparison;
+  validationDraft?: Pick<BrowserTransformValidationDraft, 'contractVersion' | 'id' | 'createdAt' | 'expiresAt'>;
+  next: string;
 }
 
 export interface YakitFuzzerOpenResult {
@@ -1081,6 +1409,14 @@ export interface RuntimeMetricAggregate {
   maxDurationMs: number;
 }
 
+export interface RuntimeQueueMetric {
+  pending: number;
+  dropped: number;
+  persistenceErrors: number;
+  persistence: 'pending' | 'persisted' | 'memory-only' | 'degraded';
+  error?: string;
+}
+
 export interface RuntimeMetrics {
   version: 1;
   firstSeenAt: number;
@@ -1094,6 +1430,11 @@ export interface RuntimeMetrics {
   heartbeatLatencyTotalMs: number;
   heartbeatLatencyMaxMs: number;
   capabilities: Record<string, RuntimeMetricAggregate>;
+  queues: {
+    audit: RuntimeQueueMetric;
+    metrics: RuntimeQueueMetric;
+    agentActions: RuntimeQueueMetric;
+  };
 }
 
 export interface DiagnosticsBundle {
@@ -1144,8 +1485,298 @@ export interface ActiveTabInfo {
   windowId: number;
   title: string;
   url: string;
+  incognito: boolean;
+  cookieStoreId?: string;
+  isolationContextId?: string;
   favIconUrl?: string;
   lastAccessed?: number;
+}
+
+export type BrowserIsolationLevel = 'strong' | 'conditional' | 'none';
+
+export type BrowserIsolationContextKind =
+  | 'browser-profile'
+  | 'chrome-incognito-store'
+  | 'firefox-container'
+  | 'verified-tab-local'
+  | 'managed-ephemeral-profile'
+  | 'sequential-auth-snapshot';
+
+export type BrowserIsolationGuarantee = 'isolated' | 'shared' | 'verified-tab-local' | 'unknown';
+
+export interface BrowserIsolationContext {
+  contextId: string;
+  kind: BrowserIsolationContextKind;
+  cookieStoreId?: string;
+  incognito: boolean;
+  containerId?: string;
+  containerName?: string;
+  containerColor?: string;
+  managed?: boolean;
+  level: BrowserIsolationLevel;
+  guarantees: {
+    cookies: BrowserIsolationGuarantee;
+    localStorage: BrowserIsolationGuarantee;
+    indexedDB: BrowserIsolationGuarantee;
+    serviceWorker: BrowserIsolationGuarantee;
+    httpAuth: BrowserIsolationGuarantee;
+    clientCertificate: BrowserIsolationGuarantee;
+  };
+  tabIds: number[];
+  reasons: string[];
+}
+
+export interface BrowserIsolationInspection {
+  version: 1;
+  inspectedAt: number;
+  browser: 'chromium' | 'firefox';
+  capabilities: {
+    incognitoAccess: 'allowed' | 'denied' | 'unsupported';
+    containerTabs: boolean;
+    managedProfiles: boolean;
+  };
+  contexts: BrowserIsolationContext[];
+  tabs: ActiveTabInfo[];
+}
+
+export interface BrowserIsolationProof {
+  version: 1;
+  id: string;
+  leftContextId: string;
+  rightContextId: string;
+  leftTabId: number;
+  rightTabId: number;
+  sameOrigin: boolean;
+  cookieStoreRelation: 'different' | 'same' | 'unknown';
+  accountEvidenceRelation: 'different' | 'same' | 'unknown';
+  requestCredentialRelation: 'different' | 'same' | 'unknown';
+  refreshCheck: 'passed' | 'failed' | 'not-required';
+  level: BrowserIsolationLevel;
+  reasons: string[];
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserIncognitoIdentityResult {
+  tab: ActiveTabInfo;
+  context: BrowserIsolationContext;
+}
+
+export interface BrowserFirefoxContainerIdentityResult extends BrowserIncognitoIdentityResult {
+  container: {
+    cookieStoreId: string;
+    name: string;
+    color: string;
+    managed: true;
+  };
+}
+
+export interface BrowserFirefoxManagedContainer {
+  cookieStoreId: string;
+  name: string;
+  color: string;
+  createdAt: number;
+  tabCount: number;
+}
+
+export interface BrowserAuthContextHandle {
+  version: 1;
+  id: string;
+  slotId: 'left' | 'right';
+  accountLabel?: string;
+  deviceId: string;
+  installationId: string;
+  isolationContextId: string;
+  isolationProofId: string;
+  cookieStoreId: string;
+  origin: string;
+  grantId: string;
+  target: BrowserTarget & { documentId: string };
+  fingerprint: string;
+  authentication: {
+    status: PageAuthenticationStatus;
+    cookieCount: number;
+    storageEntryCount: number;
+    authCookieNames: string[];
+    authStorageKeys: string[];
+  };
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserAuthContextAttestation {
+  version: 1;
+  id: string;
+  deviceId: string;
+  installationId: string;
+  isolationContextId: string;
+  cookieStoreId: string;
+  origin: string;
+  grantId: string;
+  target: BrowserTarget & { documentId: string };
+  fingerprint: string;
+  authentication: BrowserAuthContextHandle['authentication'];
+  createdAt: number;
+  expiresAt: number;
+}
+
+export type BrowserAuthorizationFieldCategory =
+  | 'authentication'
+  | 'csrf'
+  | 'signature'
+  | 'nonce'
+  | 'timestamp'
+  | 'resource'
+  | 'unknown';
+
+export interface BrowserAuthorizationBaselineField {
+  location: 'header' | 'path' | 'query' | 'body';
+  path: string;
+  valueType: 'string' | 'number' | 'boolean' | 'null' | 'binary';
+  byteLength: number;
+  valueFingerprint: string;
+  category: BrowserAuthorizationFieldCategory;
+}
+
+export type BrowserAuthorizationResourceSource = 'wire' | 'logical';
+
+export interface BrowserAuthorizationResourceSelector {
+  source: BrowserAuthorizationResourceSource;
+  location: 'header' | 'path' | 'query' | 'body';
+  path: string;
+}
+
+export interface BrowserAuthorizationLogicalRequestBinding {
+  version: 1;
+  source: 'local-replay-draft';
+  baselineId: string;
+  profileId: string;
+  profileName: string;
+  isolationContextId: string;
+  cookieStoreId: string;
+  target: BrowserTarget & { documentId: string };
+  origin: string;
+  request: {
+    method: string;
+    url: string;
+    path: string;
+    contentType: string;
+    protocol?: 'graphql';
+    operationFingerprint?: string;
+    operationNames?: string[];
+    actionFingerprint: string;
+    headerNames: string[];
+    fields: BrowserAuthorizationBaselineField[];
+  };
+  outputDestinations: string[];
+  validation: {
+    proofLevel: 'structure';
+    summary: string;
+    warnings: string[];
+  };
+  bindingFingerprint: string;
+  profileUpdatedAt: number;
+  replayUpdatedAt: number;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserAuthorizationBaseline {
+  version: 1;
+  id: string;
+  deviceId: string;
+  installationId: string;
+  isolationContextId: string;
+  cookieStoreId: string;
+  origin: string;
+  grantId: string;
+  target: BrowserTarget & { documentId: string };
+  authContextReference: {
+    kind: 'handle' | 'attestation';
+    id: string;
+  };
+  networkRequestId: string;
+  request: {
+    method: string;
+    url: string;
+    path: string;
+    contentType: string;
+    protocol?: 'graphql';
+    operationFingerprint?: string;
+    operationNames?: string[];
+    actionFingerprint: string;
+    headerNames: string[];
+    fields: BrowserAuthorizationBaselineField[];
+  };
+  logicalRequest?: BrowserAuthorizationLogicalRequestBinding;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserAuthorizationBaselineCandidate {
+  id: string;
+  method: string;
+  url: string;
+  path: string;
+  resourceType: string;
+  startedAt: number;
+  completedAt?: number;
+  durationMs?: number;
+  statusCode?: number;
+  error?: string;
+  eligible: boolean;
+  reasons: string[];
+}
+
+export interface BrowserAuthorizationResourceValue {
+  version: 1;
+  baselineId: string;
+  source: BrowserAuthorizationResourceSource;
+  location: 'header' | 'path' | 'query' | 'body';
+  path: string;
+  valueType: 'string' | 'number' | 'boolean';
+  byteLength: number;
+  valueBase64: string;
+  valueFingerprint: string;
+  logicalBindingFingerprint?: string;
+}
+
+export interface BrowserAuthorizationTransformBinding {
+  version: 1;
+  baselineId: string;
+  profileId: string;
+  profileName: string;
+  isolationContextId: string;
+  cookieStoreId: string;
+  target: BrowserTarget & { documentId: string };
+  origin: string;
+  dynamicPaths: string[];
+  bindingFingerprint: string;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export interface BrowserAuthorizationCompiledRequest {
+  version: 1;
+  baselineId: string;
+  selector: BrowserAuthorizationResourceSelector;
+  method: string;
+  url: string;
+  isHttps: boolean;
+  rawRequestBase64: string;
+  resourceValueFingerprint: string;
+  logicalBindingFingerprint?: string;
+  packetFingerprint: string;
+}
+
+export interface BrowserAuthorizationBaselinePacket {
+  version: 1;
+  baselineId: string;
+  method: string;
+  url: string;
+  isHttps: boolean;
+  rawRequestBase64: string;
+  packetFingerprint: string;
 }
 
 export interface PageContextOptions {

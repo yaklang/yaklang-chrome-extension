@@ -102,6 +102,11 @@ input[type='checkbox'] { width: 15px; height: 15px; flex: 0 0 auto; padding: 0; 
 .topbar-tab { min-width: 0; flex: 0 1 420px; height: 38px; padding: 0 6px 0 11px; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
 .topbar-tab__favicon { width: 16px; height: 16px; flex: 0 0 auto; display: grid; place-items: center; color: var(--muted); }
 .topbar-tab__favicon img { width: 16px; height: 16px; object-fit: contain; }
+.topbar-workspace-context { min-width: 0; display: flex; align-items: center; gap: 9px; color: var(--muted-strong); }
+.topbar-workspace-context > svg { color: var(--primary); }
+.topbar-workspace-context strong, .topbar-workspace-context small { display: block; }
+.topbar-workspace-context strong { color: var(--foreground); font-size: var(--text-sm); line-height: 16px; }
+.topbar-workspace-context small { margin-top: 1px; color: var(--muted); font-size: var(--text-xs); line-height: 14px; }
 .target-tab-select { min-width: 0; flex: 1; height: 36px; padding: 0 4px; border: 0; background: transparent; font-size: var(--text-md); }
 .target-tab-select:focus-visible { box-shadow: none; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }

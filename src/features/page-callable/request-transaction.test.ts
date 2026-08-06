@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import type { BrowserPageCallableTransaction } from '@/types/models'
-import { requestMatchesTransaction, validateRequestTransactionOutput } from './request-transaction'
+import {
+  requestMatchesTransaction,
+  resolveRequestTransactionFetchInput,
+  validateRequestTransactionOutput,
+} from './request-transaction'
 
 const transaction: BrowserPageCallableTransaction = {
+  version: 2,
+  prerequisites: [],
   request: {
+    boundary: 'fetch',
     method: 'POST',
     url: 'encrypt/aesrsa.php?mode=login',
     expectedDestinations: ['body.encryptedData', 'body.encryptedKey', 'body.encryptedIv'],
+    bodyFormat: 'json',
   },
   inputMode: 'auto',
-  boundaries: ['fetch', 'xhr', 'beacon', 'form'],
 }
 
 describe('request transaction contract', () => {
@@ -20,6 +27,10 @@ describe('request transaction contract', () => {
       'http://127.0.0.1:82/login/encrypt/aesrsa.php?mode=login',
       'http://127.0.0.1:82/login/index.html',
     )).toBe(true)
+    expect(resolveRequestTransactionFetchInput(
+      'encrypt/aesrsa.php',
+      'http://127.0.0.1:82/login/index.html',
+    )).toBe('http://127.0.0.1:82/login/encrypt/aesrsa.php')
   })
 
   it('rejects another method, origin, path, or query', () => {

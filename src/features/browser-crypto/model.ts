@@ -82,6 +82,14 @@ export function isForwardCryptoEvent(event: BrowserRecordingEvent): boolean {
     .some((name) => operation.includes(name));
 }
 
+export function isReverseCryptoEvent(event: BrowserRecordingEvent): boolean {
+  if (event.kind !== 'crypto' || !event.crypto) return false;
+  const operation = `${event.operation} ${event.crypto.operation}`.toLowerCase();
+  if (operation.includes('verify')) return false;
+  return ['decrypt', 'decipher', 'unseal', '.open', 'box.open', 'secretbox.open']
+    .some((name) => operation.includes(name));
+}
+
 export function cryptoDeepCaptureMatcher(event: Pick<
   BrowserRecordingEvent,
   'kind' | 'crypto' | 'wrapperHandleId' | 'scriptUrl'

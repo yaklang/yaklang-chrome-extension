@@ -1,7 +1,12 @@
 import * as v from 'valibot';
 import type { ExtensionAction, ExtensionRequest } from '@/types/messages';
 import type { CapabilityScope } from '@/types/models';
-import { browserTransformExecuteSchema, browserTransformProfileInputSchema } from './transform';
+import { capabilityParams } from './bridge';
+import {
+  browserTransformExecuteSchema,
+  browserTransformPacketSchema,
+  browserTransformProfileInputSchema,
+} from './transform';
 
 const id = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
 const shortText = v.pipe(v.string(), v.trim(), v.maxLength(240));
@@ -41,15 +46,6 @@ const deepCaptureMatcher = v.variant('kind', [
     frameHints: businessFrameHints,
   }),
 ]);
-const pageRequestTransaction = v.strictObject({
-  request: v.strictObject({
-    method: v.pipe(v.string(), v.trim(), v.toUpperCase(), v.regex(/^[A-Z]{1,16}$/)),
-    url: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(4_096)),
-    expectedDestinations: v.pipe(v.array(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(512))), v.minLength(1), v.maxLength(64)),
-  }),
-  inputMode: v.literal('auto'),
-  boundaries: v.pipe(v.array(v.picklist(['fetch', 'xhr', 'beacon', 'form'])), v.minLength(1), v.maxLength(4)),
-});
 const port = v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(65_535));
 const proxyHost = v.pipe(
   v.string(),
@@ -197,6 +193,7 @@ const partitionKey = v.strictObject({
 
 const cookieInput = v.strictObject({
   url,
+  tabId,
   name: v.pipe(v.string(), v.maxLength(4_096)),
   value: v.pipe(v.string(), v.maxLength(64 * 1_024)),
   domain: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(253))),
@@ -229,6 +226,8 @@ const contextOptions = {
 
 const capabilityScopes: readonly CapabilityScope[] = [
   'browser.tabs.read',
+  'browser.isolation.read',
+  'browser.isolation.manage',
   'browser.dom.read',
   'browser.dom.write',
   'browser.storage.read',
@@ -241,6 +240,7 @@ const capabilityScopes: readonly CapabilityScope[] = [
   'browser.network.read',
   'browser.network.capture',
   'browser.network.sensitive.read',
+  'browser.network.replay',
   'browser.recording.read',
   'browser.recording.control',
   'browser.recording.sensitive.read',
@@ -260,6 +260,40 @@ const payloadSchemas = {
   'tab.get': v.strictObject({ tabId }),
   'tab.list': noPayload,
   'frame.list': v.strictObject({ tabId }),
+  'isolation.inspect': v.strictObject({
+    tabIds: v.optional(v.pipe(v.array(tabId), v.minLength(1), v.maxLength(256))),
+  }),
+  'isolation.proof.create': v.pipe(v.strictObject({
+    leftTabId: tabId,
+    rightTabId: tabId,
+  }), v.check((input) => input.leftTabId !== input.rightTabId, '双身份槽位不能选择同一个标签页')),
+  'isolation.incognito.open': v.strictObject({ url: httpUrl }),
+  'isolation.container.open': v.strictObject({
+    url: httpUrl,
+    name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(50))),
+  }),
+  'isolation.container.list': noPayload,
+  'isolation.container.remove': v.strictObject({
+    cookieStoreId: v.pipe(v.string(), v.regex(/^firefox-container-[0-9]+$/)),
+  }),
+  'authorization.engine.task': v.strictObject({
+    schema: v.picklist([
+      'authorization.workspace.create',
+      'authorization.workspace.inspect',
+      'authorization.baseline.candidates',
+      'authorization.baseline.bind',
+      'authorization.logical.bind',
+      'authorization.plan.create',
+      'authorization.plan.execute',
+      'authorization.evidence.inspect',
+      'authorization.evidence.packet',
+      'authorization.evidence.diff',
+      'authorization.evidence.validate',
+    ]),
+    payload: v.record(v.string(), v.unknown()),
+    timeoutMs: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(5_000), v.maxValue(120_000))),
+  }),
+  'authorization.yakit.open': v.strictObject({ workspaceId: id }),
   'proxy.save': proxyProfile,
   'proxy.delete': v.strictObject({ id }),
   'proxy.switch': v.strictObject({ id }),
@@ -286,12 +320,12 @@ const payloadSchemas = {
   'proxy.auth.status': v.strictObject({ profileId: id }),
   'proxy.config.export': noPayload,
   'proxy.config.import': v.strictObject({ configuration: proxyConfiguration }),
-  'cookie.list': v.strictObject({ url }),
+  'cookie.list': v.strictObject({ url, tabId }),
   'cookie.set': cookieInput,
   'cookie.remove': cookieRemoveInput,
   'cookie.removeMany': v.strictObject({ cookies: v.pipe(v.array(cookieRemoveInput), v.minLength(1), v.maxLength(1_000)) }),
-  'cookie.import': v.strictObject({ url, format: v.picklist(['json', 'netscape', 'set-cookie']), text: v.pipe(v.string(), v.maxLength(2 * 1024 * 1024)) }),
-  'cookie.export': v.strictObject({ url, format: v.picklist(['json', 'netscape', 'set-cookie']), includeValues: v.boolean() }),
+  'cookie.import': v.strictObject({ url, tabId, format: v.picklist(['json', 'netscape', 'set-cookie']), text: v.pipe(v.string(), v.maxLength(2 * 1024 * 1024)) }),
+  'cookie.export': v.strictObject({ url, tabId, format: v.picklist(['json', 'netscape', 'set-cookie']), includeValues: v.boolean() }),
   'ua.catalog': noPayload,
   'ua.resolve': v.strictObject({ url: httpUrl }),
   'ua.profile.save': userAgentProfileInput,
@@ -339,6 +373,7 @@ const payloadSchemas = {
     durationMinutes: v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(24 * 60)),
     taskId: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160))),
   }),
+  'grant.refresh': noPayload,
   'grant.revoke': noPayload,
   'handoff.resolve': v.strictObject({ id, outcome: v.picklist(['completed', 'cancelled']) }),
   'network.capture.start': v.strictObject({
@@ -375,12 +410,13 @@ const payloadSchemas = {
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
       strategy: v.literal('selected-frame'),
       name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+      candidateId: v.optional(id),
     }),
     v.strictObject({
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
       strategy: v.literal('request-transaction'),
       name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
-      transaction: pageRequestTransaction,
+      candidateId: id,
     }),
     v.strictObject({
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
@@ -397,9 +433,23 @@ const payloadSchemas = {
   'deep.capture.keepalive': v.strictObject(targetFields),
   'deep.capture.resume': v.strictObject(targetFields),
   'deep.capture.detach': v.strictObject(targetFields),
+  'analysis.profile.propose': capabilityParams['browser.profile.propose'],
+  'analysis.profile.validate': capabilityParams['browser.profile.validate'],
+  'analysis.profile.validation.latest': capabilityParams['browser.profile.validation.latest'],
   'transform.profile.list': v.strictObject(targetFields),
   'transform.profile.save': browserTransformProfileInputSchema,
   'transform.profile.delete': v.strictObject({ id }),
+  'transform.recovery.get': v.strictObject({ id }),
+  'transform.recovery.start': v.strictObject({ id }),
+  'transform.recovery.capture': v.strictObject({
+    id,
+    ...targetFields,
+    callFrameId: id,
+    strategy: v.picklist(['selected-frame', 'request-transaction']),
+  }),
+  'transform.recovery.validate': v.strictObject({ id, packet: browserTransformPacketSchema }),
+  'transform.recovery.confirm': v.strictObject({ id, validationId: id }),
+  'transform.recovery.reset': v.strictObject({ id }),
   'transform.execute': browserTransformExecuteSchema,
   'audit.list': v.strictObject({ limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500))) }),
   'audit.clear': noPayload,

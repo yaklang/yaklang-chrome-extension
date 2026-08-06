@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  AlertTriangle, Braces, Check, ChevronLeft, ChevronRight, Copy, ExternalLink, GripVertical,
+  AlertTriangle, Braces, Check, Copy, ExternalLink,
   EyeOff, Network, Pause, Play, Radio, RefreshCw, Settings, ShieldCheck, X,
 } from 'lucide-react';
 import { browser } from 'wxt/browser';
@@ -12,32 +12,25 @@ import { READ_CAPABILITY_SCOPES, isControlScopeSet } from '@/protocol/capabiliti
 import { AGENT_RUNTIME_STORAGE_KEY, isStateStorageChange } from '@/protocol/storage';
 import type { ActiveTabInfo, AgentRuntime, BridgeStatus, ExtensionState, PageContext } from '@/types/models';
 import { errorMessage, request } from '@/platform/messaging/runtime';
+import { isFloatingPanelShortcut, mergeFloatingTabUpdate } from './host-controller';
 
 interface FloatingPanelProps {
   initialState: ExtensionState;
   initialTab?: ActiveTabInfo;
   initialBridge: BridgeStatus;
-  yakIconUrl: string;
-  embedded?: boolean;
+  hostChannel: string;
 }
 
-export function FloatingPanel({ initialState, initialTab, initialBridge, yakIconUrl, embedded = false }: FloatingPanelProps) {
+export function FloatingPanel({ initialState, initialTab, initialBridge, hostChannel }: FloatingPanelProps) {
   const [state, setState] = useState(initialState);
   const [bridge, setBridge] = useState(initialBridge);
-  const [tab] = useState(initialTab);
-  const [expanded, setExpanded] = useState(embedded);
-  const [side, setSide] = useState(initialState.floatingPanel.side);
-  const [y, setY] = useState(initialState.floatingPanel.y);
+  const [tab, setTab] = useState(initialTab);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [context, setContext] = useState<PageContext>();
   const [runtime, setRuntime] = useState<AgentRuntime>({ state: 'idle', updatedAt: Date.now(), actions: [] });
-  const drag = useRef<{ pointerId: number; startX: number; startY: number; moved: boolean } | undefined>(undefined);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
-  const activeProfile = useMemo(
-    () => state.proxyProfiles.find((profile) => profile.id === state.activeProxyId),
-    [state],
-  );
   const grantActive = Boolean(
     state.activeGrant && state.activeGrant.expiresAt > Date.now() && tab && state.activeGrant.targets.some((target) => target.tabId === tab.id),
   );
@@ -50,8 +43,6 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, yakIcon
       if (isStateStorageChange(changes)) {
         void request('state.get').then((next) => {
           setState(next);
-          setSide(next.floatingPanel.side);
-          setY(next.floatingPanel.y);
         }).catch(() => undefined);
       }
       if (AGENT_RUNTIME_STORAGE_KEY in changes) void request('agent.runtime.get').then(setRuntime).catch(() => undefined);
@@ -69,20 +60,50 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, yakIcon
     return () => browser.runtime.onMessage.removeListener(listener);
   }, []);
 
-  // Embedded mode: report natural content height so the host shell can size the iframe (no dead space, internal scroll when clamped).
   useEffect(() => {
-    if (!embedded) return undefined;
+    const listener = (event: MessageEvent) => {
+      const input = event.data as {
+        channel?: string;
+        token?: string;
+        type?: string;
+        tab?: { tabId: number; title?: string; url?: string };
+      };
+      if (event.source !== window.parent || input?.channel !== 'yakit-floating-host'
+        || input.token !== hostChannel || input.type !== 'tab.changed' || !input.tab) return;
+      setTab((current) => mergeFloatingTabUpdate(current, input.tab!));
+      setContext(undefined);
+    };
+    globalThis.addEventListener('message', listener);
+    return () => globalThis.removeEventListener('message', listener);
+  }, [hostChannel]);
+
+  useEffect(() => {
+    const listener = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const editable = Boolean(target?.isContentEditable || target?.closest('input, textarea, select, [contenteditable="true"]'));
+      const shortcut = isFloatingPanelShortcut(state.floatingPanel, event, editable);
+      if (!shortcut && event.key !== 'Escape') return;
+      event.preventDefault();
+      window.parent.postMessage({ channel: 'yakit-floating-host', token: hostChannel, type: 'collapse' }, '*');
+    };
+    globalThis.addEventListener('keydown', listener);
+    return () => globalThis.removeEventListener('keydown', listener);
+  }, [hostChannel, state.floatingPanel]);
+
+  // The content-script host owns header, drag, placement and collapse. This
+  // document reports body height only, so those responsibilities never exist twice.
+  useEffect(() => {
     const post = () => {
-      const header = document.querySelector('.floating-panel__header');
-      const body = document.querySelector('.floating-panel__body');
-      const height = (header?.getBoundingClientRect().height || 46) + (body?.scrollHeight || 0);
-      window.parent.postMessage({ channel: 'yakit-floating-host', type: 'resize', height: Math.ceil(height) }, '*');
+      const height = bodyRef.current?.scrollHeight || 0;
+      window.parent.postMessage({
+        channel: 'yakit-floating-host', token: hostChannel, type: 'resize', height: Math.ceil(height),
+      }, '*');
     };
     post();
     const observer = new ResizeObserver(post);
-    observer.observe(document.body);
+    if (bodyRef.current) observer.observe(bodyRef.current);
     return () => observer.disconnect();
-  }, [embedded]);
+  }, [hostChannel]);
 
   const run = async (task: () => Promise<void>) => {
     setBusy(true);
@@ -113,59 +134,11 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, yakIcon
     }));
   });
 
-  const onPointerDown = (event: React.PointerEvent<HTMLElement>) => {
-    if (event.button !== 0) return;
-    drag.current = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, moved: false };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const onPointerMove = (event: React.PointerEvent<HTMLElement>) => {
-    const current = drag.current;
-    if (!current || current.pointerId !== event.pointerId) return;
-    if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) > 4) current.moved = true;
-    if (!current.moved) return;
-    setY(Math.min(Math.max(event.clientY / window.innerHeight, 0.08), 0.92));
-    setSide(event.clientX < window.innerWidth / 2 ? 'left' : 'right');
-  };
-
-  const onPointerUp = (event: React.PointerEvent<HTMLElement>) => {
-    const current = drag.current;
-    if (!current || current.pointerId !== event.pointerId) return;
-    drag.current = undefined;
-    if (current.moved) {
-      const nextSide = event.clientX < window.innerWidth / 2 ? 'left' : 'right';
-      const nextY = Math.min(Math.max(event.clientY / window.innerHeight, 0.08), 0.92);
-      setSide(nextSide);
-      setY(nextY);
-      void request('panel.update', { side: nextSide, y: nextY }).then(setState).catch(() => undefined);
-    } else {
-      setExpanded((value) => !value);
-    }
-  };
-
   if (!state.floatingPanel.enabled) return null;
 
-  const collapseEmbedded = () => window.parent.postMessage({ channel: 'yakit-floating-host', type: 'collapse' }, '*');
-
   return (
-    <div className={`floating-panel floating-panel--${side} ${embedded ? 'floating-panel--embedded' : ''} ${expanded ? 'is-expanded' : ''}`} style={embedded ? undefined : { top: `${y * 100}%` }}>
-      <div className="floating-panel__header" onClick={embedded ? collapseEmbedded : undefined} onPointerDown={embedded ? undefined : onPointerDown} onPointerMove={embedded ? undefined : onPointerMove} onPointerUp={embedded ? undefined : onPointerUp}>
-        <button className="floating-panel__brand" aria-label={expanded ? '收起 Yakit Browser Agent' : '展开 Yakit Browser Agent'}>
-          <img src={yakIconUrl} alt="Yak" draggable={false} />
-          <span className={`floating-panel__signal ${bridge.state}`} />
-        </button>
-        {expanded && <>
-          <div className="floating-panel__title">
-            <strong>Yakit Browser Agent</strong>
-            <span>{activeProfile?.name || (state.activeProxyId === 'auto' ? '自动切换' : '浏览器工具')}</span>
-          </div>
-          <GripVertical className="floating-panel__grip" size={15} aria-hidden="true" />
-          {side === 'right' ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
-        </>}
-      </div>
-
-      {expanded && (
-        <div className="floating-panel__body">
+    <div className="floating-panel floating-panel--embedded is-expanded">
+        <div ref={bodyRef} className="floating-panel__body">
           <Tabs key={handoff?.id || 'default'} defaultValue={handoff ? 'agent' : 'proxy'}>
             <TabsList className="floating-tabs">
               <TabsTrigger value="proxy"><Network size={13} />代理</TabsTrigger>
@@ -213,7 +186,6 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, yakIcon
           </Tabs>
           {notice && <div className="floating-notice">{notice}</div>}
         </div>
-      )}
     </div>
   );
 }

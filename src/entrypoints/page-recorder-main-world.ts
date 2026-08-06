@@ -1,4 +1,11 @@
 import { PAGE_RECORDER_PROTOCOL_VERSION, PAGE_RECORDER_REGISTRY_KEY } from '@/features/browser-recording/constants';
+import {
+  PAGE_RECORDER_REQUEST_EVENT,
+  PAGE_RECORDER_RESPONSE_EVENT,
+  type PageRecorderBridgeCommand,
+  type PageRecorderBridgeRequest,
+  type PageRecorderBridgeResponse,
+} from '@/features/browser-recording/bridge-protocol';
 import { PAGE_CALLABLE_REGISTRY_KEY } from '@/features/page-callable/constants';
 import { executeRequestTransaction, executeSideEffectFreeCallable } from '@/features/page-callable/request-transaction';
 import { callableExecutionPolicy, settleCallableResult } from '@/features/page-callable/execution';
@@ -17,10 +24,32 @@ import {
   type CommunicationBoundaryRuntime,
 } from '@/features/browser-recording/main-world/boundaries/communication';
 import {
+  createNetworkBoundaryRuntime,
+  type NetworkBoundaryRuntime,
+} from '@/features/browser-recording/main-world/boundaries/network';
+import {
   createRequestPreparationRuntime,
   type RequestPreparationRuntime,
 } from '@/features/browser-recording/main-world/boundaries/request-preparation';
+import {
+  createEncodingTransformRuntime,
+  type EncodingTransformRuntime,
+} from '@/features/browser-recording/main-world/transforms/encoding';
+import {
+  createLibraryTransformRuntime,
+  type LibraryTransformRuntime,
+} from '@/features/browser-recording/main-world/transforms/library-transform';
+import {
+  createRecordingEvidenceRuntime,
+  type RecordingEvidenceRuntime,
+} from '@/features/browser-recording/main-world/evidence';
+import {
+  createRecordingTraceRuntime,
+  type RecordingTraceContext,
+  type RecordingTraceRuntime,
+} from '@/features/browser-recording/main-world/trace';
 import { RetainedCallBudget } from '@/features/browser-recording/main-world/retained-call-budget';
+import { estimateRetainedCallBytes } from '@/features/browser-recording/main-world/retained-value-size';
 import { ExtensionError } from '@/shared/errors';
 import type {
   BrowserPageCallableExecution,
@@ -153,6 +182,9 @@ interface RecorderSnapshot {
   startedAt?: number;
   count: number;
   droppedCount: number;
+  retainedCallCount: number;
+  retainedCallBytes: number;
+  retainedCallDroppedCount: number;
   options?: RecorderOptions;
   events: RecordingEvent[];
   callables: PageCallableMetadata[];
@@ -198,12 +230,55 @@ export default defineUnlistedScript(() => {
   const REGISTRY_KEY = PAGE_RECORDER_REGISTRY_KEY;
   const CALLABLE_REGISTRY_KEY = PAGE_CALLABLE_REGISTRY_KEY;
   const registry = window as unknown as Record<string, unknown>;
+  const bridgeScript = document.currentScript;
+  if (bridgeScript instanceof HTMLScriptElement) {
+    const bridgeParse = JSON.parse.bind(JSON);
+    const bridgeStringify = JSON.stringify.bind(JSON);
+    const allowedCommands = new Set<PageRecorderBridgeCommand>([
+      'start', 'resume', 'navigation.record', 'stop', 'clear', 'status', 'get',
+      'callable.create', 'callable.list', 'callable.execute', 'callable.delete', 'transform.execute',
+    ]);
+    bridgeScript.addEventListener(PAGE_RECORDER_REQUEST_EVENT, (rawEvent) => {
+      if (!(rawEvent instanceof CustomEvent) || typeof rawEvent.detail !== 'string') return;
+      void (async () => {
+        let request: PageRecorderBridgeRequest;
+        try { request = bridgeParse(rawEvent.detail) as PageRecorderBridgeRequest; } catch { return; }
+        if (!request?.id || !allowedCommands.has(request.command)) return;
+        let response: PageRecorderBridgeResponse;
+        try {
+          const activeController = registry[REGISTRY_KEY] as RecorderController | undefined;
+          if (activeController?.version !== PAGE_RECORDER_PROTOCOL_VERSION || typeof activeController.command !== 'function') {
+            throw new Error('页面录制器尚未就绪');
+          }
+          response = {
+            id: request.id,
+            ok: true,
+            result: await Promise.resolve(activeController.command(request.command, request.input || {})),
+          };
+        } catch (error) {
+          response = {
+            id: request.id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+        try {
+          bridgeScript.dispatchEvent(new CustomEvent(PAGE_RECORDER_RESPONSE_EVENT, { detail: bridgeStringify(response) }));
+        } catch (error) {
+          const fallback: PageRecorderBridgeResponse = {
+            id: request.id,
+            ok: false,
+            error: `页面录制器结果无法序列化：${error instanceof Error ? error.message : String(error)}`,
+          };
+          bridgeScript.dispatchEvent(new CustomEvent(PAGE_RECORDER_RESPONSE_EVENT, { detail: bridgeStringify(fallback) }));
+        }
+      })();
+    });
+  }
   const existing = registry[REGISTRY_KEY] as RecorderController | undefined;
   if (existing?.version === PAGE_RECORDER_PROTOCOL_VERSION) return;
 
   const nativeStringify = JSON.stringify.bind(JSON);
-  const nativeParse = JSON.parse.bind(JSON);
-  const nativeBtoa = window.btoa.bind(window);
   const nativeAtob = window.atob.bind(window);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
@@ -214,17 +289,19 @@ export default defineUnlistedScript(() => {
   let active = false;
   let recordingId: string | undefined;
   let startedAt: number | undefined;
-  let sequence = 0;
-  let socketSequence = 0;
   let uniqueSequence = 0;
-  let droppedCount = 0;
-  let events: RecordingEvent[] = [];
-  let fingerprintSeedLeft = 0x811c9dc5;
-  let fingerprintSeedRight = 0x9e3779b9;
   let deepBreakMatcher: DeepBreakMatcher | undefined;
   let restoreAfterDeepBreak = false;
-  let currentTrace: { traceId: string; interactionId?: string; expiresAt: number } | undefined;
   let options: RecorderOptions = { captureValues: false, maxEntries: 200, maxValueBytes: 2_048 };
+  const evidenceRuntime: RecordingEvidenceRuntime = createRecordingEvidenceRuntime(window, () => options);
+  const traceRuntime: RecordingTraceRuntime = createRecordingTraceRuntime({
+    active: () => active,
+    recordingId: () => recordingId,
+    captureValues: () => options.captureValues,
+    maxEntries: () => options.maxEntries,
+    parentEventId: () => activeEventStack.at(-1),
+    unique,
+  });
 
   function pageCallableRegistry(): Map<string, PageCallableRegistryEntry> {
     const current = registry[CALLABLE_REGISTRY_KEY];
@@ -256,88 +333,23 @@ export default defineUnlistedScript(() => {
   }
 
   function dataType(value: unknown): string {
-    if (value === null) return 'null';
-    if (value === undefined) return 'undefined';
-    if (typeof value !== 'object') return typeof value;
-    return Object.prototype.toString.call(value).slice(8, -1);
+    return evidenceRuntime.dataType(value);
   }
 
   function asBytes(value: unknown): Uint8Array | undefined {
-    if (value instanceof ArrayBuffer) return new Uint8Array(value);
-    if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-    return undefined;
-  }
-
-  function bytesToHex(bytes: Uint8Array): string {
-    let output = '';
-    for (const byte of bytes) output += byte.toString(16).padStart(2, '0');
-    return output;
+    return evidenceRuntime.asBytes(value);
   }
 
   function bytesToBase64(bytes: Uint8Array): string {
-    let binary = '';
-    const chunk = 8_192;
-    for (let offset = 0; offset < bytes.length; offset += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
-    }
-    return nativeBtoa(binary);
+    return evidenceRuntime.bytesToBase64(bytes);
   }
 
   function fingerprint(value: string): string {
-    const limit = Math.min(value.length, 262_144);
-    let left = (fingerprintSeedLeft ^ value.length) >>> 0;
-    let right = (fingerprintSeedRight ^ Math.imul(value.length, 0x85ebca6b)) >>> 0;
-    for (let index = 0; index < limit; index += 1) {
-      const code = value.charCodeAt(index);
-      left = Math.imul(left ^ code, 0x01000193) >>> 0;
-      right = Math.imul(right ^ code, 0x85ebca6b) >>> 0;
-    }
-    return `v2:${value.length}:${left.toString(16).padStart(8, '0')}${right.toString(16).padStart(8, '0')}`;
+    return evidenceRuntime.fingerprint(value);
   }
 
   function reseedFingerprints(): void {
-    const seed = new Uint32Array(2);
-    try {
-      crypto.getRandomValues(seed);
-      fingerprintSeedLeft = seed[0] || 0x811c9dc5;
-      fingerprintSeedRight = seed[1] || 0x9e3779b9;
-    } catch {
-      fingerprintSeedLeft = (Date.now() ^ Math.floor(performance.now() * 1_000)) >>> 0;
-      fingerprintSeedRight = Math.imul(fingerprintSeedLeft ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
-    }
-  }
-
-  function truncatePreview(value: string): string {
-    const bytes = encoder.encode(value);
-    return bytes.byteLength <= options.maxValueBytes ? value : decoder.decode(bytes.slice(0, options.maxValueBytes));
-  }
-
-  function evidenceText(path: string, value: string, encoding: ValueEvidence['encoding']): ValueEvidence {
-    return {
-      path,
-      fingerprint: fingerprint(value),
-      encoding,
-      byteLength: encoder.encode(value).byteLength,
-      preview: options.captureValues ? truncatePreview(value) : undefined,
-    };
-  }
-
-  function formEncodedEntries(value: string): Array<[string, string]> | undefined {
-    if (!value.includes('=') || value.length > 262_144) return undefined;
-    const segments = value.split('&');
-    if (!segments.length || segments.length > 64) return undefined;
-    const entries: Array<[string, string]> = [];
-    for (const segment of segments) {
-      const separator = segment.indexOf('=');
-      if (separator <= 0) return undefined;
-      let key: string;
-      try { key = decodeURIComponent(segment.slice(0, separator).replace(/\+/g, ' ')); } catch { return undefined; }
-      if (!/^[\p{L}_$][\p{L}\p{N}_.\[\]$-]{0,127}$/u.test(key)) return undefined;
-      let item: string;
-      try { item = decodeURIComponent(segment.slice(separator + 1).replace(/\+/g, ' ')); } catch { return undefined; }
-      entries.push([key, item]);
-    }
-    return entries;
+    evidenceRuntime.reseed();
   }
 
   function collectEvidence(
@@ -347,97 +359,15 @@ export default defineUnlistedScript(() => {
     output: ValueEvidence[] = [],
     parseStringContainers = true,
   ): ValueEvidence[] {
-    if (output.length >= 48 || value === undefined) return output;
-    if (typeof value === 'string') {
-      output.push(evidenceText(path, value, 'text'));
-      if (depth < 3 && (value.startsWith('{') || value.startsWith('['))) {
-        try { collectEvidence(nativeParse(value), `${path}:json`, depth + 1, output); } catch { /* Not JSON. */ }
-      }
-      if (parseStringContainers && depth < 3) {
-        const entries = formEncodedEntries(value);
-        for (const [key, item] of entries || []) {
-          collectEvidence(item, `${path}:form.${key}`, depth + 1, output, false);
-        }
-      }
-      return output;
-    }
-    if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
-      output.push(evidenceText(path, String(value), 'text'));
-      return output;
-    }
-    const bytes = asBytes(value);
-    if (bytes) {
-      const bounded = bytes.length > 262_144 ? bytes.subarray(0, 262_144) : bytes;
-      const hex = bytesToHex(bounded);
-      const base64 = bytesToBase64(bounded);
-      output.push({ ...evidenceText(path, hex, 'hex'), byteLength: bytes.byteLength });
-      if (output.length < 48) output.push({ ...evidenceText(path, base64, 'base64'), byteLength: bytes.byteLength });
-      return output;
-    }
-    if (value instanceof URLSearchParams) {
-      output.push(evidenceText(path, value.toString(), 'text'));
-      for (const [key, item] of value) collectEvidence(item, `${path}:form.${key}`, depth + 1, output, false);
-      return output;
-    }
-    if (typeof FormData !== 'undefined' && value instanceof FormData) {
-      for (const [key, item] of value.entries()) {
-        collectEvidence(
-          typeof item === 'string' ? item : `[file ${item.name} ${item.size}]`,
-          `${path}:form.${key}`,
-          depth + 1,
-          output,
-          false,
-        );
-      }
-      return output;
-    }
-    if (value && typeof value === 'object' && typeof (value as { sigBytes?: unknown }).sigBytes === 'number'
-      && typeof (value as { toString?: unknown }).toString === 'function') {
-      try { output.push(evidenceText(path, (value as { toString(): string }).toString(), 'hex')); } catch { /* Ignore. */ }
-      return output;
-    }
-    if (value && typeof value === 'object' && depth < 3) {
-      let entries: Array<[string, unknown]> = [];
-      try { entries = Object.entries(value as Record<string, unknown>).slice(0, 32); } catch { return output; }
-      for (const [key, item] of entries) collectEvidence(item, `${path}.${key}`, depth + 1, output);
-      if (depth === 0) {
-        try { output.unshift(evidenceText(path, nativeStringify(value), 'json')); } catch { /* Circular object. */ }
-      }
-    }
-    return output.slice(0, 48);
+    return evidenceRuntime.collect(value, path, depth, output, parseStringContainers);
   }
 
   function byteLength(value: unknown): number | undefined {
-    try {
-      if (typeof value === 'string') return encoder.encode(value).byteLength;
-      if (value instanceof Blob) return value.size;
-      const bytes = asBytes(value);
-      if (bytes) return bytes.byteLength;
-      if (value instanceof URLSearchParams) return encoder.encode(value.toString()).byteLength;
-      if (value && typeof value === 'object' && typeof (value as { sigBytes?: unknown }).sigBytes === 'number') {
-        return Math.max(0, Number((value as { sigBytes: number }).sigBytes));
-      }
-      if (value !== undefined) return encoder.encode(nativeStringify(value)).byteLength;
-    } catch { return undefined; }
-    return undefined;
+    return evidenceRuntime.byteLength(value);
   }
 
   function preview(value: unknown): string | undefined {
-    if (!options.captureValues || value === undefined) return undefined;
-    try {
-      if (typeof value === 'string') return truncatePreview(value);
-      const bytes = asBytes(value);
-      if (bytes) return `[binary ${bytes.byteLength} bytes]`;
-      if (value instanceof URLSearchParams) return truncatePreview(value.toString());
-      if (typeof FormData !== 'undefined' && value instanceof FormData) {
-        return truncatePreview(nativeStringify([...value.entries()].map(([key, item]) => [key, typeof item === 'string' ? item : `[file ${item.size} bytes]`])));
-      }
-      if (value && typeof value === 'object' && typeof (value as { toString?: unknown }).toString === 'function') {
-        const text = (value as { toString(): string }).toString();
-        return truncatePreview(text === '[object Object]' ? nativeStringify(value) : text);
-      }
-      return truncatePreview(String(value));
-    } catch { return `[${dataType(value)}]`; }
+    return evidenceRuntime.preview(value);
   }
 
   function stackInfo(): { stack?: string; scriptUrl?: string } {
@@ -463,42 +393,12 @@ export default defineUnlistedScript(() => {
       || communicationBoundaryRuntime.wrapperFunction(wrapperHandleId);
   }
 
-  function traceContext(): { traceId: string; interactionId?: string } {
-    const now = performance.now();
-    if (!currentTrace || currentTrace.expiresAt < now) {
-      currentTrace = { traceId: unique('trace'), expiresAt: now + 5_000 };
-    } else currentTrace.expiresAt = now + 5_000;
-    return currentTrace;
+  function record(input: RecordingEventInput, context?: RecordingTraceContext): RecordingEvent | undefined {
+    return traceRuntime.record(input, context) as RecordingEvent | undefined;
   }
 
-  function record(input: RecordingEventInput, context = traceContext()): RecordingEvent | undefined {
-    if (!active || !recordingId) return undefined;
-    sequence += 1;
-    const item: RecordingEvent = {
-      id: unique('event'),
-      sequence,
-      timestamp: Date.now(),
-      recordingId,
-      traceId: context.traceId,
-      interactionId: context.interactionId,
-      parentEventId: activeEventStack.at(-1),
-      source: 'page',
-      sensitiveCaptured: options.captureValues,
-      inputs: input.inputs || [],
-      outputs: input.outputs || [],
-      ...input,
-    };
-    events.push(item);
-    while (events.length > options.maxEntries) {
-      events.shift();
-      droppedCount += 1;
-    }
-    return item;
-  }
-
-  function observe(factory: () => RecordingEventInput, context?: { traceId: string; interactionId?: string }): RecordingEvent | undefined {
-    if (!active) return undefined;
-    try { return record(factory(), context); } catch { droppedCount += 1; return undefined; }
+  function observe(factory: () => RecordingEventInput, context?: RecordingTraceContext): RecordingEvent | undefined {
+    return traceRuntime.observe(factory, context) as RecordingEvent | undefined;
   }
 
   function bestEffort(operation: () => void): void {
@@ -532,18 +432,6 @@ export default defineUnlistedScript(() => {
     };
   }
 
-  function binaryStringEvidence(value: string, path: string): ValueEvidence[] {
-    const output = collectEvidence(value, path);
-    if (output.length >= 48) return output;
-    try {
-      const bytes = Uint8Array.from(value, (character) => character.charCodeAt(0));
-      collectEvidence(bytes, `${path}:bytes`, 0, output);
-    } catch {
-      // btoa already validated the binary string; recording remains best effort.
-    }
-    return output.slice(0, 48);
-  }
-
   function interactionLabel(target: EventTarget | null): string {
     if (!(target instanceof Element)) return '页面操作';
     const element = target.closest('button, a, input, select, textarea, [role]') || target;
@@ -556,7 +444,7 @@ export default defineUnlistedScript(() => {
     if (!active) return;
     const interactionId = unique('interaction');
     const context = { traceId: unique('trace'), interactionId };
-    currentTrace = { ...context, expiresAt: performance.now() + 5_000 };
+    traceRuntime.bindContext(context);
     observe(() => ({ kind: 'interaction', operation, label: interactionLabel(target) }), context);
   }
 
@@ -571,163 +459,9 @@ export default defineUnlistedScript(() => {
     });
   }
 
-  function headerEvidence(input: HeadersInit | undefined, path: string): ValueEvidence[] {
-    if (!input) return [];
-    const output: ValueEvidence[] = [];
-    try {
-      for (const [name, value] of new Headers(input)) collectEvidence(value, `${path}.${name.toLowerCase()}`, 0, output);
-    } catch { /* Invalid headers are handled by the page. */ }
-    return output;
-  }
-
-  function queryEvidence(input: string | URL | Request): ValueEvidence[] {
-    const output: ValueEvidence[] = [];
-    try {
-      const value = input instanceof Request ? input.url : String(input);
-      const url = new URL(value, location.href);
-      for (const [key, item] of url.searchParams) {
-        collectEvidence(item, `$query.${key}`, 0, output, false);
-      }
-    } catch { /* The page owns URL validation. */ }
-    return output;
-  }
-
-  function patchFetch(): void {
-    const original = window.fetch;
-    if (typeof original !== 'function') return;
-    const wrapped: typeof window.fetch = function recordedFetch(this: Window, input, init) {
-      observe(() => {
-        const request = typeof Request !== 'undefined' && input instanceof Request ? input : undefined;
-        const body = init?.body;
-        return {
-          kind: 'fetch', operation: 'request', url: (request?.url || String(input)).slice(0, 8_192),
-          method: (init?.method || request?.method || 'GET').toUpperCase().slice(0, 32),
-          byteLength: byteLength(body), dataType: dataType(body), inputPreview: preview(body),
-          inputs: [
-            ...collectEvidence(body, '$body'),
-            ...headerEvidence(init?.headers || request?.headers, '$headers'),
-            ...queryEvidence(request || input),
-          ],
-          ...stackInfo(),
-        };
-      });
-      return Reflect.apply(original, this, [input, init]);
-    };
-    window.fetch = wrapped;
-    restorers.push(() => { if (window.fetch === wrapped) window.fetch = original; });
-  }
-
-  function patchXhr(): void {
-    if (typeof XMLHttpRequest === 'undefined') return;
-    const states = new WeakMap<XMLHttpRequest, { method: string; url: string; headers: Record<string, string> }>();
-    const prototype = XMLHttpRequest.prototype;
-    const originalOpen = prototype.open;
-    const originalSend = prototype.send;
-    const originalSetHeader = prototype.setRequestHeader;
-    const wrappedOpen = function recordedOpen(this: XMLHttpRequest, method: string, url: string | URL, ...rest: unknown[]) {
-      bestEffort(() => states.set(this, { method: String(method).toUpperCase().slice(0, 32), url: String(url).slice(0, 8_192), headers: {} }));
-      return Reflect.apply(originalOpen, this, [method, url, ...rest] as Parameters<XMLHttpRequest['open']>);
-    } as typeof prototype.open;
-    const wrappedSetHeader = function recordedSetRequestHeader(this: XMLHttpRequest, name: string, value: string) {
-      bestEffort(() => { const state = states.get(this); if (state) state.headers[name.toLowerCase()] = value; });
-      return Reflect.apply(originalSetHeader, this, [name, value]);
-    };
-    const wrappedSend = function recordedSend(this: XMLHttpRequest, body?: Document | XMLHttpRequestBodyInit | null) {
-      observe(() => {
-        const state = states.get(this);
-        return {
-          kind: 'xhr', operation: 'request', url: state?.url, method: state?.method,
-          byteLength: byteLength(body), dataType: dataType(body), inputPreview: preview(body),
-          inputs: [
-            ...collectEvidence(body, '$body'),
-            ...collectEvidence(state?.headers, '$headers'),
-            ...(state?.url ? queryEvidence(state.url) : []),
-          ], ...stackInfo(),
-        };
-      });
-      return Reflect.apply(originalSend, this, [body]);
-    };
-    prototype.open = wrappedOpen;
-    prototype.setRequestHeader = wrappedSetHeader;
-    prototype.send = wrappedSend;
-    restorers.push(() => {
-      if (prototype.open === wrappedOpen) prototype.open = originalOpen;
-      if (prototype.setRequestHeader === wrappedSetHeader) prototype.setRequestHeader = originalSetHeader;
-      if (prototype.send === wrappedSend) prototype.send = originalSend;
-    });
-  }
-
-  function patchForms(): void {
-    const onSubmit = (event: Event) => {
-      const form = event.target instanceof HTMLFormElement ? event.target : undefined;
-      if (!form) return;
-      observe(() => {
-        let body: FormData | undefined;
-        try { body = new FormData(form); } catch { /* Ignore unserializable custom form. */ }
-        return {
-          kind: 'form', operation: 'request', url: form.action.slice(0, 8_192), method: form.method.toUpperCase().slice(0, 32),
-          byteLength: byteLength(body), dataType: 'FormData', inputPreview: preview(body),
-          inputs: [...collectEvidence(body, '$body'), ...queryEvidence(form.action)], ...stackInfo(),
-        };
-      });
-    };
-    document.addEventListener('submit', onSubmit, false);
-    restorers.push(() => document.removeEventListener('submit', onSubmit, false));
-  }
-
-  function patchWebSocket(): void {
-    const Original = window.WebSocket;
-    if (typeof Original !== 'function') return;
-    const Wrapped = new Proxy(Original, {
-      construct(target, args) {
-        const socket = Reflect.construct(target, args) as WebSocket;
-        bestEffort(() => {
-          const socketId = unique(`socket-${++socketSequence}`);
-          const socketUrl = String(args[0] || '').slice(0, 8_192);
-          observe(() => ({ kind: 'websocket', operation: 'construct', url: socketUrl, socketId, ...stackInfo() }));
-          const originalSend = socket.send;
-          const wrappedSend = function recordedSend(this: WebSocket, data: string | ArrayBufferLike | Blob | ArrayBufferView) {
-            observe(() => ({ kind: 'websocket', operation: 'frame', direction: 'send', url: socketUrl, socketId, byteLength: byteLength(data), dataType: dataType(data), inputPreview: preview(data), inputs: collectEvidence(data, '$frame'), ...stackInfo() }));
-            return Reflect.apply(originalSend, this, [data]);
-          };
-          const onMessage = (event: MessageEvent) => observe(() => ({ kind: 'websocket', operation: 'frame', direction: 'receive', url: socketUrl, socketId, byteLength: byteLength(event.data), dataType: dataType(event.data), outputPreview: preview(event.data), outputs: collectEvidence(event.data, '$frame') }));
-          const onOpen = () => observe(() => ({ kind: 'websocket', operation: 'open', url: socketUrl, socketId }));
-          const onClose = (event: CloseEvent) => observe(() => ({ kind: 'websocket', operation: 'close', url: socketUrl, socketId, error: event.wasClean ? undefined : `code=${event.code}` }));
-          socket.send = wrappedSend;
-          socket.addEventListener('message', onMessage);
-          socket.addEventListener('open', onOpen);
-          socket.addEventListener('close', onClose);
-          restorers.push(() => {
-            if (socket.send === wrappedSend) socket.send = originalSend;
-            socket.removeEventListener('message', onMessage);
-            socket.removeEventListener('open', onOpen);
-            socket.removeEventListener('close', onClose);
-          });
-        });
-        return socket;
-      },
-    });
-    window.WebSocket = Wrapped;
-    restorers.push(() => { if (window.WebSocket === Wrapped) window.WebSocket = Original; });
-  }
-
-  function retainedCallBytes(args: unknown[]): number {
-    let total = 0;
-    for (const value of args) {
-      const size = byteLength(value);
-      if (size === undefined && value !== undefined && value !== null
-        && !['boolean', 'number', 'bigint', 'function'].includes(typeof value)) {
-        return 2 * 1024 * 1024 + 1;
-      }
-      total += Math.max(0, size ?? 128);
-      if (total > 2 * 1024 * 1024) return total;
-    }
-    return total;
-  }
-
   function registerHandle(input: Omit<RecordedCallHandle, 'id' | 'retainedBytes'>): string | undefined {
     const id = unique('handle');
-    const retainedBytes = retainedCallBytes(input.args);
+    const retainedBytes = estimateRetainedCallBytes(input.args);
     return handles.add({ id, retainedBytes, ...input }) ? id : undefined;
   }
 
@@ -862,18 +596,34 @@ export default defineUnlistedScript(() => {
     },
     stackInfo,
     emit: (input, context) => {
-      if (context) currentTrace = { ...context, expiresAt: performance.now() + 5_000 };
+      if (context) traceRuntime.bindContext(context);
       return observe(() => input, context);
     },
     afterWrapperInvoke: pauseForDeepCapture,
   });
 
-  const requestPreparationRuntime: RequestPreparationRuntime = createRequestPreparationRuntime(window, {
-    currentTrace() {
-      if (!currentTrace || currentTrace.expiresAt < performance.now()) return undefined;
-      currentTrace.expiresAt = performance.now() + 5_000;
-      return { traceId: currentTrace.traceId, interactionId: currentTrace.interactionId };
-    },
+  const networkBoundaryRuntime: NetworkBoundaryRuntime = createNetworkBoundaryRuntime(window, {
+    unique,
+    byteLength,
+    dataType,
+    asBytes,
+    preview,
+    collectEvidence: (value, path) => collectEvidence(value, path),
+    stackInfo,
+    context: () => traceRuntime.context(),
+    emit: (event, context) => { observe(() => event, context); },
+  });
+
+  const encodingTransformRuntime: EncodingTransformRuntime = createEncodingTransformRuntime(window, {
+    byteLength,
+    preview,
+    collectEvidence: (value, path) => collectEvidence(value, path),
+    stackInfo,
+    emit: (event) => { observe(() => ({ kind: 'transform', ...event })); },
+  });
+
+  const libraryTransformRuntime: LibraryTransformRuntime = createLibraryTransformRuntime(window, {
+    currentTrace: () => traceRuntime.currentContext(),
     collectEvidence: (value, path) => collectEvidence(value, path),
     byteLength,
     dataType,
@@ -882,32 +632,24 @@ export default defineUnlistedScript(() => {
     emit: (event, context) => { observe(() => ({ kind: 'transform', ...event }), context); },
   });
 
-  function patchTransforms(): void {
-    const originalBtoa = window.btoa;
-    const originalAtob = window.atob;
-    const wrappedBtoa = function recordedBtoa(input: string): string {
-      const output = Reflect.apply(originalBtoa, window, [input]);
-      observe(() => ({ kind: 'transform', operation: 'base64.encode', inputs: binaryStringEvidence(input, '$input'), outputs: collectEvidence(output, '$output'), inputPreview: preview(input), outputPreview: preview(output), byteLength: byteLength(input), resultByteLength: byteLength(output), ...stackInfo() }));
-      return output;
-    };
-    const wrappedAtob = function recordedAtob(input: string): string {
-      const output = Reflect.apply(originalAtob, window, [input]);
-      observe(() => ({ kind: 'transform', operation: 'base64.decode', inputs: collectEvidence(input, '$input'), outputs: collectEvidence(output, '$output'), inputPreview: preview(input), outputPreview: preview(output), byteLength: byteLength(input), resultByteLength: byteLength(output), ...stackInfo() }));
-      return output;
-    };
-    window.btoa = wrappedBtoa;
-    window.atob = wrappedAtob;
-    restorers.push(() => {
-      if (window.btoa === wrappedBtoa) window.btoa = originalBtoa;
-      if (window.atob === wrappedAtob) window.atob = originalAtob;
-    });
-  }
+  const requestPreparationRuntime: RequestPreparationRuntime = createRequestPreparationRuntime(window, {
+    currentTrace: () => traceRuntime.currentContext(),
+    collectEvidence: (value, path) => collectEvidence(value, path),
+    byteLength,
+    dataType,
+    preview,
+    stackInfo,
+    emit: (event, context) => { observe(() => ({ kind: 'transform', ...event }), context); },
+  });
 
   function installObservers(): void {
-    for (const patch of [patchInteractions, patchFetch, patchXhr, patchForms, patchWebSocket, patchTransforms]) bestEffort(patch);
+    bestEffort(patchInteractions);
     cryptoAdapterRuntime.start();
     communicationBoundaryRuntime.start();
+    networkBoundaryRuntime.start();
     requestPreparationRuntime.start();
+    encodingTransformRuntime.start();
+    libraryTransformRuntime.start();
   }
 
   function stop(): void {
@@ -916,10 +658,13 @@ export default defineUnlistedScript(() => {
     expiryTimer = undefined;
     cryptoAdapterRuntime.stop();
     communicationBoundaryRuntime.stop();
+    networkBoundaryRuntime.stop();
     requestPreparationRuntime.stop();
+    encodingTransformRuntime.stop();
+    libraryTransformRuntime.stop();
     while (restorers.length) bestEffort(restorers.pop()!);
     activeEventStack.length = 0;
-    currentTrace = undefined;
+    traceRuntime.releaseContext();
     deepBreakMatcher = undefined;
     restoreAfterDeepBreak = false;
   }
@@ -932,10 +677,19 @@ export default defineUnlistedScript(() => {
   }
 
   function snapshot(limit = options.maxEntries): RecorderSnapshot {
+    const trace = traceRuntime.snapshot(limit);
     return {
-      version: PAGE_RECORDER_PROTOCOL_VERSION, active, recordingId, startedAt, count: events.length, droppedCount,
+      version: PAGE_RECORDER_PROTOCOL_VERSION,
+      active,
+      recordingId,
+      startedAt,
+      count: trace.count,
+      droppedCount: trace.droppedCount,
+      retainedCallCount: handles.size,
+      retainedCallBytes: handles.retainedBytes,
+      retainedCallDroppedCount: handles.droppedCount,
       options: startedAt ? { ...options } : undefined,
-      events: events.slice(-Math.max(0, Math.min(limit, options.maxEntries))),
+      events: trace.events as RecordingEvent[],
       callables: callableMetadata(),
     };
   }
@@ -1095,14 +849,11 @@ export default defineUnlistedScript(() => {
           maxValueBytes: Math.max(256, Math.min(Number(input.maxValueBytes) || 2_048, 8_192)),
           expiresAt: typeof input.expiresAt === 'number' ? input.expiresAt : undefined,
         };
-        events = [];
         handles.clear();
         clearRecordedCallables();
-        sequence = Number.isSafeInteger(input.sequenceStart) && Number(input.sequenceStart) >= 0
+        traceRuntime.reset(Number.isSafeInteger(input.sequenceStart) && Number(input.sequenceStart) >= 0
           ? Number(input.sequenceStart)
-          : 0;
-        socketSequence = 0;
-        droppedCount = 0;
+          : 0);
         recordingId = typeof input.recordingId === 'string' && input.recordingId.trim()
           ? input.recordingId.trim().slice(0, 160)
           : unique('recording');
@@ -1116,9 +867,7 @@ export default defineUnlistedScript(() => {
         return snapshot();
       }
       if (command === 'resume') {
-        if (Number.isSafeInteger(input.sequenceStart) && Number(input.sequenceStart) >= sequence) {
-          sequence = Number(input.sequenceStart);
-        }
+        if (Number.isSafeInteger(input.sequenceStart)) traceRuntime.advanceSequenceStart(Number(input.sequenceStart));
         resumeRecording();
         return snapshot();
       }
@@ -1172,14 +921,11 @@ export default defineUnlistedScript(() => {
       }
       if (command === 'clear') {
         stop();
-        events = [];
+        traceRuntime.reset();
         handles.clear();
         clearRecordedCallables();
         recordingId = undefined;
         startedAt = undefined;
-        sequence = 0;
-        socketSequence = 0;
-        droppedCount = 0;
         return snapshot();
       }
       if (command === 'status' || command === 'get') return snapshot(typeof input.limit === 'number' ? input.limit : options.maxEntries);

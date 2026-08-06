@@ -173,4 +173,39 @@ describe('browser recording timeline', () => {
     ]);
     expect(buildRecordingTraces([create, update, final, request], links)[0].linkedValueCount).toBe(1);
   });
+
+  it('links a late asynchronous response observation back to the earlier decrypt input', () => {
+    const decrypt = event('decrypt', 2, 'trace-response', {
+      kind: 'crypto',
+      operation: 'AES.decrypt',
+      crypto: { adapterId: 'cryptojs', providerKind: 'library', family: 'symmetric', operation: 'AES.decrypt' },
+      inputs: [{ path: '$input', fingerprint: 'cipher', encoding: 'text', byteLength: 32 }],
+      outputs: [{ path: '$output', fingerprint: 'plain', encoding: 'text', byteLength: 12 }],
+    });
+    const response = event('response', 3, 'trace-response', {
+      kind: 'fetch', operation: 'response', direction: 'receive', method: 'GET', url: 'https://example.test/data',
+      outputs: [{ path: '$body:json.encryptedData', fingerprint: 'cipher', encoding: 'text', byteLength: 32 }],
+    });
+
+    expect(buildRecordingLinks([decrypt, response])).toContainEqual(expect.objectContaining({
+      kind: 'value', confidence: 'exact', fromEventId: 'response', toEventId: 'decrypt',
+      fromPath: '$body:json.encryptedData', toPath: '$input',
+    }));
+  });
+
+  it('correlates an HTTP request and response without counting the response as another request', () => {
+    const request = event('request', 1, 'trace-network', {
+      kind: 'fetch', operation: 'request', direction: 'send', channelId: 'fetch-1',
+    });
+    const response = event('response', 2, 'trace-network', {
+      kind: 'fetch', operation: 'response', direction: 'receive', channelId: 'fetch-1',
+    });
+    const links = buildRecordingLinks([request, response]);
+
+    expect(links).toContainEqual(expect.objectContaining({
+      kind: 'channel', fromEventId: request.id, toEventId: response.id,
+      fromPath: '$network', toPath: '$network',
+    }));
+    expect(buildRecordingTraces([request, response], links)[0].requestCount).toBe(1);
+  });
 });

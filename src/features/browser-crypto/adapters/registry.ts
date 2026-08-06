@@ -38,7 +38,26 @@ export function createCryptoAdapterRuntime(
   const restorers: Array<() => void> = [];
   const dynamicOperations: Array<{ adapter: PageCryptoAdapter; operation: CryptoAdapterOperation }> = [];
   const retryTimers = new Set<number>();
+  const watchedReadiness = new WeakSet<object>();
   let active = false;
+
+  const watchReadiness = (adapter: PageCryptoAdapter): void => {
+    if (!adapter.ready) return;
+    let readiness: PromiseLike<unknown> | undefined;
+    try { readiness = adapter.ready(scope); } catch { return; }
+    if (!readiness || (typeof readiness !== 'object' && typeof readiness !== 'function')) return;
+    const identity = readiness as object;
+    if (watchedReadiness.has(identity)) return;
+    watchedReadiness.add(identity);
+    void Promise.resolve(readiness).then(() => {
+      if (!active) return;
+      let operations: CryptoAdapterOperation[] = [];
+      try { operations = adapter.discover(scope); } catch { return; }
+      for (const operation of operations) {
+        try { installOperation(adapter, operation); } catch { /* A readiness callback cannot break recording. */ }
+      }
+    }).catch(() => undefined);
+  };
 
   const installOperation = (adapter: PageCryptoAdapter, operation: CryptoAdapterOperation): void => {
     const descriptor = Object.getOwnPropertyDescriptor(operation.owner, operation.key);
@@ -85,6 +104,7 @@ export function createCryptoAdapterRuntime(
     if (!active) return;
     for (const adapter of adapters) {
       if (dynamicOnly && !adapter.manifest.dynamic) continue;
+      watchReadiness(adapter);
       let operations: CryptoAdapterOperation[] = [];
       try { operations = adapter.discover(scope); } catch { continue; }
       for (const operation of operations) {

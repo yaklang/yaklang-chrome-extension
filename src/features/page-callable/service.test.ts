@@ -17,12 +17,15 @@ const callable: Omit<BrowserPageCallable, 'target'> = {
     paths: ['body.encryptedData', 'body.encryptedKey'],
   },
   transaction: {
+    version: 2,
+    prerequisites: [],
     request: {
+      boundary: 'fetch',
       method: 'POST', url: 'https://example.test/login',
       expectedDestinations: ['body.encryptedData', 'body.encryptedKey'],
+      bodyFormat: 'json',
     },
     inputMode: 'auto',
-    boundaries: ['fetch', 'xhr'],
   },
   provenance: { eventId: 'request-1' },
   createdAt: 1,
@@ -47,5 +50,20 @@ describe('page callable metadata contract', () => {
   it('rejects missing execution policy instead of silently selecting legacy behavior', () => {
     const { execution: _execution, ...legacy } = callable;
     expect(normalizeCallable(legacy, target)).toBeUndefined();
+  });
+
+  it('rejects the legacy client-authored single-request transaction contract', () => {
+    expect(normalizeCallable({
+      ...callable,
+      transaction: {
+        request: {
+          method: 'POST', url: 'https://example.test/login',
+          expectedDestinations: ['body.encryptedData', 'body.encryptedKey'],
+          bodyFormat: 'json',
+        },
+        inputMode: 'auto',
+        boundaries: ['fetch'],
+      },
+    }, target)).toBeUndefined();
   });
 });

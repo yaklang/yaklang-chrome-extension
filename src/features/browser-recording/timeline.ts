@@ -107,6 +107,43 @@ export function buildRecordingLinks(events: BrowserRecordingEvent[]): BrowserRec
       outputs.set(output.fingerprint, current.slice(-32));
     }
   }
+  const linkedInputs = new Set(links
+    .filter((link) => link.kind === 'value')
+    .map((link) => `${link.toEventId}\u0000${link.toPath}`));
+  const responseOutputs = new Map<string, Array<{ event: BrowserRecordingEvent; path: string }>>();
+  for (const event of orderedEvents(events)) {
+    if (!['fetch', 'xhr'].includes(event.kind) || event.operation !== 'response') continue;
+    for (const output of event.outputs) {
+      responseOutputs.set(output.fingerprint, [
+        ...(responseOutputs.get(output.fingerprint) || []),
+        { event, path: output.path },
+      ].slice(-32));
+    }
+  }
+  for (const event of orderedEvents(events)) {
+    if (!['crypto', 'transform', 'worker', 'message'].includes(event.kind)) continue;
+    for (const input of event.inputs) {
+      const inputKey = `${event.id}\u0000${input.path}`;
+      if (linkedInputs.has(inputKey)) continue;
+      const source = [...(responseOutputs.get(input.fingerprint) || [])].reverse().find((candidate) => (
+        candidate.event.traceId === event.traceId
+        && candidate.event.id !== event.id
+        && candidate.event.sequence > event.sequence
+      ));
+      if (!source) continue;
+      links.push({
+        id: `link-response-${source.event.id}-${event.id}-${links.length}`,
+        traceId: event.traceId,
+        kind: 'value',
+        fromEventId: source.event.id,
+        fromPath: source.path,
+        toEventId: event.id,
+        toPath: input.path,
+        confidence: 'exact',
+      });
+      linkedInputs.add(inputKey);
+    }
+  }
   const lastStateEvent = new Map<string, BrowserRecordingEvent>();
   for (const event of orderedEvents(events)) {
     const state = event.crypto?.state;
@@ -129,7 +166,7 @@ export function buildRecordingLinks(events: BrowserRecordingEvent[]): BrowserRec
   }
   const lastSentByChannel = new Map<string, BrowserRecordingEvent>();
   for (const event of orderedEvents(events)) {
-    if (!event.channelId || !['worker', 'message'].includes(event.kind)) continue;
+    if (!event.channelId || !['worker', 'message', 'fetch', 'xhr', 'websocket'].includes(event.kind)) continue;
     if (event.direction === 'send') {
       lastSentByChannel.set(event.channelId, event);
       continue;
@@ -137,14 +174,17 @@ export function buildRecordingLinks(events: BrowserRecordingEvent[]): BrowserRec
     if (event.direction !== 'receive') continue;
     const source = lastSentByChannel.get(event.channelId);
     if (!source || source.traceId !== event.traceId) continue;
+    const path = event.kind === 'websocket'
+      ? '$frame'
+      : ['fetch', 'xhr'].includes(event.kind) ? '$network' : '$message';
     links.push({
       id: `link-channel-${source.id}-${event.id}-${links.length}`,
       traceId: event.traceId,
       kind: 'channel',
       fromEventId: source.id,
-      fromPath: '$message',
+      fromPath: path,
       toEventId: event.id,
-      toPath: '$message',
+      toPath: path,
       confidence: 'correlated',
     });
   }
@@ -186,7 +226,9 @@ export function buildRecordingTraces(
       startedAt: sorted[0]?.timestamp || 0,
       endedAt: sorted.reduce((maximum, item) => Math.max(maximum, item.timestamp + (item.durationMs || 0)), sorted[0]?.timestamp || 0),
       eventIds: sorted.map((item) => item.id),
-      requestCount: sorted.filter((item) => ['fetch', 'xhr', 'form', 'beacon'].includes(item.kind)).length,
+      requestCount: sorted.filter((item) => (
+        ['fetch', 'xhr', 'form', 'beacon'].includes(item.kind) && item.operation === 'request'
+      )).length,
       cryptoCount: sorted.filter((item) => item.kind === 'crypto').length,
       websocketCount: sorted.filter((item) => item.kind === 'websocket').length,
       messageCount: sorted.filter((item) => item.kind === 'worker' || item.kind === 'message').length,

@@ -3,7 +3,7 @@ import type {
   NormalizedProxyRule, ProxyProfile, ProxyRule, ProxyRuleSource,
 } from '@/types/models';
 import {
-  compileProxyRules, previewProxyRules, proxyConditionMatches, type ProxyCompilationInput,
+  compileProxyRules, previewProxyRules, profileToPac, proxyConditionMatches, type ProxyCompilationInput,
 } from './compiler';
 
 const profiles: ProxyProfile[] = [
@@ -45,6 +45,18 @@ function executePac(pacScript: string, url: string): string {
 }
 
 describe('proxy compiler', () => {
+  it('encodes every fixed proxy scheme and the explicit fail-open fallback', () => {
+    const fixed = (scheme: NonNullable<ProxyProfile['scheme']>) => ({
+      id: scheme, name: scheme, kind: 'fixed_servers' as const, scheme,
+      host: '127.0.0.1', port: 2080, bypass: [],
+    });
+    expect(profileToPac(fixed('http'))).toBe('PROXY 127.0.0.1:2080');
+    expect(profileToPac(fixed('https'))).toBe('HTTPS 127.0.0.1:2080');
+    expect(profileToPac(fixed('socks4'))).toBe('SOCKS 127.0.0.1:2080');
+    expect(profileToPac(fixed('socks5'))).toBe('SOCKS5 127.0.0.1:2080');
+    expect(profileToPac(fixed('socks5'), 'open')).toBe('SOCKS5 127.0.0.1:2080; DIRECT');
+  });
+
   it('matches all structured condition families', () => {
     expect(proxyConditionMatches({ type: 'host_exact', value: 'api.example.test' }, 'https://api.example.test/path')).toBe(true);
     expect(proxyConditionMatches({ type: 'host_suffix', value: 'example.test' }, 'https://a.example.test/path')).toBe(true);
@@ -117,5 +129,20 @@ describe('proxy compiler', () => {
     expect(artifact.compiledBytes).toBeLessThan(4 * 1024 * 1024);
     expect(elapsed).toBeLessThan(5_000);
     expect(executePac(artifact.pacScript, 'https://domain-49999.example/')).toBe('PROXY 127.0.0.1:8083');
+  });
+
+  it('compiles a production-size SwitchyOmega wildcard subscription without exhausting the PAC parser stack', () => {
+    const rules: NormalizedProxyRule[] = Array.from({ length: 112_000 }, (_, ordinal) => ({
+      sourceId: 'source', ordinal, condition: { type: 'host_wildcard', value: `*.domain-${ordinal}.example` },
+      exception: false, raw: `*.domain-${ordinal}.example`,
+    }));
+    const input = compilationInput([], [source({ supportedRuleCount: rules.length })], new Map([['source', rules]]));
+    const artifact = compileProxyRules(input);
+    expect(artifact.sourceRuleCount).toBe(112_000);
+    expect(artifact.compiledBytes).toBeLessThan(4 * 1024 * 1024);
+    expect(executePac(artifact.pacScript, 'https://www.domain-111999.example/')).toBe('PROXY 127.0.0.1:8083');
+    expect(executePac(artifact.pacScript, 'https://domain-111999.example/')).toBe('DIRECT');
+    const preview = previewProxyRules('https://www.domain-111999.example/', input);
+    expect(preview).toMatchObject({ matchedKind: 'source', effectiveProfileId: 'mitm' });
   });
 });

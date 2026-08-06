@@ -1,5 +1,8 @@
 import { browser } from 'wxt/browser';
-import type { BrowserTransformDirectionName } from '@/types/models';
+import type {
+  BrowserTransformDirectionName,
+  BrowserTransformPacket,
+} from '@/types/models';
 
 /**
  * Replay bodies can contain credentials and tokens. Keep them behind per-draft
@@ -141,4 +144,64 @@ export async function deleteBrowserTransformReplayDrafts(profileId: string): Pro
     clearBrowserTransformReplayDraft(profileId, 'request'),
     clearBrowserTransformReplayDraft(profileId, 'response'),
   ]);
+}
+
+function encodeUtf8Base64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+export function browserTransformReplayDraftToPacket(
+  draft: BrowserTransformReplayDraft,
+): BrowserTransformPacket {
+  const method = draft.method.trim().toUpperCase();
+  if (!/^[A-Z]{1,16}$/.test(method)) {
+    throw new Error('本地回放草稿的 HTTP 方法无效');
+  }
+  let url: URL;
+  try {
+    url = new URL(draft.url);
+  } catch {
+    throw new Error('本地回放草稿的 URL 无效');
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.origin !== draft.origin || url.hash) {
+    throw new Error('本地回放草稿必须保持在明文网关绑定的 HTTP(S) 来源内');
+  }
+  let parsedHeaders: unknown;
+  try {
+    parsedHeaders = JSON.parse(draft.headers);
+  } catch {
+    throw new Error('本地回放草稿的 Header 必须是 JSON 对象');
+  }
+  if (!parsedHeaders || typeof parsedHeaders !== 'object' || Array.isArray(parsedHeaders)) {
+    throw new Error('本地回放草稿的 Header 必须是 JSON 对象');
+  }
+  const headers = Object.entries(parsedHeaders as Record<string, unknown>).map(([rawName, rawValue]) => {
+    const name = rawName.trim();
+    const value = rawValue === null ? '' : String(rawValue);
+    if (
+      !name
+      || name.length > 256
+      || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)
+      || value.length > 16_384
+      || /[\r\n]/.test(value)
+    ) {
+      throw new Error(`本地回放草稿包含无效 Header: ${rawName}`);
+    }
+    return { name, value };
+  });
+  if (headers.length > 256) {
+    throw new Error('本地回放草稿最多包含 256 个 Header');
+  }
+  return {
+    method,
+    url: url.toString(),
+    headers,
+    bodyBase64: encodeUtf8Base64(draft.body),
+  };
 }

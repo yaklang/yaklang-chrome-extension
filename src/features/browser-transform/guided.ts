@@ -16,6 +16,7 @@ export interface GuidedTransformDraft {
 }
 
 export interface GuidedTransformSuggestion {
+  inputPaths?: string[];
   outputKind?: GuidedTransformOutputKind;
   outputField?: string;
 }
@@ -42,16 +43,47 @@ function defaultInputPaths(callable?: BrowserPageCallable): string[] {
   ));
 }
 
+function envelopeBodyFormat(callable?: BrowserPageCallable): 'json' | 'form' | 'raw' | undefined {
+  if (callable?.output.shape !== 'envelope') return undefined;
+  return callable.transaction?.request.bodyFormat || (callable.output.encoding === 'json' ? 'json' : 'raw');
+}
+
+function appendContentType(
+  nodes: BrowserTransformPipelineNode[],
+  contentType: string,
+): void {
+  const contentTypeId = uid('literal');
+  nodes.push({
+    id: contentTypeId,
+    name: '请求 Content-Type',
+    kind: 'builtin',
+    operation: 'value.literal',
+    inputs: [],
+    options: { value: contentType },
+  });
+  nodes.push({
+    id: uid('header'),
+    name: '设置请求 Content-Type',
+    kind: 'output.write',
+    destination: 'header.Content-Type',
+    source: { nodeId: contentTypeId },
+    encoding: 'text',
+  });
+}
+
 export function defaultGuidedTransform(
   callable?: BrowserPageCallable,
   suggestion: GuidedTransformSuggestion = {},
 ): GuidedTransformDraft {
+  const bodyFormat = envelopeBodyFormat(callable);
   return {
     callableId: callable?.id || '',
-    inputPaths: defaultInputPaths(callable),
-    outputKind: suggestion.outputKind || 'body',
-    outputField: suggestion.outputField || '',
-    setFormContentType: suggestion.outputKind === 'form-field',
+    inputPaths: suggestion.inputPaths?.length
+      ? suggestion.inputPaths.map((path) => path.trim() || 'body')
+      : defaultInputPaths(callable),
+    outputKind: bodyFormat ? 'body' : suggestion.outputKind || 'body',
+    outputField: bodyFormat ? '' : suggestion.outputField || '',
+    setFormContentType: bodyFormat === 'form' || (!bodyFormat && suggestion.outputKind === 'form-field'),
   };
 }
 
@@ -76,6 +108,34 @@ export function compileGuidedTransform(guide: GuidedTransformDraft, callable?: B
   };
   const callReference = { nodeId: callId, path: guide.resultPath?.trim() || undefined };
   const nodes: BrowserTransformPipelineNode[] = [...inputNodes, callNode];
+  const bodyFormat = envelopeBodyFormat(callable);
+
+  if (bodyFormat) {
+    let outputReference: { nodeId: string; path?: string } = { nodeId: callId };
+    if (bodyFormat === 'form') {
+      const formId = uid('form');
+      nodes.push({
+        id: formId,
+        name: '序列化完整线上表单',
+        kind: 'builtin',
+        operation: 'form.serialize',
+        inputs: [{ nodeId: callId }],
+      });
+      outputReference = { nodeId: formId };
+      appendContentType(nodes, 'application/x-www-form-urlencoded');
+    } else if (bodyFormat === 'json') {
+      appendContentType(nodes, 'application/json');
+    }
+    nodes.push({
+      id: uid('output'),
+      name: '写入完整线上请求',
+      kind: 'output.write',
+      destination: 'body',
+      source: outputReference,
+      encoding: bodyFormat === 'json' ? 'json' : bodyFormat === 'form' ? 'text' : 'auto',
+    });
+    return { enabled: true, nodes };
+  }
 
   if (guide.outputKind === 'form-field') {
     const formId = uid('form');
@@ -89,23 +149,7 @@ export function compileGuidedTransform(guide: GuidedTransformDraft, callable?: B
       options: { keys: [field] },
     });
     if (guide.setFormContentType) {
-      const contentTypeId = uid('literal');
-      nodes.push({
-        id: contentTypeId,
-        name: '表单 Content-Type',
-        kind: 'builtin',
-        operation: 'value.literal',
-        inputs: [],
-        options: { value: 'application/x-www-form-urlencoded' },
-      });
-      nodes.push({
-        id: uid('header'),
-        name: '设置表单 Content-Type',
-        kind: 'output.write',
-        destination: 'header.Content-Type',
-        source: { nodeId: contentTypeId },
-        encoding: 'text',
-      });
+      appendContentType(nodes, 'application/x-www-form-urlencoded');
     }
     nodes.push({
       id: uid('output'),
@@ -159,6 +203,8 @@ export function parseGuidedTransform(
   }
 
   const outputs = direction.nodes.filter((node): node is Extract<BrowserTransformPipelineNode, { kind: 'output.write' }> => node.kind === 'output.write');
+  const contentTypeOutput = outputs.find((node) => node.destination.toLowerCase() === 'header.content-type');
+  const bodyOutputs = outputs.filter((node) => node !== contentTypeOutput);
   const form = direction.nodes.find((node): node is Extract<BrowserTransformPipelineNode, { kind: 'builtin' }> => (
     node.kind === 'builtin' && node.operation === 'form.compose'
   ));
@@ -167,7 +213,6 @@ export function parseGuidedTransform(
     const keys = form.options?.keys;
     if (!bodyOutput || form.inputs.length !== 1 || form.inputs[0].nodeId !== call.id
       || !Array.isArray(keys) || keys.length !== 1 || typeof keys[0] !== 'string') return undefined;
-    const contentTypeOutput = outputs.find((node) => node.destination.toLowerCase() === 'header.content-type');
     if (outputs.some((node) => node !== bodyOutput && node !== contentTypeOutput)) return undefined;
     return {
       callableId: call.callableId,
@@ -179,8 +224,25 @@ export function parseGuidedTransform(
     };
   }
 
-  if (outputs.length !== 1) return undefined;
-  const output = outputs[0];
+  const serializedForm = direction.nodes.find((node): node is Extract<BrowserTransformPipelineNode, { kind: 'builtin' }> => (
+    node.kind === 'builtin' && node.operation === 'form.serialize'
+  ));
+  if (callable?.output.shape === 'envelope' && serializedForm) {
+    const output = bodyOutputs[0];
+    if (bodyOutputs.length !== 1 || output.destination !== 'body'
+      || output.source.nodeId !== serializedForm.id || serializedForm.inputs.length !== 1
+      || serializedForm.inputs[0].nodeId !== call.id || serializedForm.inputs[0].path) return undefined;
+    return {
+      callableId: call.callableId,
+      inputPaths,
+      outputKind: 'body',
+      outputField: '',
+      setFormContentType: Boolean(contentTypeOutput),
+    };
+  }
+
+  if (bodyOutputs.length !== 1) return undefined;
+  const output = bodyOutputs[0];
   const resultPath = referenceFromCall(output.source.nodeId, output.source.path, call.id);
   if (output.source.nodeId !== call.id) return undefined;
   if (output.destination === 'body') {
@@ -205,4 +267,12 @@ export function guidedOutputDescription(guide: GuidedTransformDraft): string {
   if (guide.outputKind === 'form-field') return `组成表单字段 ${field}`;
   if (guide.outputKind === 'header') return `写入 Header ${field}`;
   return `写入 Query ${field}`;
+}
+
+export function callableEnvelopeDescription(callable?: BrowserPageCallable): string | undefined {
+  const bodyFormat = envelopeBodyFormat(callable);
+  if (!bodyFormat) return undefined;
+  const count = callable?.output.paths.length || 0;
+  const format = bodyFormat === 'form' ? '表单' : bodyFormat === 'json' ? 'JSON' : '原始 Body';
+  return `完整${format}请求${count ? ` · ${count} 个已确认字段` : ''}`;
 }

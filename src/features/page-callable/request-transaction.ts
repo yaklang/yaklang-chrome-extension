@@ -64,6 +64,14 @@ function comparableUrl(value: string, baseUrl: string): string {
   }
 }
 
+export function resolveRequestTransactionFetchInput(
+  input: RequestInfo | URL,
+  baseUrl = runtimeBaseUrl(),
+): RequestInfo | URL {
+  if (typeof Request !== 'undefined' && input instanceof Request) return input
+  try { return new URL(String(input), baseUrl).toString() } catch { return input }
+}
+
 export function requestMatchesTransaction(
   transaction: BrowserPageCallableTransaction,
   method: string,
@@ -72,6 +80,16 @@ export function requestMatchesTransaction(
 ): boolean {
   return transaction.request.method.toUpperCase() === method.toUpperCase()
     && comparableUrl(transaction.request.url, baseUrl) === comparableUrl(url, baseUrl)
+}
+
+function requestMatchesStep(
+  step: { boundary: CapturedRequest['boundary']; method: string; url: string },
+  request: CapturedRequest,
+  baseUrl = runtimeBaseUrl(),
+): boolean {
+  return step.boundary === request.boundary
+    && step.method.toUpperCase() === request.method.toUpperCase()
+    && comparableUrl(step.url, baseUrl) === comparableUrl(request.url, baseUrl)
 }
 
 function byteLength(value: string): number {
@@ -111,13 +129,95 @@ function parseForm(value: string): Record<string, string | string[]> {
   return output
 }
 
-function capturedBody(request: CapturedRequest): unknown {
+function capturedBodyFormat(request: CapturedRequest): BrowserPageCallableTransaction['request']['bodyFormat'] {
   const contentType = request.headers['content-type']?.toLowerCase() || ''
-  if (contentType.includes('application/json') || /^[\s\n\r]*[\[{]/.test(request.bodyText)) {
+  if (contentType.includes('application/x-www-form-urlencoded')) return 'form'
+  if (contentType.includes('application/json') || /^[\s\n\r]*[\[{]/.test(request.bodyText)) return 'json'
+  return 'raw'
+}
+
+function capturedBody(request: CapturedRequest): unknown {
+  const format = capturedBodyFormat(request)
+  if (format === 'json') {
     try { return JSON.parse(request.bodyText) as unknown } catch { throw error('页面生成的请求 Body 不是有效 JSON') }
   }
-  if (contentType.includes('application/x-www-form-urlencoded')) return parseForm(request.bodyText)
+  if (format === 'form') return parseForm(request.bodyText)
   return request.bodyText
+}
+
+function bodyValue(text: string, format: BrowserPageCallableTransaction['request']['bodyFormat']): unknown {
+  if (format === 'json') {
+    try { return JSON.parse(text) as unknown } catch { throw error('在线前置请求返回的 Body 不是有效 JSON') }
+  }
+  if (format === 'form') return parseForm(text)
+  return text
+}
+
+function validatePrerequisiteRequest(
+  step: BrowserPageCallableTransaction['prerequisites'][number],
+  request: CapturedRequest,
+): void {
+  const length = byteLength(request.bodyText)
+  if (length > step.maxRequestBodyBytes) {
+    throw error(`在线前置请求 Body 超过计划上限 ${step.maxRequestBodyBytes} B`)
+  }
+  if (step.requestBodyFormat === 'none') {
+    if (length !== 0) throw error('在线前置请求意外携带了 Body')
+    return
+  }
+  const actual = capturedBodyFormat(request)
+  if (actual !== step.requestBodyFormat) {
+    throw error(`在线前置请求生成了 ${actual} Body，但录制证据要求 ${step.requestBodyFormat} Body`)
+  }
+}
+
+async function readBoundedResponseText(response: Response, maximumBytes: number): Promise<string> {
+  const declaredLength = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    throw error(`在线前置响应超过计划上限 ${maximumBytes} B`)
+  }
+  const clone = response.clone()
+  if (!clone.body) return ''
+  const reader = clone.body.getReader()
+  const chunks: Uint8Array[] = []
+  let length = 0
+  try {
+    while (true) {
+      const result = await reader.read()
+      if (result.done) break
+      if (!result.value) continue
+      length += result.value.byteLength
+      if (length > maximumBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw error(`在线前置响应超过计划上限 ${maximumBytes} B`)
+      }
+      chunks.push(result.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(length)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(bytes)
+}
+
+async function validatePrerequisiteResponse(
+  step: BrowserPageCallableTransaction['prerequisites'][number],
+  response: Response,
+): Promise<void> {
+  if (response.status !== step.response.statusCode) {
+    throw error(`在线前置响应状态为 ${response.status}，录制证据要求 ${step.response.statusCode}`)
+  }
+  if (comparableUrl(response.url, runtimeBaseUrl()) !== comparableUrl(step.response.url, runtimeBaseUrl())) {
+    throw error(`在线前置响应到达未计划 URL ${response.url || '(empty)'}`)
+  }
+  const text = await readBoundedResponseText(response, step.response.maxBodyBytes)
+  const value = bodyValue(text, step.response.bodyFormat)
+  validateRequestTransactionOutput(value, step.response.requiredPaths)
 }
 
 function readOwnPath(input: unknown, path: string): unknown {
@@ -300,43 +400,82 @@ export async function executeRequestTransaction(input: RequestTransactionInvocat
   const restorers: Array<() => void> = []
   let captured: CapturedRequest | undefined
   let captureFailure: Error | undefined
+  let prerequisiteIndex = 0
+  let prerequisiteInFlight = false
   let resolveCapture!: () => void
   const captureSignal = new Promise<void>((resolve) => { resolveCapture = resolve })
+  const transactionAbort = new AbortController()
+
+  const fail = (reason: unknown): Error => {
+    const message = reason instanceof Error ? reason.message : String(reason)
+    const failure = reason instanceof Error && message.startsWith('请求事务失败：') ? reason : error(message)
+    captureFailure = failure
+    if (!transactionAbort.signal.aborted) transactionAbort.abort(failure)
+    resolveCapture()
+    return failure
+  }
 
   const capture = async (request: CapturedRequest): Promise<void> => {
     if (captured || captureFailure) {
-      captureFailure = error('页面流程产生了多个网络请求，无法唯一确定转换边界')
-      resolveCapture()
-      throw captureFailure
+      throw fail('页面流程产生了目标请求之外的额外网络请求')
     }
-    if (!requestMatchesTransaction(input.transaction, request.method, request.url)) {
-      captureFailure = error(`页面尝试访问未授权请求 ${request.method} ${request.url}`)
-      resolveCapture()
-      throw captureFailure
+    if (prerequisiteInFlight || prerequisiteIndex !== input.transaction.prerequisites.length) {
+      throw fail('页面在在线前置请求完成前尝试生成最终业务请求')
+    }
+    if (!requestMatchesStep(input.transaction.request, request)) {
+      throw fail(`页面尝试访问未授权请求 ${request.method} ${request.url}`)
     }
     if (byteLength(request.bodyText) > MAX_BODY_BYTES) {
-      captureFailure = error('页面生成的请求 Body 超过 8 MiB')
-      resolveCapture()
-      throw captureFailure
+      throw fail('页面生成的请求 Body 超过 8 MiB')
     }
     captured = request
     resolveCapture()
   }
 
   const previousFetch = window.fetch
-  setMethod(window, 'fetch', (async function transactionFetch(requestInput: RequestInfo | URL, init?: RequestInit) {
-    const request = new Request(requestInput, init)
-    await capture({
+  setMethod(window, 'fetch', (async function transactionFetch(this: Window, requestInput: RequestInfo | URL, init?: RequestInit) {
+    const request = new Request(resolveRequestTransactionFetchInput(requestInput), init)
+    const observed: CapturedRequest = {
       boundary: 'fetch',
       method: request.method.toUpperCase(),
       url: request.url,
       headers: headerRecord(request.headers),
       bodyText: await request.clone().text(),
-    })
-    return new Response(JSON.stringify({ success: false, error: 'request captured by Yakit Browser Agent' }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    })
+    }
+    const prerequisite = input.transaction.prerequisites[prerequisiteIndex]
+    if (prerequisite) {
+      if (prerequisiteInFlight) throw fail('页面并发发起了多个在线前置请求，无法证明执行顺序')
+      if (!requestMatchesStep(prerequisite, observed)) {
+        throw fail(`页面尝试访问未授权请求 ${observed.method} ${observed.url}`)
+      }
+      let forwardAbort: (() => void) | undefined
+      try {
+        validatePrerequisiteRequest(prerequisite, observed)
+        prerequisiteInFlight = true
+        if (request.signal.aborted) transactionAbort.abort(request.signal.reason)
+        else {
+          forwardAbort = () => transactionAbort.abort(request.signal.reason)
+          request.signal.addEventListener('abort', forwardAbort, { once: true })
+        }
+        const expectedRedirect = comparableUrl(prerequisite.url, runtimeBaseUrl())
+          === comparableUrl(prerequisite.response.url, runtimeBaseUrl()) ? 'error' : 'follow'
+        const guardedRequest = new Request(request, {
+          redirect: expectedRedirect,
+          signal: transactionAbort.signal,
+        })
+        const response = await Reflect.apply(previousFetch, this, [guardedRequest])
+        await validatePrerequisiteResponse(prerequisite, response)
+        prerequisiteIndex += 1
+        return response
+      } catch (reason) {
+        throw fail(reason)
+      } finally {
+        if (forwardAbort) request.signal.removeEventListener('abort', forwardAbort)
+        prerequisiteInFlight = false
+      }
+    }
+    await capture(observed)
+    return await new Promise<Response>(() => undefined)
   }) as typeof previousFetch, restorers)
 
   const xhrMetadata = new WeakMap<XMLHttpRequest, { method: string; url: string; headers: Record<string, string> }>()
@@ -411,7 +550,7 @@ export async function executeRequestTransaction(input: RequestTransactionInvocat
     await Promise.race([
       captureSignal,
       delay(timeoutMs).then(() => {
-        if (!captured && !captureFailure) captureFailure = error('等待页面生成目标请求超时')
+        if (!captured && !captureFailure) fail('等待页面完成在线依赖并生成目标请求超时')
       }),
     ])
     if (captureFailure) throw captureFailure
@@ -422,10 +561,15 @@ export async function executeRequestTransaction(input: RequestTransactionInvocat
     await delay(0)
     if (captureFailure) throw captureFailure
     if (invocationFailure instanceof Error) throw error(invocationFailure.message)
+    const actualBodyFormat = capturedBodyFormat(captured)
+    if (actualBodyFormat !== input.transaction.request.bodyFormat) {
+      throw error(`页面生成了 ${actualBodyFormat} Body，但录制证据要求 ${input.transaction.request.bodyFormat} Body`)
+    }
     const value = capturedBody(captured)
     validateRequestTransactionOutput(value, input.transaction.request.expectedDestinations)
     return value
   } finally {
+    if (!transactionAbort.signal.aborted) transactionAbort.abort(error('请求事务已经结束'))
     for (const restore of restorers.reverse()) {
       try { restore() } catch { /* The document may have been replaced while fail-closing. */ }
     }

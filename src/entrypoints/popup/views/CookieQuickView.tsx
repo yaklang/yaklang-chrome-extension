@@ -30,20 +30,20 @@ export function CookieQuickView({ tab, busy, run, onCountChange }: CookieQuickVi
   const [loadError, setLoadError] = useState('');
 
   const reload = useCallback(async () => {
-    if (!url) {
+    if (!url || !tab?.id) {
       setCookies([]);
       onCountChange(0);
       return;
     }
     try {
-      const next = await request('cookie.list', { url });
+      const next = await request('cookie.list', { url, tabId: tab.id });
       setCookies(next);
       onCountChange(next.length);
       setLoadError('');
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
     }
-  }, [onCountChange, url]);
+  }, [onCountChange, tab?.id, url]);
 
   useEffect(() => { void reload(); }, [reload]);
 
@@ -75,8 +75,8 @@ export function CookieQuickView({ tab, busy, run, onCountChange }: CookieQuickVi
   };
 
   const saveCookie = () => run(async () => {
-    if (!url || !draft.name) throw new Error('Cookie 名称不能为空');
-    await request('cookie.set', { url, ...draft });
+    if (!url || !tab?.id || !draft.name) throw new Error('Cookie 名称不能为空');
+    await request('cookie.set', { url, tabId: tab.id, ...draft });
     await reload();
     closeEditor();
   }, editing ? 'Cookie 已更新' : 'Cookie 已创建');

@@ -14,14 +14,17 @@ describe('RetainedCallBudget', () => {
     expect(budget.get('a')).toBeUndefined();
     expect(budget.get('b')?.value).toBe('b');
     expect(budget.retainedBytes).toBe(8);
+    expect(budget.droppedCount).toBe(1);
   });
 
   it('rejects an oversized handle and releases accounting on delete and clear', () => {
     const budget = new RetainedCallBudget({ maxCount: 4, maxBytes: 8, maxEntryBytes: 5 });
     expect(budget.add({ id: 'too-large', retainedBytes: 6 })).toBe(false);
+    expect(budget.droppedCount).toBe(1);
     expect(budget.add({ id: 'a', retainedBytes: 5 })).toBe(true);
     expect(budget.add({ id: 'b', retainedBytes: 5 })).toBe(true);
     expect(budget.get('a')).toBeUndefined();
+    expect(budget.droppedCount).toBe(2);
     expect(budget.retainedBytes).toBe(5);
     expect(budget.delete('b')).toBe(true);
     expect(budget.retainedBytes).toBe(0);
@@ -29,5 +32,6 @@ describe('RetainedCallBudget', () => {
     budget.clear();
     expect(budget.size).toBe(0);
     expect(budget.retainedBytes).toBe(0);
+    expect(budget.droppedCount).toBe(0);
   });
 });

@@ -11,6 +11,7 @@ import type {
 import { ExtensionError } from '@/shared/errors';
 import { resolveDocumentTarget, scriptingTarget } from '@/platform/browser/targets';
 import { PAGE_RECORDER_PROTOCOL_VERSION, PAGE_RECORDER_REGISTRY_KEY } from '@/features/browser-recording/constants';
+import { executeFirefoxPageRecorderCommand } from '@/features/browser-recording/bridge-client';
 import { normalizeBrowserRecordingCrypto } from '@/features/browser-crypto/model';
 import {
   MAX_CALLABLE_TIMEOUT_MS,
@@ -26,23 +27,54 @@ function normalizeTransaction(value: unknown): BrowserPageCallable['transaction'
   if (!value || typeof value !== 'object') return undefined;
   const input = value as Partial<NonNullable<BrowserPageCallable['transaction']>>;
   const request = input.request as Partial<NonNullable<BrowserPageCallable['transaction']>['request']> | undefined;
-  if (!request || typeof request.method !== 'string' || typeof request.url !== 'string'
+  if (input.version !== 2 || !Array.isArray(input.prerequisites) || input.prerequisites.length > 4
+    || !request || !['fetch', 'xhr', 'beacon', 'form'].includes(String(request.boundary))
+    || typeof request.method !== 'string' || typeof request.url !== 'string'
     || !Array.isArray(request.expectedDestinations) || request.expectedDestinations.length === 0
-    || request.expectedDestinations.some((item) => typeof item !== 'string' || !item.trim())) return undefined;
-  const boundaries = Array.isArray(input.boundaries)
-    ? input.boundaries.filter((item): item is NonNullable<BrowserPageCallable['transaction']>['boundaries'][number] => (
-      ['fetch', 'xhr', 'beacon', 'form'].includes(String(item))
-    )).slice(0, 4)
-    : ['fetch', 'xhr', 'beacon', 'form'] as NonNullable<BrowserPageCallable['transaction']>['boundaries'];
-  if (!boundaries.length) return undefined;
+    || request.expectedDestinations.some((item) => typeof item !== 'string' || !item.trim())
+    || !['json', 'form', 'raw'].includes(String(request.bodyFormat))) return undefined;
+  const prerequisites = input.prerequisites.flatMap((value) => {
+    if (!value || typeof value !== 'object') return [];
+    const item = value as Partial<NonNullable<BrowserPageCallable['transaction']>['prerequisites'][number]>;
+    const response = item.response as Partial<NonNullable<BrowserPageCallable['transaction']>['prerequisites'][number]['response']> | undefined;
+    if (item.boundary !== 'fetch' || typeof item.method !== 'string' || typeof item.url !== 'string'
+      || !['none', 'json', 'form', 'raw'].includes(String(item.requestBodyFormat))
+      || !Number.isSafeInteger(item.maxRequestBodyBytes) || Number(item.maxRequestBodyBytes) < 0
+      || Number(item.maxRequestBodyBytes) > 8 * 1_024 * 1_024
+      || !response || !Number.isSafeInteger(response.statusCode) || Number(response.statusCode) < 100
+      || Number(response.statusCode) > 599 || typeof response.url !== 'string'
+      || !['json', 'form', 'raw'].includes(String(response.bodyFormat))
+      || !Number.isSafeInteger(response.maxBodyBytes) || Number(response.maxBodyBytes) < 1
+      || Number(response.maxBodyBytes) > 8 * 1_024 * 1_024
+      || !Array.isArray(response.requiredPaths) || response.requiredPaths.length === 0
+      || response.requiredPaths.some((path) => typeof path !== 'string' || !path.trim())) return [];
+    return [{
+      boundary: 'fetch' as const,
+      method: item.method.toUpperCase().slice(0, 16),
+      url: item.url.slice(0, 4_096),
+      requestBodyFormat: item.requestBodyFormat as NonNullable<BrowserPageCallable['transaction']>['prerequisites'][number]['requestBodyFormat'],
+      maxRequestBodyBytes: Number(item.maxRequestBodyBytes),
+      response: {
+        statusCode: Number(response.statusCode),
+        url: response.url.slice(0, 4_096),
+        bodyFormat: response.bodyFormat as NonNullable<BrowserPageCallable['transaction']>['prerequisites'][number]['response']['bodyFormat'],
+        maxBodyBytes: Number(response.maxBodyBytes),
+        requiredPaths: [...new Set(response.requiredPaths.map((path) => path.trim().slice(0, 512)))].slice(0, 64),
+      },
+    }];
+  });
+  if (prerequisites.length !== input.prerequisites.length) return undefined;
   return {
+    version: 2,
+    prerequisites,
     request: {
+      boundary: request.boundary as NonNullable<BrowserPageCallable['transaction']>['request']['boundary'],
       method: request.method.toUpperCase().slice(0, 16),
       url: request.url.slice(0, 4_096),
-      expectedDestinations: request.expectedDestinations.slice(0, 64).map((item) => item.slice(0, 512)),
+      expectedDestinations: [...new Set(request.expectedDestinations.map((item) => item.trim().slice(0, 512)))].slice(0, 64),
+      bodyFormat: request.bodyFormat as NonNullable<BrowserPageCallable['transaction']>['request']['bodyFormat'],
     },
     inputMode: 'auto',
-    boundaries,
   };
 }
 
@@ -54,6 +86,51 @@ function normalizeExecution(value: unknown): BrowserPageCallable['execution'] | 
     || Number(input.timeoutMs) < MIN_CALLABLE_TIMEOUT_MS
     || Number(input.timeoutMs) > MAX_CALLABLE_TIMEOUT_MS) return undefined;
   return callableExecutionPolicy(input.resultMode as BrowserPageCallable['execution']['resultMode'], Number(input.timeoutMs));
+}
+
+function normalizeCallableAnalysis(
+  value: unknown,
+): BrowserPageCallable['provenance']['analysis'] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const input = value as Partial<NonNullable<BrowserPageCallable['provenance']['analysis']>>;
+  if (input.version !== 1 || typeof input.traceId !== 'string'
+    || !input.confidence || typeof input.confidence !== 'object'
+    || !Number.isFinite(input.confidence.score)
+    || !['high', 'medium', 'low'].includes(String(input.confidence.level))
+    || !Array.isArray(input.flow) || !Array.isArray(input.operations) || !Array.isArray(input.evidence)) return undefined;
+  const evidenceKinds = new Set([
+    'request-boundary', 'response-boundary', 'exact-value', 'message-boundary',
+    'state-sequence', 'transform-lineage', 'callable', 'trace-order', 'heuristic',
+  ]);
+  return {
+    version: 1,
+    traceId: input.traceId.slice(0, 160),
+    confidence: {
+      score: Math.max(0, Math.min(100, Number(input.confidence.score))),
+      level: input.confidence.level as 'high' | 'medium' | 'low',
+    },
+    flow: input.flow.slice(0, 32).flatMap((item) => typeof item === 'string' ? [item.slice(0, 240)] : []),
+    operations: input.operations.slice(0, 16).flatMap((operation) => (
+      operation && typeof operation.operation === 'string'
+        ? [{
+          operation: operation.operation.slice(0, 240),
+          destination: typeof operation.destination === 'string' ? operation.destination.slice(0, 512) : undefined,
+          crypto: normalizeBrowserRecordingCrypto(operation.crypto),
+        }]
+        : []
+    )),
+    evidence: input.evidence.slice(0, 24).flatMap((item) => (
+      item && evidenceKinds.has(String(item.kind))
+        && ['proven', 'supported'].includes(String(item.strength))
+        && typeof item.label === 'string'
+        ? [{
+          kind: item.kind,
+          strength: item.strength,
+          label: item.label.slice(0, 500),
+        }]
+        : []
+    )),
+  };
 }
 
 function normalizeCallable(value: unknown, target: BrowserTarget): BrowserPageCallable | undefined {
@@ -118,6 +195,22 @@ function normalizeCallable(value: unknown, target: BrowserTarget): BrowserPageCa
       sourceUrl: typeof input.provenance.sourceUrl === 'string' ? input.provenance.sourceUrl.slice(0, 4_096) : undefined,
       lineNumber: Number.isSafeInteger(input.provenance.lineNumber) ? Math.max(1, Number(input.provenance.lineNumber)) : undefined,
       functionName: typeof input.provenance.functionName === 'string' ? input.provenance.functionName.slice(0, 240) : undefined,
+      businessFrameHints: Array.isArray(input.provenance.businessFrameHints)
+        ? input.provenance.businessFrameHints.slice(0, 16).flatMap((hint) => (
+          hint
+          && typeof hint.functionName === 'string'
+          && Number.isFinite(hint.support)
+          && Number.isFinite(hint.averageDepth)
+            ? [{
+              functionName: hint.functionName.slice(0, 240),
+              url: typeof hint.url === 'string' ? hint.url.slice(0, 4_096) : undefined,
+              support: Math.max(0, Number(hint.support)),
+              averageDepth: Math.max(0, Number(hint.averageDepth)),
+            }]
+            : []
+        ))
+        : undefined,
+      analysis: normalizeCallableAnalysis(input.provenance.analysis),
     },
     createdAt: Number.isFinite(input.createdAt) ? Math.max(0, Number(input.createdAt)) : Date.now(),
   };
@@ -156,6 +249,7 @@ async function callPageController(
   command: PageControllerCommand,
   input: Record<string, unknown> = {},
 ): Promise<unknown> {
+  if (import.meta.env.FIREFOX) return executeFirefoxPageRecorderCommand(target, command, input);
   const [result] = await browser.scripting.executeScript({
     target: scriptingTarget(target),
     world: 'MAIN',

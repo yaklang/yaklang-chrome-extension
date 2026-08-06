@@ -92,6 +92,19 @@ function describe(
       Boolean(callableKind),
       roles[index] === 'options' ? options.summary : undefined,
     )),
+    inputEvidence() {
+      const evidence = toolkit.collectEvidence(args[0], '$input');
+      for (let index = 1; index < Math.min(args.length, roles.length); index += 1) {
+        const role = roles[index];
+        if (role === 'options') {
+          const iv = ownValue(args[index], 'iv');
+          if (iv !== undefined) evidence.push(...toolkit.collectEvidence(iv, '$input.iv'));
+          continue;
+        }
+        if (role !== 'unknown') evidence.push(...toolkit.collectEvidence(args[index], `$input.${role}`));
+      }
+      return evidence.slice(0, 48);
+    },
     outputEvidence(value) {
       const output = toolkit.defaultOutputEvidence(value);
       if (!value || (typeof value !== 'object' && typeof value !== 'function') || output.length >= 48) return output;

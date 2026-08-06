@@ -1,5 +1,5 @@
 import { browser, type Browser } from 'wxt/browser';
-import { scriptingTarget } from '@/platform/browser/targets';
+import { getTab, scriptingTarget } from '@/platform/browser/targets';
 import type {
   BrowserDeepCaptureMatcher, BrowserPageCallable, BrowserRecordingCallArgument, BrowserRecordingEvent, BrowserRecordingNavigation,
   BrowserRecordingOptions, BrowserRecordingSnapshot, BrowserRecordingStatus,
@@ -18,10 +18,22 @@ import {
   mergeRecordingEvents,
   nextRecordingSequence,
 } from './timeline';
+import { recordingSnapshotForScope } from './redaction';
+import { executeFirefoxPageRecorderCommand } from './bridge-client';
+import type { PageRecorderBridgeCommand } from './bridge-protocol';
+import {
+  RECORDING_GLOBAL_MAX_BYTES,
+  RECORDING_MAX_SESSIONS,
+  RECORDING_SNAPSHOT_MAX_BYTES,
+  boundRecordingPreviews,
+  recordingEventPreviewBytes,
+  recordingSerializedBytes,
+} from './budget';
 
 const RECORDER_SCRIPT = '/page-recorder-main-world.js' as const;
 const DEFAULT_OPTIONS: BrowserRecordingOptions = { captureValues: false, maxEntries: 200, maxValueBytes: 2_048 };
 const MAX_ENTRIES = MAX_RECORDING_EVENTS;
+const RECORDING_SNAPSHOT_PAYLOAD_TARGET_BYTES = 7 * 256 * 1024;
 
 interface RawRecorderSnapshot {
   version: typeof PAGE_RECORDER_PROTOCOL_VERSION;
@@ -30,6 +42,9 @@ interface RawRecorderSnapshot {
   startedAt?: number;
   count: number;
   droppedCount: number;
+  retainedCallCount: number;
+  retainedCallBytes: number;
+  retainedCallDroppedCount: number;
   options?: BrowserRecordingOptions;
   events: BrowserRecordingEvent[];
   callables: unknown[];
@@ -37,7 +52,7 @@ interface RawRecorderSnapshot {
 
 interface OwnedRecording {
   target: BrowserTarget;
-  owner: { kind: 'local' } | { kind: 'grant'; grantId: string };
+  owner: { kind: 'local' } | { kind: 'grant'; grantId: string; expiresAt: number };
 }
 
 interface StoredRecordingSession {
@@ -45,44 +60,263 @@ interface StoredRecordingSession {
   owner?: OwnedRecording['owner'];
 }
 
+interface StoredRecordingState {
+  version: 4;
+  sessions: Record<string, StoredRecordingSession>;
+}
+
+type RecordingSessionStorage = {
+  get(key: string): Promise<Record<string, unknown>>;
+  set(items: Record<string, unknown>): Promise<void>;
+};
+
 type RecorderCommand = 'start' | 'resume' | 'status' | 'get' | 'clear' | 'stop' | 'navigation.record'
   | 'callable.create' | 'deep.arm' | 'deep.disarm';
 const ownedRecordings = new Map<string, OwnedRecording>();
 const latestSnapshots = new Map<string, BrowserRecordingSnapshot>();
+const snapshotSignatures = new Map<string, string>();
 const sessionOwners = new Map<string, OwnedRecording['owner']>();
 const lifecycleQueues = new Map<string, Promise<void>>();
 const removedTabs = new Set<number>();
-const RECORDING_SESSION_STORAGE_KEY = 'session.browser-recording-sessions.v3';
-let sessionStorageQueue: Promise<void> = Promise.resolve();
+const RECORDING_SESSION_STORAGE_KEY = 'session.browser-recording-sessions.v4';
+const RECORDING_PERSIST_DELAY_MS = 500;
+const sessionStorage = (browser.storage as unknown as { session?: RecordingSessionStorage } | undefined)?.session;
+let persistTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+let persistInFlight = false;
+let mutationRevision = 0;
 let sessionRestorePromise: Promise<void> | undefined;
+let sessionRestoreError: string | undefined;
+let serviceInitialized = false;
+
+function expiredGrantOwner(owner: OwnedRecording['owner'] | undefined): boolean {
+  return owner?.kind === 'grant'
+    && (!Number.isFinite(owner.expiresAt) || owner.expiresAt <= Date.now());
+}
 
 function targetKey(target: BrowserTarget): string {
   return `${target.tabId}:${target.frameId}`;
 }
 
+function persistenceError(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 512);
+}
+
+function isStoredRecordingSession(value: unknown): value is StoredRecordingSession {
+  if (!value || typeof value !== 'object') return false;
+  const snapshot = (value as StoredRecordingSession).snapshot;
+  return Boolean(snapshot?.status?.target
+    && Number.isSafeInteger(snapshot.status.target.tabId)
+    && Number.isSafeInteger(snapshot.status.target.frameId)
+    && Array.isArray(snapshot.events)
+    && Array.isArray(snapshot.callables));
+}
+
 async function readStoredSessions(): Promise<Record<string, StoredRecordingSession>> {
+  if (!sessionStorage) return {};
   try {
-    const stored = await browser.storage.session.get(RECORDING_SESSION_STORAGE_KEY);
+    const stored = await sessionStorage.get(RECORDING_SESSION_STORAGE_KEY);
     const value = stored[RECORDING_SESSION_STORAGE_KEY];
-    return value && typeof value === 'object' ? value as Record<string, StoredRecordingSession> : {};
-  } catch {
+    if (!value || typeof value !== 'object') return {};
+    const state = value as Partial<StoredRecordingState>;
+    if (state.version !== 4 || !state.sessions || typeof state.sessions !== 'object') {
+      sessionRestoreError = '录制会话存储格式损坏，已忽略并等待重建';
+      return {};
+    }
+    const entries = Object.entries(state.sessions);
+    const valid = entries.filter((entry): entry is [string, StoredRecordingSession] => (
+      isStoredRecordingSession(entry[1])
+    ));
+    if (valid.length !== entries.length) {
+      sessionRestoreError = `已忽略 ${entries.length - valid.length} 个损坏的录制会话`;
+    }
+    return Object.fromEntries(valid);
+  } catch (error) {
+    sessionRestoreError = persistenceError(error);
     return {};
   }
+}
+
+function refreshSnapshotSize(snapshot: BrowserRecordingSnapshot): void {
+  snapshot.status.retainedBytes = recordingSerializedBytes(snapshot);
+  snapshot.status.retainedBytes = recordingSerializedBytes(snapshot);
+}
+
+function oldestInactiveSessionKey(): string | undefined {
+  return [...latestSnapshots.entries()]
+    .filter(([, snapshot]) => !snapshot.status.active)
+    .sort(([leftKey, left], [rightKey, right]) => (
+      (left.status.startedAt || 0) - (right.status.startedAt || 0)
+      || leftKey.localeCompare(rightKey)
+    ))[0]?.[0];
+}
+
+function deleteSessionMemory(key: string): void {
+  latestSnapshots.delete(key);
+  snapshotSignatures.delete(key);
+  sessionOwners.delete(key);
+  ownedRecordings.delete(key);
+}
+
+function enforceGlobalRecordingBudget(): void {
+  while (latestSnapshots.size > RECORDING_MAX_SESSIONS) {
+    const oldest = oldestInactiveSessionKey();
+    if (!oldest) break;
+    deleteSessionMemory(oldest);
+  }
+
+  for (const snapshot of latestSnapshots.values()) refreshSnapshotSize(snapshot);
+  let total = [...latestSnapshots.values()].reduce(
+    (sum, snapshot) => sum + (snapshot.status.retainedBytes || 0),
+    0,
+  );
+  while (total > RECORDING_GLOBAL_MAX_BYTES) {
+    const candidates = [...latestSnapshots.entries()].flatMap(([key, snapshot]) => (
+      snapshot.events.map((event) => ({ key, event }))
+    )).sort((left, right) => (
+      left.event.timestamp - right.event.timestamp
+      || left.event.sequence - right.event.sequence
+      || left.key.localeCompare(right.key)
+      || left.event.id.localeCompare(right.event.id)
+    ));
+    if (candidates.length) {
+      const excessRatio = Math.min(0.5, Math.max(0.01, (total - RECORDING_GLOBAL_MAX_BYTES) / total));
+      const removeCount = Math.max(1, Math.ceil(candidates.length * excessRatio));
+      const removals = new Map<string, number>();
+      for (const candidate of candidates.slice(0, removeCount)) {
+        removals.set(candidate.key, (removals.get(candidate.key) || 0) + 1);
+      }
+      for (const [key, count] of removals) {
+        const snapshot = latestSnapshots.get(key);
+        if (!snapshot) continue;
+        const removed = snapshot.events.slice(0, count);
+        latestSnapshots.set(key, snapshotFromEvents(
+          snapshot.status.target,
+          {
+            ...snapshot.status,
+            budgetDroppedCount: (snapshot.status.budgetDroppedCount || 0) + removed.length,
+            retentionFloorSequence: Math.max(
+              snapshot.status.retentionFloorSequence || 0,
+              (removed.at(-1)?.sequence || 0) + 1,
+            ),
+          },
+          snapshot.events.slice(count),
+          snapshot.callables,
+        ));
+      }
+    } else {
+      const oldest = oldestInactiveSessionKey();
+      if (!oldest) break;
+      deleteSessionMemory(oldest);
+    }
+    total = [...latestSnapshots.values()].reduce((sum, snapshot) => {
+      refreshSnapshotSize(snapshot);
+      return sum + (snapshot.status.retainedBytes || 0);
+    }, 0);
+  }
+
+  const sessionCount = latestSnapshots.size;
+  for (const snapshot of latestSnapshots.values()) {
+    snapshot.status.globalSessionCount = sessionCount;
+    snapshot.status.globalRetainedBytes = total;
+    refreshSnapshotSize(snapshot);
+  }
+  total = [...latestSnapshots.values()].reduce(
+    (sum, snapshot) => sum + (snapshot.status.retainedBytes || 0),
+    0,
+  );
+  for (const snapshot of latestSnapshots.values()) snapshot.status.globalRetainedBytes = total;
+  for (const [key, snapshot] of latestSnapshots) snapshotSignatures.set(key, snapshotSignature(snapshot));
+}
+
+function snapshotSignature(snapshot: BrowserRecordingSnapshot): string {
+  const {
+    persistence: _persistence,
+    persistenceError: _persistenceError,
+    retainedBytes: _retainedBytes,
+    globalRetainedBytes: _globalRetainedBytes,
+    globalSessionCount: _globalSessionCount,
+    ...stableStatus
+  } = snapshot.status;
+  try { return JSON.stringify({ ...snapshot, status: stableStatus }); } catch { return `${Date.now()}:${Math.random()}`; }
+}
+
+function markPersistence(
+  state: BrowserRecordingStatus['persistence'],
+  error?: string,
+): void {
+  for (const snapshot of latestSnapshots.values()) {
+    snapshot.status.persistence = state;
+    snapshot.status.persistenceError = error;
+  }
+}
+
+function persistedState(): StoredRecordingState {
+  const sessions = Object.fromEntries([...latestSnapshots.entries()].map(([key, snapshot]) => [key, {
+    snapshot: {
+      ...snapshot,
+      status: { ...snapshot.status, persistence: 'persisted' as const, persistenceError: undefined },
+    },
+    owner: ownedRecordings.get(key)?.owner || sessionOwners.get(key),
+  }]));
+  return { version: 4, sessions };
+}
+
+function schedulePersist(): void {
+  if (!sessionStorage) {
+    markPersistence('memory-only');
+    return;
+  }
+  if (persistTimer || persistInFlight) return;
+  persistTimer = globalThis.setTimeout(() => {
+    persistTimer = undefined;
+    const snapshotRevision = mutationRevision;
+    const state = persistedState();
+    persistInFlight = true;
+    void sessionStorage.set({ [RECORDING_SESSION_STORAGE_KEY]: state }).then(() => {
+      sessionRestoreError = undefined;
+      if (mutationRevision === snapshotRevision) markPersistence('persisted');
+    }).catch((error) => {
+      sessionRestoreError = persistenceError(error);
+      markPersistence('degraded', sessionRestoreError);
+    }).finally(() => {
+      persistInFlight = false;
+      if (mutationRevision > snapshotRevision) schedulePersist();
+    });
+  }, RECORDING_PERSIST_DELAY_MS);
+}
+
+function markSessionsMutated(): void {
+  mutationRevision += 1;
+  enforceGlobalRecordingBudget();
+  markPersistence(
+    !sessionStorage ? 'memory-only' : sessionRestoreError ? 'degraded' : 'pending',
+    sessionRestoreError,
+  );
+  schedulePersist();
 }
 
 function ensureSessionsRestored(): Promise<void> {
   sessionRestorePromise ||= readStoredSessions().then((sessions) => {
     for (const [key, stored] of Object.entries(sessions)) {
       if (!stored?.snapshot?.status?.startedAt) continue;
-      latestSnapshots.set(key, stored.snapshot);
+      const snapshot = snapshotFromEvents(
+        stored.snapshot.status.target,
+        { ...stored.snapshot.status, persistence: sessionStorage ? 'persisted' : 'memory-only' },
+        stored.snapshot.events,
+        stored.snapshot.callables,
+      );
+      latestSnapshots.set(key, snapshot);
+      snapshotSignatures.set(key, snapshotSignature(snapshot));
       if (stored.owner) sessionOwners.set(key, stored.owner);
-      if (stored.snapshot.status.active) {
+      if (snapshot.status.active) {
         ownedRecordings.set(key, {
-          target: stored.snapshot.status.target,
+          target: snapshot.status.target,
           owner: stored.owner || { kind: 'local' },
         });
       }
     }
+    enforceGlobalRecordingBudget();
+    if (sessionRestoreError) markPersistence('degraded', sessionRestoreError);
   });
   return sessionRestorePromise;
 }
@@ -99,29 +333,35 @@ async function writeSession(snapshot: BrowserRecordingSnapshot, owner?: OwnedRec
   await ensureSessionsRestored();
   if (removedTabs.has(snapshot.status.target.tabId)) return;
   const key = targetKey(snapshot.status.target);
-  latestSnapshots.set(key, snapshot);
+  const bounded = snapshotFromEvents(
+    snapshot.status.target,
+    snapshot.status,
+    snapshot.events,
+    snapshot.callables,
+  );
+  const signature = snapshotSignature(bounded);
+  const unchanged = snapshotSignatures.get(key) === signature;
+  const previous = latestSnapshots.get(key);
+  if (unchanged && previous) {
+    bounded.status.persistence = previous.status.persistence;
+    bounded.status.persistenceError = previous.status.persistenceError;
+  }
+  latestSnapshots.set(key, bounded);
+  snapshotSignatures.set(key, signature);
   const resolvedOwner = owner || ownedRecordings.get(key)?.owner || sessionOwners.get(key);
   if (resolvedOwner) sessionOwners.set(key, resolvedOwner);
-  sessionStorageQueue = sessionStorageQueue.then(async () => {
-    const sessions = await readStoredSessions();
-    sessions[key] = { snapshot, owner: resolvedOwner };
-    try { await browser.storage.session.set({ [RECORDING_SESSION_STORAGE_KEY]: sessions }); } catch { /* MV2 can lack storage.session. */ }
-  });
-  await sessionStorageQueue;
+  if (!unchanged) markSessionsMutated();
+  Object.assign(snapshot, latestSnapshots.get(key) || bounded);
 }
 
 async function removeSession(target: BrowserTarget): Promise<void> {
   await ensureSessionsRestored();
   const key = targetKey(target);
   latestSnapshots.delete(key);
+  snapshotSignatures.delete(key);
   sessionOwners.delete(key);
-  sessionStorageQueue = sessionStorageQueue.then(async () => {
-    const sessions = await readStoredSessions();
-    if (!(key in sessions)) return;
-    delete sessions[key];
-    try { await browser.storage.session.set({ [RECORDING_SESSION_STORAGE_KEY]: sessions }); } catch { /* MV2 can lack storage.session. */ }
-  });
-  await sessionStorageQueue;
+  ownedRecordings.delete(key);
+  markSessionsMutated();
 }
 
 async function removeSessionsForTab(tabId: number): Promise<void> {
@@ -132,22 +372,27 @@ async function removeSessionsForTab(tabId: number): Promise<void> {
   for (const [key, snapshot] of latestSnapshots) {
     if (snapshot.status.target.tabId === tabId) {
       latestSnapshots.delete(key);
+      snapshotSignatures.delete(key);
       sessionOwners.delete(key);
     }
   }
-  sessionStorageQueue = sessionStorageQueue.then(async () => {
-    const sessions = await readStoredSessions();
-    let changed = false;
-    for (const [key, stored] of Object.entries(sessions)) {
-      if (stored.snapshot.status.target.tabId !== tabId) continue;
-      delete sessions[key];
-      changed = true;
+  markSessionsMutated();
+}
+
+async function ensureRecordingCapacity(target: BrowserTarget): Promise<void> {
+  await ensureSessionsRestored();
+  const key = targetKey(target);
+  if (latestSnapshots.has(key)) return;
+  while (latestSnapshots.size >= RECORDING_MAX_SESSIONS) {
+    const oldest = oldestInactiveSessionKey();
+    if (!oldest) {
+      throw new ExtensionError(
+        'recording_capacity_exceeded',
+        `同时保留的录制会话已达到 ${RECORDING_MAX_SESSIONS} 个上限，请先停止或清理旧会话`,
+      );
     }
-    if (changed) {
-      try { await browser.storage.session.set({ [RECORDING_SESSION_STORAGE_KEY]: sessions }); } catch { /* MV2 can lack storage.session. */ }
-    }
-  });
-  await sessionStorageQueue;
+    deleteSessionMemory(oldest);
+  }
 }
 
 function enqueueLifecycle(target: BrowserTarget, task: () => Promise<void>): void {
@@ -260,15 +505,20 @@ function normalizeTransform(value: unknown): BrowserRecordingEvent['transform'] 
   if (!value || typeof value !== 'object') return undefined;
   const input = value as Record<string, unknown>;
   const categories: NonNullable<BrowserRecordingEvent['transform']>['category'][] = [
-    'serializer', 'canonicalization', 'request-builder', 'encoding',
+    'serializer', 'canonicalization', 'request-builder', 'encoding', 'compression',
   ];
-  const providers: NonNullable<BrowserRecordingEvent['transform']>['provider'][] = ['native', 'axios', 'page'];
+  const providerKinds: NonNullable<BrowserRecordingEvent['transform']>['providerKind'][] = [
+    'native', 'library', 'business', 'wasm', 'unknown',
+  ];
   const phases: NonNullable<BrowserRecordingEvent['transform']>['phase'][] = ['input', 'output', 'boundary'];
   if (!categories.includes(input.category as NonNullable<BrowserRecordingEvent['transform']>['category'])
-    || !providers.includes(input.provider as NonNullable<BrowserRecordingEvent['transform']>['provider'])) return undefined;
+    || !providerKinds.includes(input.providerKind as NonNullable<BrowserRecordingEvent['transform']>['providerKind'])
+    || typeof input.adapterId !== 'string'
+    || !/^[a-z0-9][a-z0-9._-]{0,79}$/.test(input.adapterId)) return undefined;
   return {
+    adapterId: input.adapterId,
+    providerKind: input.providerKind as NonNullable<BrowserRecordingEvent['transform']>['providerKind'],
     category: input.category as NonNullable<BrowserRecordingEvent['transform']>['category'],
-    provider: input.provider as NonNullable<BrowserRecordingEvent['transform']>['provider'],
     phase: phases.includes(input.phase as NonNullable<BrowserRecordingEvent['transform']>['phase'])
       ? input.phase as NonNullable<BrowserRecordingEvent['transform']>['phase'] : undefined,
   };
@@ -322,6 +572,10 @@ function normalizeEvent(value: unknown, allowSensitive: boolean): BrowserRecordi
   for (const key of ['byteLength', 'resultByteLength'] as const) {
     if (input[key] !== undefined) output[key] = Math.max(0, finiteNumber(input[key]));
   }
+  if (input.statusCode !== undefined) {
+    const statusCode = Math.floor(finiteNumber(input.statusCode, -1));
+    if (statusCode >= 0 && statusCode <= 999) output.statusCode = statusCode;
+  }
   if (allowSensitive) {
     output.inputPreview = optionalString(input.inputPreview, 8_192);
     output.outputPreview = optionalString(input.outputPreview, 8_192);
@@ -342,6 +596,9 @@ function normalizeRawSnapshot(value: unknown, allowSensitive: boolean): RawRecor
     startedAt: input.startedAt === undefined ? undefined : finiteNumber(input.startedAt),
     count: Math.max(0, Math.floor(finiteNumber(input.count))),
     droppedCount: Math.max(0, Math.floor(finiteNumber(input.droppedCount))),
+    retainedCallCount: Math.max(0, Math.floor(finiteNumber(input.retainedCallCount))),
+    retainedCallBytes: Math.max(0, Math.floor(finiteNumber(input.retainedCallBytes))),
+    retainedCallDroppedCount: Math.max(0, Math.floor(finiteNumber(input.retainedCallDroppedCount))),
     options: input.options && typeof input.options === 'object' ? normalizeOptions(input.options as Partial<BrowserRecordingOptions>) : undefined,
     events: input.events.slice(-MAX_ENTRIES).map((item) => normalizeEvent(item, allowSensitive)).filter((item): item is BrowserRecordingEvent => Boolean(item)),
     callables: input.callables.slice(0, 128),
@@ -349,6 +606,12 @@ function normalizeRawSnapshot(value: unknown, allowSensitive: boolean): RawRecor
 }
 
 async function executeCommand(target: BrowserTarget, command: RecorderCommand, input: Record<string, unknown> = {}): Promise<unknown> {
+  if (import.meta.env.FIREFOX) {
+    if (command === 'deep.arm' || command === 'deep.disarm') {
+      throw new ExtensionError('channel_unavailable', 'Firefox 不提供 Chromium debugger 深度捕获');
+    }
+    return executeFirefoxPageRecorderCommand(target, command as PageRecorderBridgeCommand, input);
+  }
   let results: Browser.scripting.InjectionResult[];
   try {
     results = await browser.scripting.executeScript({
@@ -365,6 +628,7 @@ async function executeCommand(target: BrowserTarget, command: RecorderCommand, i
 }
 
 async function install(target: BrowserTarget): Promise<void> {
+  if (import.meta.env.FIREFOX) return;
   try {
     await browser.scripting.executeScript({ target: scriptingTarget(target), world: 'MAIN', files: [RECORDER_SCRIPT] });
   } catch (error) {
@@ -377,11 +641,14 @@ function statusFrom(target: BrowserTarget, raw: RawRecorderSnapshot): BrowserRec
   return {
     active: raw.active, target, documentAvailable: true, recordingId: raw.recordingId, startedAt: raw.startedAt,
     count: raw.count, droppedCount: raw.droppedCount, options: raw.options,
+    retainedCallCount: raw.retainedCallCount,
+    retainedCallBytes: raw.retainedCallBytes,
+    retainedCallDroppedCount: raw.retainedCallDroppedCount,
     endedReason: raw.startedAt && !raw.active ? (expired ? 'expired' : 'user') : undefined,
   };
 }
 
-function snapshotFromEvents(
+function composeSnapshot(
   target: BrowserTarget,
   status: BrowserRecordingStatus,
   events: BrowserRecordingEvent[],
@@ -396,6 +663,84 @@ function snapshotFromEvents(
     callables,
     profileCandidates: inferBrowserTransformProfiles({ target, events, links }),
   };
+}
+
+function snapshotFromEvents(
+  target: BrowserTarget,
+  status: BrowserRecordingStatus,
+  events: BrowserRecordingEvent[],
+  callables: BrowserPageCallable[],
+): BrowserRecordingSnapshot {
+  const previewBudget = boundRecordingPreviews(events);
+  const boundedEvents = [...previewBudget.events];
+  const boundedCallables = [...callables];
+  let budgetDroppedCount = status.budgetDroppedCount || 0;
+  let retentionFloorSequence = status.retentionFloorSequence;
+  let payloadBytes = boundedEvents.reduce(
+    (total, event) => total + recordingSerializedBytes(event),
+    0,
+  ) + boundedCallables.reduce(
+    (total, callable) => total + recordingSerializedBytes(callable),
+    0,
+  );
+  let payloadDropCount = 0;
+  while (payloadBytes > RECORDING_SNAPSHOT_PAYLOAD_TARGET_BYTES && payloadDropCount < boundedEvents.length) {
+    payloadBytes -= recordingSerializedBytes(boundedEvents[payloadDropCount]);
+    payloadDropCount += 1;
+  }
+  if (payloadDropCount) {
+    const removed = boundedEvents.splice(0, payloadDropCount);
+    budgetDroppedCount += removed.length;
+    retentionFloorSequence = Math.max(
+      retentionFloorSequence || 0,
+      (removed.at(-1)?.sequence || 0) + 1,
+    );
+  }
+  let snapshot = composeSnapshot(target, status, boundedEvents, boundedCallables);
+  if (recordingSerializedBytes(snapshot) > RECORDING_SNAPSHOT_MAX_BYTES && boundedEvents.length) {
+    let low = 1;
+    let high = boundedEvents.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = composeSnapshot(target, status, boundedEvents.slice(middle), boundedCallables);
+      if (recordingSerializedBytes(candidate) <= RECORDING_SNAPSHOT_MAX_BYTES) high = middle;
+      else low = middle + 1;
+    }
+    const removed = boundedEvents.splice(0, low);
+    budgetDroppedCount += removed.length;
+    retentionFloorSequence = Math.max(
+      retentionFloorSequence || 0,
+      (removed.at(-1)?.sequence || 0) + 1,
+    );
+    snapshot = composeSnapshot(target, status, boundedEvents, boundedCallables);
+  }
+  if (recordingSerializedBytes(snapshot) > RECORDING_SNAPSHOT_MAX_BYTES && boundedCallables.length) {
+    let low = 1;
+    let high = boundedCallables.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const candidate = composeSnapshot(target, status, boundedEvents, boundedCallables.slice(middle));
+      if (recordingSerializedBytes(candidate) <= RECORDING_SNAPSHOT_MAX_BYTES) high = middle;
+      else low = middle + 1;
+    }
+    boundedCallables.splice(0, low);
+    snapshot = composeSnapshot(target, status, boundedEvents, boundedCallables);
+  }
+  const retainedPreviewBytes = boundedEvents.reduce(
+    (total, event) => total + recordingEventPreviewBytes(event),
+    0,
+  );
+  snapshot.status = {
+    ...snapshot.status,
+    count: boundedEvents.length,
+    budgetDroppedCount,
+    previewDroppedCount: Math.max(status.previewDroppedCount || 0, previewBudget.droppedCount),
+    retentionFloorSequence,
+    retainedPreviewBytes,
+  };
+  snapshot.status.retainedBytes = recordingSerializedBytes(snapshot);
+  snapshot.status.retainedBytes = recordingSerializedBytes(snapshot);
+  return snapshot;
 }
 
 function snapshotFrom(target: BrowserTarget, raw: RawRecorderSnapshot): BrowserRecordingSnapshot {
@@ -416,9 +761,12 @@ function mergeSessionSnapshot(
 ): BrowserRecordingSnapshot {
   const current = snapshotFrom(target, raw);
   const sameSession = Boolean(previous?.status.recordingId && previous.status.recordingId === raw.recordingId);
-  const events = sameSession
+  let events = sameSession
     ? mergeRecordingEvents([current.events, previous?.events || []])
     : current.events;
+  if (sameSession && previous?.status.retentionFloorSequence) {
+    events = events.filter((event) => event.sequence >= previous.status.retentionFloorSequence!);
+  }
   return snapshotFromEvents(target, {
     ...current.status,
     ...(sameSession ? {
@@ -427,6 +775,23 @@ function mergeSessionSnapshot(
       options: current.status.options || previous?.status.options,
       pageUrl: previous?.status.pageUrl,
       navigation: previous?.status.navigation,
+      isolationContextId: previous?.status.isolationContextId,
+      cookieStoreId: previous?.status.cookieStoreId,
+      budgetDroppedCount: previous?.status.budgetDroppedCount,
+      previewDroppedCount: previous?.status.previewDroppedCount,
+      retentionFloorSequence: previous?.status.retentionFloorSequence,
+      retainedBytes: previous?.status.retainedBytes,
+      retainedPreviewBytes: previous?.status.retainedPreviewBytes,
+      retainedCallCount: current.status.retainedCallCount || previous?.status.retainedCallCount,
+      retainedCallBytes: current.status.retainedCallBytes || previous?.status.retainedCallBytes,
+      retainedCallDroppedCount: Math.max(
+        current.status.retainedCallDroppedCount || 0,
+        previous?.status.retainedCallDroppedCount || 0,
+      ),
+      globalRetainedBytes: previous?.status.globalRetainedBytes,
+      globalSessionCount: previous?.status.globalSessionCount,
+      persistence: previous?.status.persistence,
+      persistenceError: previous?.status.persistenceError,
     } : {}),
     ...status,
   }, events, current.callables);
@@ -540,13 +905,21 @@ export async function startBrowserRecording(
   input?: Partial<BrowserRecordingOptions>,
   owner: OwnedRecording['owner'] = { kind: 'local' },
 ): Promise<BrowserRecordingSnapshot> {
+  if (expiredGrantOwner(owner)) throw new ExtensionError('grant_expired', '浏览器共享会话不存在或已经过期');
   const options = normalizeOptions(input);
+  const tab = await getTab(target.tabId);
+  if (!tab.isolationContextId) {
+    throw new ExtensionError('isolation_unavailable', '无法确认录制页面所属的身份隔离上下文');
+  }
   await removeSession(target);
+  await ensureRecordingCapacity(target);
   await install(target);
   const raw = normalizeRawSnapshot(await executeCommand(target, 'start', { ...options }), options.captureValues);
   if (!raw.startedAt) throw new ExtensionError('recorder_unavailable', '页面录制器尚未在目标文档就绪');
   ownedRecordings.set(targetKey(target), { target, owner });
   const snapshot = snapshotFrom(target, raw);
+  snapshot.status.isolationContextId = tab.isolationContextId;
+  snapshot.status.cookieStoreId = tab.cookieStoreId;
   snapshot.status.pageUrl = await currentPageUrl(target);
   await writeSession(snapshot, owner);
   return snapshot;
@@ -569,11 +942,10 @@ export async function browserRecordingStatus(target: BrowserTarget): Promise<Bro
       : session?.snapshot.status.active
         ? { active: true, documentAvailable: true, endedReason: undefined }
         : undefined);
-    latestSnapshots.set(targetKey(target), merged);
     if (expired) {
       ownedRecordings.delete(targetKey(target));
-      await writeSession(merged, session?.owner);
     }
+    await writeSession(merged, session?.owner);
     if (merged.status.active && !ownedRecordings.has(targetKey(target))) {
       ownedRecordings.set(targetKey(target), { target, owner: session?.owner || { kind: 'local' } });
     }
@@ -593,7 +965,7 @@ export async function getBrowserRecording(target: BrowserTarget, limit = MAX_ENT
     }), allowSensitive);
   }
   if (!raw.startedAt) {
-    if (session) return session.snapshot;
+    if (session) return recordingSnapshotForScope(session.snapshot, allowSensitive);
   }
   const expired = Boolean(raw.options?.expiresAt && raw.options.expiresAt <= Date.now());
   const snapshot = mergeSessionSnapshot(target, raw, session?.snapshot, expired
@@ -601,12 +973,11 @@ export async function getBrowserRecording(target: BrowserTarget, limit = MAX_ENT
     : session?.snapshot.status.active
       ? { active: true, documentAvailable: true, endedReason: undefined }
       : undefined);
-  latestSnapshots.set(targetKey(target), snapshot);
   if (expired) {
     ownedRecordings.delete(targetKey(target));
-    await writeSession(snapshot, session?.owner);
   }
-  return snapshot;
+  await writeSession(snapshot, session?.owner);
+  return recordingSnapshotForScope(snapshot, allowSensitive);
 }
 
 export async function clearBrowserRecording(target: BrowserTarget, allowSensitive = false): Promise<BrowserRecordingSnapshot> {
@@ -634,7 +1005,7 @@ export async function stopBrowserRecording(target: BrowserTarget, allowSensitive
       }, session.snapshot.events, [])
       : snapshotFrom(target, raw);
   await writeSession(snapshot, session?.owner);
-  return snapshot;
+  return recordingSnapshotForScope(snapshot, allowSensitive);
 }
 
 export async function createRecordedPageCallable(
@@ -670,6 +1041,19 @@ export async function stopBrowserRecordingsForGrant(grantId: string): Promise<vo
     if (target) targets.set(key, target);
   }
   await Promise.allSettled([...targets.values()].map((target) => clearBrowserRecording(target)));
+}
+
+export function initializeBrowserRecordingService(): void {
+  if (serviceInitialized) return;
+  serviceInitialized = true;
+  void ensureSessionsRestored().then(async () => {
+    const targets = [...ownedRecordings.values()]
+      .filter((item) => expiredGrantOwner(item.owner))
+      .map((item) => item.target);
+    await Promise.allSettled(targets.map((target) => clearBrowserRecording(target)));
+  }).catch((error) => {
+    console.error('Browser recording lifecycle restoration failed', error);
+  });
 }
 
 export async function recordingAnalysisWindow(target: BrowserTarget, centerTimestamp: number): Promise<Array<Pick<

@@ -1,76 +1,23 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
-import { chromium } from 'playwright-core'
-import { resolveChromiumPath } from './resolve-chromium.mjs'
+import {
+  extensionRequest,
+  launchBrowserAgentContractHarness,
+  transformedFetchOptions,
+  waitFor,
+} from './browser-agent-contract-harness.mjs'
 
-const root = resolve(import.meta.dirname, '..')
-const extensionPath = resolve(root, process.env.EXTENSION_PATH || '.output/chrome-mv3-enterprise')
 const targetURL = process.env.AESRSA_TARGET || 'http://127.0.0.1:82/'
-const manifest = JSON.parse(await readFile(resolve(extensionPath, 'manifest.json'), 'utf8'))
-const executablePath = await resolveChromiumPath()
-const userDataDir = await mkdtemp(join(tmpdir(), 'yakit-aesrsa-'))
-let context
-
-async function extensionRequest(page, action, payload = {}) {
-  return page.evaluate(async ({ requestAction, requestPayload }) => {
-    const response = await chrome.runtime.sendMessage({ action: requestAction, payload: requestPayload })
-    if (!response?.ok) throw new Error(response?.error?.message || response?.error || requestAction)
-    return response.data
-  }, { requestAction: action, requestPayload: payload })
-}
-
-async function waitFor(page, action, payload, predicate, timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs
-  let value
-  while (Date.now() < deadline) {
-    value = await extensionRequest(page, action, payload)
-    if (predicate(value)) return value
-    await page.waitForTimeout(150)
-  }
-  throw new Error(`Timed out waiting for ${action}: ${JSON.stringify(value)}`)
-}
+let harness
 
 try {
-  context = await chromium.launchPersistentContext(userDataDir, {
-    executablePath,
-    headless: true,
-    viewport: { width: 1280, height: 760 },
-    args: [
-      `--disable-extensions-except=${extensionPath}`,
-      `--load-extension=${extensionPath}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-    ],
+  harness = await launchBrowserAgentContractHarness({
+    profilePrefix: 'yakit-aesrsa-',
+    targetURL,
   })
-  let serviceWorker = context.serviceWorkers()[0]
-  if (!serviceWorker) serviceWorker = await context.waitForEvent('serviceworker', { timeout: 15_000 })
-  const extensionId = new URL(serviceWorker.url()).host
-
-  if (manifest.permissions?.includes('userScripts')) {
-    const extensionsPage = await context.newPage()
-    await extensionsPage.goto(`chrome://extensions/?id=${extensionId}`)
-    const toggle = extensionsPage.locator('#allow-user-scripts cr-toggle')
-    await toggle.waitFor({ state: 'visible', timeout: 10_000 })
-    if (!await toggle.evaluate((element) => Boolean(element.checked))) await toggle.click()
-    await extensionsPage.close()
-  }
-
-  const targetPage = await context.newPage()
-  targetPage.on('dialog', (dialog) => void dialog.dismiss())
+  const {controlPage, tabId, targetPage} = harness
   let browserRequestCount = 0
   targetPage.on('request', (request) => {
     if (new URL(request.url()).pathname === '/encrypt/aesrsa.php') browserRequestCount += 1
   })
-  await targetPage.goto(targetURL)
-
-  const controlPage = await context.newPage()
-  await controlPage.goto(`chrome-extension://${extensionId}/options.html`)
-  const tabId = await controlPage.evaluate(async (url) => {
-    const tabs = await chrome.tabs.query({})
-    return tabs.find((tab) => tab.url === url)?.id
-  }, targetPage.url())
-  if (!tabId) throw new Error('Could not resolve the AES+RSA target tab')
 
   await extensionRequest(controlPage, 'recording.start', {
     tabId, frameId: 0, captureValues: true, maxEntries: 120, maxValueBytes: 8_192,
@@ -130,15 +77,7 @@ try {
     strategy: 'request-transaction',
     callFrameId: frame.id,
     name: 'sendDataAesRsa 请求事务',
-    transaction: {
-      request: {
-        method: candidate.request.method,
-        url: candidate.request.url,
-        expectedDestinations: candidate.sources.map((source) => source.destination).filter(Boolean),
-      },
-      inputMode: 'auto',
-      boundaries: ['fetch', 'xhr', 'beacon', 'form'],
-    },
+    candidateId: candidate.id,
   })
   if (callable.kind !== 'request-transaction' || callable.inputSlots?.[0]?.name !== 'body') {
     throw new Error(`Captured callable is not a request transaction: ${JSON.stringify(callable)}`)
@@ -150,13 +89,14 @@ try {
     throw new Error(`Deep-capture replay leaked a real request; observed ${browserRequestCount}`)
   }
 
+  const plaintext = { username: 'admin', password: '123456' }
   let execution
   try {
     execution = await extensionRequest(controlPage, 'callable.execute', {
       tabId,
       frameId: 0,
       callableId: callable.id,
-      args: [{ username: 'admin', password: '123456' }],
+      args: [plaintext],
     })
   } catch (reason) {
     const diagnostics = await controlPage.evaluate(async ({ targetTabId, callableId }) => {
@@ -209,16 +149,182 @@ try {
   if (browserRequestCount !== 1) {
     throw new Error(`Transaction execution leaked a real browser request; observed ${browserRequestCount}`)
   }
+  try {
+    await extensionRequest(controlPage, 'callable.execute', {
+      tabId,
+      frameId: 0,
+      callableId: callable.id,
+      args: [plaintext],
+    })
+  } catch (reason) {
+    throw new Error(
+      `Captured request transaction is not repeatable: ${reason instanceof Error ? reason.message : String(reason)}`,
+    )
+  }
 
-  const response = await fetch(new URL('/encrypt/aesrsa.php', targetURL), {
+  const plainPacket = {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(envelope),
+    url: new URL('/encrypt/aesrsa.php', targetURL).toString(),
+    headers: [{ name: 'Content-Type', value: 'application/json' }],
+    bodyBase64: Buffer.from(JSON.stringify(plaintext)).toString('base64'),
+  }
+  const proposal = await extensionRequest(controlPage, 'analysis.profile.propose', {
+    tabId,
+    frameId: 0,
+    candidateId: candidate.id,
+    callableId: callable.id,
+    inputPaths: ['body'],
+    name: 'AES+RSA deterministic contract',
   })
+  if (proposal?.proposal?.compiler !== 'browser-transform-guided-v1'
+    || proposal?.profile?.request?.enabled !== true) {
+    throw new Error(`Deterministic profile proposal was not compiled: ${JSON.stringify(proposal)}`)
+  }
+
+  let validation
+  try {
+    validation = await extensionRequest(controlPage, 'analysis.profile.validate', {
+      tabId,
+      frameId: 0,
+      candidateId: candidate.id,
+      callableId: callable.id,
+      inputPaths: ['body'],
+      name: 'AES+RSA deterministic contract',
+      packet: plainPacket,
+      comparisonMode: 'structure',
+    })
+  } catch (reason) {
+    throw new Error(
+      `Deterministic profile validation could not execute: ${reason instanceof Error ? reason.message : String(reason)}; `
+      + `packet=${JSON.stringify(plainPacket)}; profile=${JSON.stringify(proposal.profile)}`,
+    )
+  }
+  if (!validation?.valid || !validation?.saveEligible
+    || validation.proofLevel !== 'structure'
+    || validation.validationDraft?.contractVersion !== 1
+    || !validation.validationDraft?.id) {
+    throw new Error(`Deterministic profile validation failed: ${JSON.stringify(validation)}`)
+  }
+  if (browserRequestCount !== 1) {
+    throw new Error(`Profile validation leaked a real browser request; observed ${browserRequestCount}`)
+  }
+
+  const validationDraft = await extensionRequest(
+    controlPage,
+    'analysis.profile.validation.latest',
+    { tabId, frameId: 0 },
+  )
+  if (!validationDraft || validationDraft.contractVersion !== 1
+    || validationDraft.id !== validation.validationDraft.id
+    || validationDraft.profile?.id) {
+    throw new Error(`Yakit handoff draft is missing or already persisted: ${JSON.stringify(validationDraft)}`)
+  }
+
+  const savedProfile = await extensionRequest(
+    controlPage,
+    'transform.profile.save',
+    validationDraft.profile,
+  )
+  const profiles = await extensionRequest(controlPage, 'transform.profile.list', { tabId, frameId: 0 })
+  if (!savedProfile?.id || !profiles.some((profile) => profile.id === savedProfile.id)) {
+    throw new Error(`Confirmed profile was not persisted: ${JSON.stringify({ savedProfile, profiles })}`)
+  }
+
+  const profileExecution = await extensionRequest(controlPage, 'transform.execute', {
+    profileId: savedProfile.id,
+    direction: 'request',
+    packet: plainPacket,
+  })
+  const transformedEnvelope = JSON.parse(
+    Buffer.from(profileExecution.bodyBase64, 'base64').toString('utf8'),
+  )
+  for (const field of ['encryptedData', 'encryptedKey', 'encryptedIv']) {
+    if (typeof transformedEnvelope?.[field] !== 'string' || !transformedEnvelope[field]) {
+      throw new Error(`Saved profile output is missing ${field}: ${JSON.stringify(profileExecution)}`)
+    }
+  }
+  if (browserRequestCount !== 1) {
+    throw new Error(`Saved profile execution leaked a real browser request; observed ${browserRequestCount}`)
+  }
+
+  const response = await fetch(
+    profileExecution.url,
+    transformedFetchOptions(profileExecution, plainPacket.headers),
+  )
   const result = await response.json()
-  if (!result.success) throw new Error(`Target server rejected the transaction envelope: ${JSON.stringify(result)}`)
-  process.stdout.write('AES+RSA request transaction verified: no browser request leaked and the target server accepted the captured envelope.\n')
+  if (!result.success) throw new Error(`Target server rejected the saved Profile output: ${JSON.stringify(result)}`)
+
+  await targetPage.reload()
+  const staleProfile = await waitFor(
+    controlPage,
+    'transform.profile.list',
+    { tabId, frameId: 0 },
+    (items) => items?.find((item) => item.id === savedProfile.id)?.recovery?.state === 'stale',
+    10_000,
+  ).then((items) => items.find((item) => item.id === savedProfile.id))
+  if (staleProfile.enabled || staleProfile.recovery?.capture?.automatic !== true) {
+    throw new Error(`Reloaded Profile did not fail closed with an automatic Recovery Plan: ${JSON.stringify(staleProfile)}`)
+  }
+
+  await extensionRequest(controlPage, 'transform.recovery.start', { id: savedProfile.id })
+  await targetPage.locator('#username').fill('admin')
+  await targetPage.locator('#password').fill('wrong-password')
+  await targetPage.getByRole('button', { name: '登录', exact: true }).click()
+  let recoveryClickFailure
+  const recoveryClick = targetPage.getByRole('button', { name: 'AES+Rsa加密', exact: true })
+    .click({ noWaitAfter: true, timeout: 20_000 })
+    .catch((reason) => { recoveryClickFailure = reason })
+  const recoveryPause = await waitFor(controlPage, 'deep.capture.status', {
+    tabId, frameId: 0,
+  }, (value) => value?.state === 'paused' && value.pause?.collecting !== true, 20_000)
+  const recoveryAutomatic = recoveryPause.pause?.automaticCapture
+  if (recoveryAutomatic?.state !== 'ready' || !recoveryAutomatic.frameId
+    || recoveryAutomatic.strategy !== 'request-transaction') {
+    throw new Error(`Recovery Plan did not locate the request transaction: ${JSON.stringify(recoveryPause)}`)
+  }
+  const recovery = await extensionRequest(controlPage, 'transform.recovery.capture', {
+    id: savedProfile.id,
+    ...recoveryPause.target,
+    callFrameId: recoveryAutomatic.frameId,
+    strategy: recoveryAutomatic.strategy,
+  })
+  await recoveryClick
+  if (recoveryClickFailure) throw recoveryClickFailure
+  if (recovery.state !== 'validation-required' || !recovery.pending?.callableId) {
+    throw new Error(`Recovery capture was not staged for validation: ${JSON.stringify(recovery)}`)
+  }
+  const recoveryValidation = await extensionRequest(controlPage, 'transform.recovery.validate', {
+    id: savedProfile.id,
+    packet: plainPacket,
+  })
+  if (recoveryValidation.recovery?.state !== 'confirmation-required'
+    || !recoveryValidation.recovery.validation?.id) {
+    throw new Error(`Recovered Profile did not require explicit confirmation: ${JSON.stringify(recoveryValidation)}`)
+  }
+  const recoveredProfile = await extensionRequest(controlPage, 'transform.recovery.confirm', {
+    id: savedProfile.id,
+    validationId: recoveryValidation.recovery.validation.id,
+  })
+  if (recoveredProfile.id !== savedProfile.id || recoveredProfile.recovery?.state !== 'ready'
+    || recoveredProfile.target.documentId === savedProfile.target.documentId) {
+    throw new Error(`Recovery confirmation did not atomically replace the document binding: ${JSON.stringify(recoveredProfile)}`)
+  }
+  const recoveredExecution = await extensionRequest(controlPage, 'transform.execute', {
+    profileId: recoveredProfile.id,
+    direction: 'request',
+    packet: plainPacket,
+  })
+  const recoveredResponse = await fetch(
+    recoveredExecution.url,
+    transformedFetchOptions(recoveredExecution, plainPacket.headers),
+  )
+  const recoveredResult = await recoveredResponse.json()
+  if (!recoveredResult.success) {
+    throw new Error(`Target server rejected the recovered Profile output: ${JSON.stringify(recoveredResult)}`)
+  }
+  process.stdout.write(
+    'AES+RSA Agent contract verified: evidence compiled, validated, saved, reloaded stale, recovered through one request-boundary capture, revalidated, explicitly confirmed, and accepted by the target server.\n',
+  )
 } finally {
-  await context?.close().catch(() => undefined)
-  await rm(userDataDir, { recursive: true, force: true })
+  await harness?.close()
 }

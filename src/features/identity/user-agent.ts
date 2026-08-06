@@ -3,9 +3,12 @@ import type {
   UserAgentAssignment, UserAgentProfile, UserAgentResolution,
 } from '@/types/models';
 import { getUserAgentProfiles } from './user-agent-profiles';
+import {
+  MAX_USER_AGENT_ASSIGNMENTS, normalizeUserAgentHostname, normalizeUserAgentValue,
+} from '@/shared/user-agent-state';
 
 const RULE_ID_BASE = 20_000;
-const MAX_UA_ASSIGNMENTS = 5_000;
+const RULE_ID_LIMIT = RULE_ID_BASE + 10_000;
 
 function domainFilter(hostname: string): string {
   return `||${hostname}^`;
@@ -14,15 +17,11 @@ function domainFilter(hostname: string): string {
 export function userAgentHostname(url: string): string {
   const parsed = new URL(url);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('User-Agent 只能应用到 HTTP(S) 页面');
-  return parsed.hostname.toLowerCase();
+  return normalizeUserAgentHostname(parsed.hostname);
 }
 
 export function validateUserAgent(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) throw new Error('User-Agent 不能为空');
-  if (normalized.length > 1_024) throw new Error('User-Agent 不能超过 1024 个字符');
-  if (/\r|\n/.test(normalized)) throw new Error('User-Agent 不能包含换行符');
-  return normalized;
+  return normalizeUserAgentValue(value);
 }
 
 export function resolveUserAgent(
@@ -49,7 +48,7 @@ export function buildUserAgentDnrRules(
   const active = [...uniqueAssignments.values()]
     .filter((assignment) => profiles.has(assignment.profileId))
     .sort((left, right) => left.hostname.localeCompare(right.hostname));
-  if (active.length > MAX_UA_ASSIGNMENTS) throw new Error(`User-Agent 站点绑定超过 ${MAX_UA_ASSIGNMENTS} 条限制`);
+  if (active.length > MAX_USER_AGENT_ASSIGNMENTS) throw new Error(`User-Agent 站点绑定超过 ${MAX_USER_AGENT_ASSIGNMENTS} 条限制`);
   return active.map((assignment, index) => {
     const profile = profiles.get(assignment.profileId)!;
     return {
@@ -76,7 +75,7 @@ export async function applyUserAgentAssignments(
 ): Promise<void> {
   const oldRuleIds = (await browser.declarativeNetRequest.getDynamicRules())
     .map((rule) => rule.id)
-    .filter((id) => id >= RULE_ID_BASE && id < RULE_ID_BASE + 10_000);
+    .filter((id) => id >= RULE_ID_BASE && id < RULE_ID_LIMIT);
   await browser.declarativeNetRequest.updateDynamicRules({
     removeRuleIds: oldRuleIds,
     addRules: buildUserAgentDnrRules(assignments, customProfiles),

@@ -1,19 +1,19 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
-  AlertTriangle, ArrowDown, ArrowRight, Braces, CheckCircle2, ChevronDown, CirclePlus, Code2,
-  FileInput, FileKey2, FlaskConical, Link2, Play, Plus, RefreshCw, Save, Sparkles, Trash2, Unplug,
+  ArrowDown, ArrowRight, Braces, CheckCircle2, CirclePlus, Code2, FileInput,
+  FlaskConical, Link2, Plus, RotateCcw, Save, Settings2, Sparkles, Trash2, Workflow,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import type {
   ActiveTabInfo, BrowserPageCallable, BrowserRecordingEvent, BrowserTransformBuiltinOperation,
-  BrowserTransformDirection, BrowserTransformDirectionName, BrowserTransformExecution,
+  BrowserTransformDirection,
   BrowserTransformNodeReference, BrowserTransformPipelineNode, BrowserTransformProfile,
   BrowserTransformProfileInput, BrowserProfileInferenceCandidate,
 } from '@/types/models';
 import {
-  compileGuidedTransform, defaultGuidedTransform, guidedOutputDescription, parseGuidedTransform,
+  callableEnvelopeDescription, compileGuidedTransform, defaultGuidedTransform, guidedOutputDescription, parseGuidedTransform,
   type GuidedTransformDraft, type GuidedTransformOutputKind,
 } from './guided';
 import { createBrowserTransformProfileInput } from './profile-draft';
@@ -25,6 +25,16 @@ import {
   type BrowserTransformReplayDraftFields,
   type BrowserTransformReplayDraftInput,
 } from './replay-draft';
+import {
+  DEFAULT_TRANSFORM_REPLAY_BODY,
+  INITIAL_TRANSFORM_WORKSPACE_STATE,
+  transformWorkspaceReducer,
+  type ReplayPersistenceState,
+  type TransformWorkspaceState,
+} from './workspace-reducer';
+import { TransformReplayPanel } from './TransformReplayPanel';
+import { TransformProfileRail } from './TransformProfileRail';
+import { TransformDataFlowView } from './TransformDataFlowView';
 import './browser-transform-workspace.css';
 
 type RunTask = (task: () => Promise<void>, success?: string) => Promise<void>;
@@ -34,7 +44,14 @@ interface BrowserTransformWorkspaceProps {
   selectedEvent?: BrowserRecordingEvent;
   busy: boolean;
   run: RunTask;
+  gatewayShared: boolean;
+  gatewayShareExpiresAt?: number;
+  gatewayBridgeConnected: boolean;
+  onShareGateway: () => Promise<void>;
   onOpenCapture: () => void;
+  onOpenRecovery: (profileId: string) => void;
+  deepCaptureAvailable?: boolean;
+  recoveryRevision?: number;
   suggestion?: BrowserTransformSuggestionSeed;
 }
 
@@ -61,6 +78,7 @@ const BUILTINS: Array<{ value: BrowserTransformBuiltinOperation; label: string }
   { value: 'object.pick', label: '选择对象字段' },
   { value: 'object.compose', label: '组合对象' },
   { value: 'form.compose', label: '组合表单' },
+  { value: 'form.serialize', label: '序列化完整表单' },
 ];
 
 function originOf(url?: string): string {
@@ -161,9 +179,15 @@ function sampleHeaders(value: string): string {
   }
 }
 
-const DEFAULT_REPLAY_BODY = '{\n  "value": "plain"\n}';
+const DEFAULT_REPLAY_BODY = DEFAULT_TRANSFORM_REPLAY_BODY;
 
-type ReplayPersistenceState = 'memory' | 'loading' | 'ready' | 'saving' | 'saved' | 'too-large' | 'error';
+type StateSetter<T> = (value: T | ((current: T) => T)) => void;
+
+function nextStateValue<T>(current: T, value: T | ((current: T) => T)): T {
+  return typeof value === 'function'
+    ? (value as (current: T) => T)(current)
+    : value;
+}
 
 interface PendingReplaySave {
   key: string;
@@ -217,25 +241,54 @@ function referencesOf(node: BrowserTransformPipelineNode): BrowserTransformNodeR
   return [];
 }
 
-export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpenCapture, suggestion }: BrowserTransformWorkspaceProps) {
-  const [profiles, setProfiles] = useState<BrowserTransformProfile[]>([]);
-  const [callables, setCallables] = useState<BrowserPageCallable[]>([]);
-  const [selectedProfileId, setSelectedProfileId] = useState('');
-  const [draft, setDraft] = useState<BrowserTransformProfileInput>();
-  const [directionName, setDirectionName] = useState<BrowserTransformDirectionName>('request');
-  const [loadError, setLoadError] = useState('');
-  const [testMethod, setTestMethod] = useState('POST');
-  const [testUrl, setTestUrl] = useState('');
-  const [testHeaders, setTestHeaders] = useState('{"Content-Type":"application/json"}');
-  const [testBody, setTestBody] = useState(DEFAULT_REPLAY_BODY);
-  const [testSample, setTestSample] = useState<{ body: string; label: string }>();
-  const [testResult, setTestResult] = useState<BrowserTransformExecution>();
-  const [testError, setTestError] = useState('');
-  const [replayPersistence, setReplayPersistence] = useState<ReplayPersistenceState>('memory');
-  const [replayStorageError, setReplayStorageError] = useState('');
-  const [replayLoadedKey, setReplayLoadedKey] = useState('');
-  const [editorMode, setEditorMode] = useState<'guided' | 'advanced'>('guided');
-  const [confirmDeleteCallableId, setConfirmDeleteCallableId] = useState('');
+export function BrowserTransformWorkspace({
+  tab,
+  selectedEvent,
+  busy,
+  run,
+  gatewayShared,
+  gatewayShareExpiresAt,
+  gatewayBridgeConnected,
+  onShareGateway,
+  onOpenCapture,
+  onOpenRecovery,
+  deepCaptureAvailable = true,
+  recoveryRevision = 0,
+  suggestion,
+}: BrowserTransformWorkspaceProps) {
+  const [ui, dispatch] = useReducer(
+    transformWorkspaceReducer,
+    INITIAL_TRANSFORM_WORKSPACE_STATE,
+  );
+  const [workspaceView, setWorkspaceView] = useState<'flow' | 'configure'>('flow');
+  const {
+    profiles, callables, selectedProfileId, draft, directionName, loadError,
+    testMethod, testUrl, testHeaders, testBody, testSample, testResult, testError,
+    replayPersistence, replayStorageError, replayLoadedKey, editorMode,
+    confirmDeleteCallableId,
+  } = ui;
+  const setter = <K extends keyof TransformWorkspaceState>(field: K): StateSetter<TransformWorkspaceState[K]> => (
+    (value) => dispatch({
+      type: 'update',
+      update: (current) => ({
+        ...current,
+        [field]: nextStateValue(current[field], value),
+      }),
+    })
+  );
+  const setProfiles = setter('profiles');
+  const setCallables = setter('callables');
+  const setSelectedProfileId = setter('selectedProfileId');
+  const setDraft = setter('draft');
+  const setDirectionName = setter('directionName');
+  const setLoadError = setter('loadError');
+  const setTestResult = setter('testResult');
+  const setTestError = setter('testError');
+  const setReplayPersistence = setter('replayPersistence');
+  const setReplayStorageError = setter('replayStorageError');
+  const setReplayLoadedKey = setter('replayLoadedKey');
+  const setEditorMode = setter('editorMode');
+  const setConfirmDeleteCallableId = setter('confirmDeleteCallableId');
   const handledSuggestion = useRef(0);
   const replayLoadRevision = useRef(0);
   const replaySaveRevision = useRef(0);
@@ -260,13 +313,7 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
   const replayFingerprint = useMemo(() => replayFieldsFingerprint(replayFields), [replayFields]);
 
   const applyReplayFields = useCallback((fields: BrowserTransformReplayDraftFields) => {
-    setTestMethod(fields.method);
-    setTestUrl(fields.url);
-    setTestHeaders(fields.headers);
-    setTestBody(fields.body);
-    setTestSample(fields.sample);
-    setTestResult(undefined);
-    setTestError('');
+    dispatch({ type: 'replay.apply', fields });
   }, []);
 
   const discardPendingReplaySave = useCallback(() => {
@@ -291,10 +338,18 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
         request('transform.profile.list', target || {}),
         target ? request('callable.list', target).catch(() => []) : Promise.resolve([]),
       ]);
-      setProfiles(nextProfiles);
-      setCallables(nextCallables);
-      setLoadError('');
-      setSelectedProfileId((current) => nextProfiles.some((profile) => profile.id === current) ? current : nextProfiles[0]?.id || '');
+      dispatch({
+        type: 'update',
+        update: (current) => ({
+          ...current,
+          profiles: nextProfiles,
+          callables: nextCallables,
+          loadError: '',
+          selectedProfileId: nextProfiles.some((profile) => profile.id === current.selectedProfileId)
+            ? current.selectedProfileId
+            : nextProfiles[0]?.id || '',
+        }),
+      });
     } catch (error) {
       setLoadError(errorMessage(error));
     }
@@ -306,11 +361,19 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
   }, []);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
+    if (recoveryRevision > 0) void load();
+  }, [load, recoveryRevision]);
+  useEffect(() => {
     const selected = profiles.find((profile) => profile.id === selectedProfileId);
     if (selected) {
-      setDraft(toInput(selected));
       const selectedDirection = selected.request.enabled ? selected.request : selected.response;
-      setEditorMode(parseGuidedTransform(selectedDirection, callables) ? 'guided' : 'advanced');
+      dispatch({
+        type: 'patch',
+        value: {
+          draft: toInput(selected),
+          editorMode: parseGuidedTransform(selectedDirection, callables) ? 'guided' : 'advanced',
+        },
+      });
     }
   }, [callables, profiles, selectedProfileId]);
   useEffect(() => {
@@ -424,7 +487,8 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
       body: sampleBody || DEFAULT_REPLAY_BODY,
       sample: sampleBody ? { body: sampleBody, label: suggestion.sampleLabel || '录制短时样本' } : undefined,
     };
-    const seedKey = `${suggestion.profile.id}:request`;
+    const suggestedDirection = suggestion.candidate.direction;
+    const seedKey = `${suggestion.profile.id}:${suggestedDirection}`;
     pendingReplaySeed.current = { key: seedKey, fields };
     replayBaselineFingerprint.current = '';
     replayStablePersistence.current = 'ready';
@@ -432,24 +496,44 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
     setReplayLoadedKey(seedKey);
     setReplayPersistence('ready');
     setReplayStorageError('');
-    setCallables((current) => [...current.filter((item) => item.id !== suggestion.callable.id), suggestion.callable]);
-    setProfiles((current) => [suggestion.profile, ...current.filter((item) => item.id !== suggestion.profile.id)]);
-    setSelectedProfileId(suggestion.profile.id);
-    setDraft(toInput(suggestion.profile));
-    setDirectionName('request');
-    setEditorMode('guided');
-    setTestResult(undefined);
-    setTestError('');
+    setWorkspaceView('flow');
+    dispatch({
+      type: 'update',
+      update: (current) => ({
+        ...current,
+        callables: [
+          ...current.callables.filter((item) => item.id !== suggestion.callable.id),
+          suggestion.callable,
+        ],
+        profiles: [
+          suggestion.profile,
+          ...current.profiles.filter((item) => item.id !== suggestion.profile.id),
+        ],
+        selectedProfileId: suggestion.profile.id,
+        draft: toInput(suggestion.profile),
+        directionName: suggestedDirection,
+        editorMode: 'guided',
+        testResult: undefined,
+        testError: '',
+      }),
+    });
   }, [applyReplayFields, discardPendingReplaySave, selectedEvent, suggestion, tab]);
 
   const savedProfile = profiles.find((profile) => profile.id === selectedProfileId);
+  const activeRecovery = savedProfile?.recovery;
+  const recoveryPending = Boolean(activeRecovery && activeRecovery.state !== 'ready');
   const dirty = Boolean(draft && profileFingerprint(draft) !== profileFingerprint(savedProfile ? toInput(savedProfile) : undefined));
   const callableIds = useMemo(() => new Set(callables.map((callable) => callable.id)), [callables]);
   const referencedCallableIds = useMemo(() => draft ? [draft.request, draft.response]
     .flatMap((direction) => direction.enabled ? direction.nodes : [])
     .filter((node): node is Extract<BrowserTransformPipelineNode, { kind: 'page.call' }> => node.kind === 'page.call')
     .map((node) => node.callableId) : [], [draft]);
-  const bindingReady = Boolean(draft && originOf(tab?.url) === draft.origin && referencedCallableIds.every((id) => callableIds.has(id)));
+  const bindingReady = Boolean(
+    draft
+    && !recoveryPending
+    && originOf(tab?.url) === draft.origin
+    && referencedCallableIds.every((id) => callableIds.has(id)),
+  );
   const callableReferences = useMemo(() => {
     const references = new Map<string, number>();
     for (const profile of profiles) {
@@ -463,6 +547,7 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
   const direction = draft?.[directionName];
   const guide = useMemo(() => direction ? parseGuidedTransform(direction, callables) : undefined, [callables, direction]);
   const guidedCallable = callables.find((callable) => callable.id === guide?.callableId);
+  const envelopeDescription = callableEnvelopeDescription(guidedCallable);
   const guidedValid = Boolean(guide && guide.callableId
     && guide.inputPaths.every((path) => path.trim())
     && (guide.outputKind === 'body' || guide.outputField.trim()));
@@ -475,20 +560,27 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
         : '仅保存在当前浏览器，不会进入明文网关导出、Bridge、Yak 引擎或 AI 上下文。');
 
   const selectProfile = (profile: BrowserTransformProfile) => {
-    setSelectedProfileId(profile.id);
-    setDraft(toInput(profile));
-    setDirectionName(profile.request.enabled ? 'request' : 'response');
-    setEditorMode(parseGuidedTransform(profile.request.enabled ? profile.request : profile.response, callables) ? 'guided' : 'advanced');
-    setTestResult(undefined);
+    const direction = profile.request.enabled ? profile.request : profile.response;
+    dispatch({
+      type: 'profile.select',
+      selectedProfileId: profile.id,
+      draft: toInput(profile),
+      directionName: profile.request.enabled ? 'request' : 'response',
+      editorMode: parseGuidedTransform(direction, callables) ? 'guided' : 'advanced',
+    });
+    setWorkspaceView('flow');
   };
 
   const create = () => {
     if (!tab) return;
-    setSelectedProfileId('');
-    setDraft(createBrowserTransformProfileInput(tab, selectedEvent, callables[0]));
-    setDirectionName('request');
-    setEditorMode('guided');
-    setTestResult(undefined);
+    dispatch({
+      type: 'profile.select',
+      selectedProfileId: '',
+      draft: createBrowserTransformProfileInput(tab, selectedEvent, callables[0]),
+      directionName: 'request',
+      editorMode: 'guided',
+    });
+    setWorkspaceView('configure');
   };
 
   const patchDirection = (patcher: (value: BrowserTransformDirection) => BrowserTransformDirection) => {
@@ -511,9 +603,9 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
     const callable = callables.find((item) => item.id === callableId);
     const defaults = defaultGuidedTransform(callable, { outputKind: guide.outputKind, outputField: guide.outputField });
     patchGuide({
-      ...guide,
-      callableId,
+      ...defaults,
       inputPaths: defaults.inputPaths.map((path, index) => guide.inputPaths[index] || path),
+      resultPath: callable?.output.shape === 'envelope' ? undefined : guide.resultPath,
     });
   };
 
@@ -554,6 +646,7 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
     setProfiles((current) => [profile, ...current.filter((item) => item.id !== profile.id)]);
     setSelectedProfileId(profile.id);
     setDraft(toInput(profile));
+    setWorkspaceView('flow');
   }, 'Pipeline v2 配置已保存');
 
   const remove = () => run(async () => {
@@ -595,61 +688,133 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
     setTestResult(undefined);
   }, callableReferences.get(callable.id) ? '页面函数已删除，引用它的明文网关需要重新绑定' : '页面函数已删除');
 
+  const replayPacket = () => {
+    const parsed = JSON.parse(testHeaders) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Header 必须是 JSON 对象');
+    const headers = Object.entries(parsed as Record<string, unknown>).map(([name, value]) => ({ name, value: String(value) }));
+    return {
+      method: testMethod.toUpperCase(),
+      url: testUrl,
+      statusCode: directionName === 'response' ? 200 : undefined,
+      headers,
+      bodyBase64: encodeUtf8(testBody),
+    };
+  };
+
+  const validateRecovery = () => run(async () => {
+    if (!savedProfile?.recovery || savedProfile.recovery.state !== 'validation-required') {
+      throw new Error('当前恢复计划还没有等待验证的新页面函数');
+    }
+    setTestError('');
+    setTestResult(undefined);
+    const result = await request('transform.recovery.validate', {
+      id: savedProfile.id,
+      packet: replayPacket(),
+    });
+    setTestResult(result.execution);
+    await load();
+  }, '新页面函数已通过本地回放，等待确认启用');
+
+  const confirmRecovery = () => run(async () => {
+    const validationId = savedProfile?.recovery?.validation?.id;
+    if (!savedProfile || !validationId) throw new Error('恢复验证已经失效，请重新执行本地回放');
+    const profile = await request('transform.recovery.confirm', {
+      id: savedProfile.id,
+      validationId,
+    });
+    setProfiles((current) => [profile, ...current.filter((item) => item.id !== profile.id)]);
+    setSelectedProfileId(profile.id);
+    setDraft(toInput(profile));
+    setTestResult(undefined);
+  }, '页面绑定已恢复，并按原启用状态生效');
+
+  const resetRecovery = () => run(async () => {
+    if (!savedProfile) return;
+    await request('transform.recovery.reset', { id: savedProfile.id });
+    setTestResult(undefined);
+    await load();
+  }, '已取消本次恢复结果，旧网关继续保持停用');
+
   const execute = async () => {
     if (!draft?.id || dirty) { setTestError('请先保存当前 Pipeline'); return; }
     setTestError('');
     setTestResult(undefined);
     try {
-      const parsed = JSON.parse(testHeaders) as unknown;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Header 必须是 JSON 对象');
-      const headers = Object.entries(parsed as Record<string, unknown>).map(([name, value]) => ({ name, value: String(value) }));
       setTestResult(await request('transform.execute', {
         profileId: draft.id,
         direction: directionName,
-        packet: { method: testMethod.toUpperCase(), url: testUrl, statusCode: directionName === 'response' ? 200 : undefined, headers, bodyBase64: encodeUtf8(testBody) },
+        packet: replayPacket(),
       }));
     } catch (error) { setTestError(errorMessage(error)); }
   };
 
   return <div className="transform-workbench">
-    <aside className="transform-profiles">
-      <header><div><strong>明文网关</strong><span>{profiles.length}</span></div><Button size="icon" variant="ghost" aria-label="新建 Pipeline" title="新建 Pipeline" disabled={!tab} onClick={create}><Plus size={15} /></Button></header>
-      <div className="transform-profile-list">
-        {profiles.map((profile) => {
-          const ready = originOf(tab?.url) === profile.origin && [profile.request, profile.response]
-            .flatMap((item) => item.enabled ? item.nodes : [])
-            .filter((node): node is Extract<BrowserTransformPipelineNode, { kind: 'page.call' }> => node.kind === 'page.call')
-            .every((node) => callableIds.has(node.callableId));
-          return <button key={profile.id} className={selectedProfileId === profile.id ? 'is-selected' : ''} onClick={() => selectProfile(profile)}>
-            <span className={`transform-profile-mark ${ready ? 'is-ready' : ''}`}><FileKey2 size={14} /></span>
-            <span><strong>{profile.name}</strong><small>{profile.match.methods.join(' / ') || 'ANY'} · {profile.match.urlPattern}</small></span>
-            <i title={ready ? '页面绑定可用' : '页面函数已失效'}>{ready ? <CheckCircle2 size={13} /> : <Unplug size={13} />}</i>
-          </button>;
-        })}
-        {!profiles.length && <div className="transform-profile-empty"><FileKey2 size={20} /><strong>没有 Pipeline</strong><Button size="sm" variant="primary" disabled={!tab} onClick={create}><CirclePlus size={14} />新建</Button></div>}
-      </div>
-      <footer>
-        <details className="transform-callable-menu">
-          <summary className={callables.length ? 'is-ready' : ''}><i />{callables.length} 个页面函数<ChevronDown size={12} /></summary>
-          <div className="transform-callable-popover">
-            <header><div><strong>当前文档页面函数</strong><span>页面刷新或导航后自动失效</span></div><em>{callables.length}</em></header>
-            {!callables.length ? <div className="transform-callable-empty"><Code2 size={17} /><span>还没有可管理的页面函数</span></div> : <div className="transform-callable-list">{callables.map((callable) => {
-              const referenceCount = callableReferences.get(callable.id) || 0;
-              const confirming = confirmDeleteCallableId === callable.id;
-              return <section key={callable.id}>
-                <div className="transform-callable-row"><span><strong>{callable.name}</strong><small>{callableKindLabel(callable)} · {callable.algorithm || callable.operation}</small></span><Button size="icon" variant="ghost" aria-label={`删除 ${callable.name}`} title="删除页面函数" disabled={busy} onClick={() => setConfirmDeleteCallableId(callable.id)}><Trash2 size={13} /></Button></div>
-                {confirming && <div className="transform-callable-confirm"><span>{referenceCount ? `${referenceCount} 个网关节点正在引用，删除后会显示“页面函数缺失”。` : '这个页面函数将从当前文档中移除。'}</span><div><Button size="sm" variant="ghost" onClick={() => setConfirmDeleteCallableId('')}>取消</Button><Button size="sm" variant="danger" disabled={busy} onClick={() => void deleteCallable(callable)}>确认删除</Button></div></div>}
-              </section>;
-            })}</div>}
-          </div>
-        </details>
-        <Button size="icon" variant="ghost" aria-label="刷新页面绑定" title="刷新页面绑定" onClick={() => void load()}><RefreshCw size={14} /></Button>
-      </footer>
-    </aside>
+    <TransformProfileRail
+      tab={tab}
+      profiles={profiles}
+      callables={callables}
+      selectedProfileId={selectedProfileId}
+      callableIds={callableIds}
+      callableReferences={callableReferences}
+      confirmDeleteCallableId={confirmDeleteCallableId}
+      busy={busy}
+      onCreate={create}
+      onSelect={selectProfile}
+      onConfirmDeleteCallable={setConfirmDeleteCallableId}
+      onDeleteCallable={deleteCallable}
+      onRefresh={load}
+    />
 
     <main className="transform-editor">
-      {!draft ? <div className="transform-editor-empty"><Link2 size={24} /><strong>建立明文与线上报文的转换链路</strong>{callables.length ? <Button variant="primary" onClick={create}><CirclePlus size={14} />新建 Pipeline</Button> : <Button variant="primary" onClick={onOpenCapture}><Code2 size={14} />先捕获页面函数</Button>}</div> : <>
-        <header className="transform-editor-head"><div><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /><span>{draft.origin} · document 生命周期</span></div><label><Switch checked={draft.enabled} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />启用</label></header>
+      {!draft ? <div className="transform-editor-empty"><Link2 size={24} /><strong>建立明文与线上报文的转换链路</strong>{callables.length ? <Button variant="primary" onClick={create}><CirclePlus size={14} />新建 Pipeline</Button> : <Button variant="primary" onClick={onOpenCapture}><Code2 size={14} />{deepCaptureAvailable ? '先捕获页面函数' : '回到录制并保存页面函数'}</Button>}</div> : <>
+        <header className="transform-editor-head">
+          <div>{workspaceView === 'flow' && savedProfile
+            ? <strong className="transform-editor-title">{draft.name}</strong>
+            : <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />}
+            <span>{draft.origin} · document 生命周期</span>
+          </div>
+          <div className="transform-editor-head__actions">
+            <div className="transform-view-mode" role="tablist" aria-label="明文网关视图">
+              <button type="button" disabled={!savedProfile} className={workspaceView === 'flow' ? 'is-selected' : ''} onClick={() => setWorkspaceView('flow')}><Workflow size={13} />数据流</button>
+              <button type="button" className={workspaceView === 'configure' ? 'is-selected' : ''} onClick={() => setWorkspaceView('configure')}><Settings2 size={13} />配置</button>
+            </div>
+            <label><Switch checked={draft.enabled} disabled={recoveryPending} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} />启用</label>
+          </div>
+        </header>
+        {activeRecovery && activeRecovery.state !== 'ready' && <section className={`transform-recovery is-${activeRecovery.state}`} role="status">
+          <span className="transform-recovery__mark"><RotateCcw size={16} /></span>
+          <div className="transform-recovery__body">
+            <small>文档恢复计划 · v{activeRecovery.contractVersion}</small>
+            <strong>{activeRecovery.state === 'stale'
+              ? '页面函数已失效，旧网关已安全停用'
+              : activeRecovery.state === 'capturing'
+                ? '等待在目标页面重复一次原业务操作'
+                : activeRecovery.state === 'validation-required'
+                  ? '新页面函数已捕获，需要本地回放验证'
+                  : activeRecovery.state === 'confirmation-required'
+                    ? '恢复验证通过，等待确认替换旧绑定'
+                    : '自动恢复没有完成，旧网关仍保持停用'}</strong>
+            <p>{activeRecovery.reason || activeRecovery.capture.reason}</p>
+            <span>{activeRecovery.capture.method} · {activeRecovery.capture.urlPattern || draft.match.urlPattern} · {activeRecovery.binding.inputSemantics.filter((item) => !item.retained).length} 个动态输入</span>
+          </div>
+          <div className="transform-recovery__actions">
+            {(activeRecovery.state === 'stale' || activeRecovery.state === 'failed' || activeRecovery.state === 'capturing') && (
+              activeRecovery.capture.automatic
+                ? <Button variant="primary" disabled={busy} onClick={() => onOpenRecovery(savedProfile!.id)}><RotateCcw size={14} />{activeRecovery.state === 'capturing' ? '返回捕获' : '重新捕获'}</Button>
+                : <Button variant="primary" disabled={busy} onClick={onOpenCapture}><Code2 size={14} />重新录制分析</Button>
+            )}
+            {activeRecovery.state === 'validation-required' && <Button variant="primary" disabled={busy || replayLoading} onClick={() => void validateRecovery()}><FlaskConical size={14} />用本地回放验证</Button>}
+            {activeRecovery.state === 'confirmation-required' && <Button variant="primary" disabled={busy} onClick={() => void confirmRecovery()}><CheckCircle2 size={14} />确认并恢复</Button>}
+            {['capturing', 'validation-required', 'confirmation-required', 'failed'].includes(activeRecovery.state) && <Button variant="ghost" disabled={busy} onClick={() => void resetRecovery()}>取消本次恢复</Button>}
+          </div>
+        </section>}
+        {workspaceView === 'flow' && savedProfile ? <TransformDataFlowView
+          profile={savedProfile}
+          direction={directionName}
+          execution={testResult}
+          onDirectionChange={setDirectionName}
+          onConfigure={() => setWorkspaceView('configure')}
+        /> : <>
         <div className="transform-route">
           <label><span>HTTP 方法</span><input value={draft.match.methods.join(', ')} onChange={(event) => setDraft({ ...draft, match: { ...draft.match, methods: event.target.value.split(',').map((item) => item.trim().toUpperCase()).filter(Boolean) } })} /></label>
           <label><span>URL 模式</span><input value={draft.match.urlPattern} onChange={(event) => setDraft({ ...draft, match: { ...draft.match, urlPattern: event.target.value } })} /></label>
@@ -671,7 +836,7 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
             <Button size="sm" variant="primary" disabled={!callables.length} onClick={() => patchGuide(defaultGuidedTransform(callables[0]))}>{direction.nodes.length ? '替换为引导流程' : '开始配置'}</Button>
           </div> : guide && <div className="transform-guide">
             <div className="transform-guide-flow">
-              <span>逻辑明文</span><ArrowRight size={13} /><strong>{guidedCallable?.name || '选择页面函数'}</strong><ArrowRight size={13} /><span>{guidedOutputDescription(guide)}</span>
+              <span>逻辑明文</span><ArrowRight size={13} /><strong>{guidedCallable?.name || '选择页面函数'}</strong><ArrowRight size={13} /><span>{envelopeDescription || guidedOutputDescription(guide)}</span>
             </div>
 
             <section className="transform-guide-step">
@@ -703,7 +868,7 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
                 <header><div><strong>交给哪个页面函数</strong><span>函数在当前页面文档中执行，Key、IV 与闭包值不会离开页面。</span></div><Code2 size={15} /></header>
                 <label className="transform-guide-callable"><span>页面能力</span><select value={guide.callableId} onChange={(event) => selectGuidedCallable(event.target.value)}><option value="">选择页面函数</option>{callables.map((callable) => <option key={callable.id} value={callable.id}>{callable.name}</option>)}</select></label>
                 {guidedCallable && <div className="transform-guide-callable-meta"><span>{callableKindLabel(guidedCallable)}</span><strong>{guidedCallable.algorithm || guidedCallable.operation}</strong><em>{guidedCallable.inputSlots.filter((slot) => !slot.retained).length} 个明文参数</em></div>}
-                <details className="transform-guide-result"><summary>函数返回的是对象，需要取其中一个字段</summary><label><span>返回字段路径</span><input value={guide.resultPath || ''} onChange={(event) => patchGuide({ ...guide, resultPath: event.target.value || undefined })} placeholder="例如 encryptedData；留空使用完整返回值" /></label></details>
+                {!envelopeDescription && <details className="transform-guide-result"><summary>函数返回的是对象，需要取其中一个字段</summary><label><span>返回字段路径</span><input value={guide.resultPath || ''} onChange={(event) => patchGuide({ ...guide, resultPath: event.target.value || undefined })} placeholder="例如 encryptedData；留空使用完整返回值" /></label></details>}
               </div>
             </section>
 
@@ -711,16 +876,16 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
               <span className="transform-guide-step__index">3</span>
               <div className="transform-guide-step__body">
                 <header><div><strong>线上请求写到哪里</strong><span>选择报文形态即可，字段组合与节点引用由插件生成。</span></div><ArrowDown size={15} /></header>
-                <div className="transform-guide-output">
+                {envelopeDescription ? <div className="transform-guide-note">已由真实请求边界确认：{envelopeDescription}。插件会原样保持字段之间的动态关系，并只序列化一次。</div> : <div className="transform-guide-output">
                   <label><span>输出形态</span><select value={guide.outputKind} onChange={(event) => {
                     const outputKind = event.target.value as GuidedTransformOutputKind;
                     const outputField = outputKind === 'body' ? '' : guide.outputField || (outputKind === 'header' ? 'X-Sign' : outputKind === 'query' ? 'signature' : 'encryptedData');
                     patchGuide({ ...guide, outputKind, outputField, setFormContentType: outputKind === 'form-field' });
                   }}><option value="body">替换整个 Body</option><option value="json-field">写入 JSON 字段</option><option value="form-field">写入表单字段</option><option value="header">写入 Header</option><option value="query">写入 Query 参数</option></select></label>
                   {guide.outputKind !== 'body' && <label><span>{outputFieldLabel(guide.outputKind)}</span><input value={guide.outputField} onChange={(event) => patchGuide({ ...guide, outputField: event.target.value })} placeholder={guide.outputKind === 'form-field' ? 'encryptedData' : guide.outputKind === 'header' ? 'X-Sign' : 'signature'} /></label>}
-                </div>
-                {guide.outputKind === 'form-field' && <label className="transform-guide-content-type"><Switch checked={guide.setFormContentType} onCheckedChange={(setFormContentType) => patchGuide({ ...guide, setFormContentType })} /><span><strong>自动设置表单 Content-Type</strong><small>生成 application/x-www-form-urlencoded，无需再添加固定值和 Header 节点。</small></span></label>}
-                <div className={`transform-guide-ready ${guidedValid ? 'is-ready' : ''}`}><CheckCircle2 size={14} /><span>{guidedValid ? `将自动生成 ${direction.nodes.length} 个底层节点` : '补全页面函数、输入来源和输出字段后即可保存'}</span></div>
+                </div>}
+                {!envelopeDescription && guide.outputKind === 'form-field' && <label className="transform-guide-content-type"><Switch checked={guide.setFormContentType} onCheckedChange={(setFormContentType) => patchGuide({ ...guide, setFormContentType })} /><span><strong>自动设置表单 Content-Type</strong><small>生成 application/x-www-form-urlencoded，无需再添加固定值和 Header 节点。</small></span></label>}
+                <div className={`transform-guide-ready ${guidedValid ? 'is-ready' : ''}`}><CheckCircle2 size={14} /><span>{guidedValid ? `将编排 ${direction.nodes.length} 个执行节点` : '补全页面函数、输入来源和输出字段后即可保存'}</span></div>
               </div>
             </section>
           </div>)}
@@ -747,25 +912,42 @@ export function BrowserTransformWorkspace({ tab, selectedEvent, busy, run, onOpe
             <div className="transform-node-add"><span>添加节点</span><Button size="sm" variant="ghost" onClick={() => addNode('context.read')}><FileInput size={13} />上下文</Button><Button size="sm" variant="ghost" onClick={() => addNode('builtin')}><Braces size={13} />内置转换</Button><Button size="sm" variant="ghost" onClick={() => addNode('page.call')}><Code2 size={13} />页面函数</Button><Button size="sm" variant="ghost" onClick={() => addNode('output.write')}><ArrowDown size={13} />输出</Button></div>
           </>}
         </div>}
-        <footer className="transform-editor-actions"><span className={bindingReady ? 'is-ready' : 'is-stale'}><i />{bindingReady ? '当前页面函数可用' : '页面函数缺失或文档已变化'}</span><Button size="icon" variant="ghost" aria-label="删除配置" title="删除配置" onClick={() => void remove()}><Trash2 size={14} /></Button><Button variant="primary" disabled={busy || !dirty || (editorMode === 'guided' && Boolean(direction?.enabled) && (!guide || !guidedValid))} onClick={() => void save()}><Save size={14} />保存</Button></footer>
+        <footer className="transform-editor-actions"><span className={bindingReady ? 'is-ready' : 'is-stale'}><i />{bindingReady ? '当前页面函数可用' : recoveryPending ? '旧绑定已停用，等待恢复完成' : '页面函数缺失或文档已变化'}</span><Button size="icon" variant="ghost" aria-label="删除配置" title="删除配置" onClick={() => void remove()}><Trash2 size={14} /></Button><Button variant="primary" disabled={busy || recoveryPending || !dirty || (editorMode === 'guided' && Boolean(direction?.enabled) && (!guide || !guidedValid))} onClick={() => void save()}><Save size={14} />保存</Button></footer>
+        </>}
       </>}
     </main>
 
-    <aside className="transform-test">
-      <header>
-        <div><FlaskConical size={15} /><span><strong>本地回放</strong><small>不发送网络请求</small></span></div>
-        <div className="transform-test-header-actions">
-          {testResult && <i className="transform-test-duration">{testResult.durationMs.toFixed(1)} ms</i>}
-          <span className={`transform-replay-persistence is-${replayPersistence}`} title={replayPersistenceTitle} aria-live="polite"><i />{replayPersistenceLabel(replayPersistence)}</span>
-          <Button size="icon" variant="ghost" disabled={!draft?.id || busy || replayLoading} aria-label="清空本机回放草稿" title="清空当前方向的本机回放草稿" onClick={() => void clearReplay()}><Trash2 size={13} /></Button>
-        </div>
-      </header>
-      <label><span>请求</span><div><input disabled={replayLoading} aria-label="回放 HTTP 方法" value={testMethod} onChange={(event) => { setTestMethod(event.target.value); setTestResult(undefined); }} /><input disabled={replayLoading} aria-label="回放请求 URL" value={testUrl} onChange={(event) => { setTestUrl(event.target.value); setTestResult(undefined); }} placeholder="https://example.test/api" /></div></label>
-      <label><span>Headers · JSON</span><textarea disabled={replayLoading} rows={4} value={testHeaders} onChange={(event) => { setTestHeaders(event.target.value); setTestResult(undefined); }} /></label>
-      <div className="transform-test-body"><div className="transform-test-field-label"><span>Body</span>{testSample && (testBody === testSample.body ? <em title={testSample.label}>短时样本</em> : <button type="button" disabled={replayLoading} onClick={() => { setTestBody(testSample.body); setTestResult(undefined); }}>恢复短时样本</button>)}</div><textarea disabled={replayLoading} aria-label="回放 Body" rows={8} value={testBody} onChange={(event) => { setTestBody(event.target.value); setTestResult(undefined); }} /></div>
-      <Button variant="primary" disabled={!draft?.id || dirty || busy || replayLoading || !bindingReady} onClick={() => void execute()}><Play size={14} />执行 Pipeline</Button>
-      {(loadError || replayStorageError || testError) && <div className="transform-test-error"><AlertTriangle size={14} />{loadError || replayStorageError || testError}</div>}
-      {testResult && <section className="transform-test-result"><header><div><CheckCircle2 size={14} /><strong>转换完成</strong></div><span>{testResult.nodeDurations.length} 节点</span></header><dl><div><dt>输出 URL</dt><dd>{testResult.url}</dd></div><div><dt>Body Base64</dt><dd>{testResult.bodyBase64.slice(0, 64)}{testResult.bodyBase64.length > 64 ? '…' : ''}</dd></div><div><dt>Headers</dt><dd>{testResult.setHeaders.length} 设置 · {testResult.removeHeaders.length} 删除</dd></div></dl><pre>{JSON.stringify(testResult.logicalOutput, null, 2)}</pre><footer>{testResult.nodeDurations.map((node) => <span key={node.nodeId}>{node.nodeId.split('-')[0]} · {node.durationMs.toFixed(1)} ms</span>)}</footer></section>}
-    </aside>
+    <TransformReplayPanel
+      tab={tab}
+      draft={draft}
+      busy={busy}
+      replayLoading={replayLoading}
+      replayPersistence={replayPersistence}
+      replayPersistenceLabel={replayPersistenceLabel(replayPersistence)}
+      replayPersistenceTitle={replayPersistenceTitle}
+      gatewayShared={gatewayShared}
+      gatewayShareExpiresAt={gatewayShareExpiresAt}
+      gatewayBridgeConnected={gatewayBridgeConnected}
+      onShareGateway={() => run(
+        onShareGateway,
+        gatewayShared ? '共享会话已刷新' : '当前页面已共享给 Yakit',
+      )}
+      onClear={clearReplay}
+      canExecute={Boolean(draft?.id && !dirty && !busy && !replayLoading && bindingReady)}
+      onExecute={execute}
+      method={testMethod}
+      url={testUrl}
+      headers={testHeaders}
+      body={testBody}
+      sample={testSample}
+      onMethodChange={(value) => dispatch({ type: 'patch', value: { testMethod: value, testResult: undefined } })}
+      onUrlChange={(value) => dispatch({ type: 'patch', value: { testUrl: value, testResult: undefined } })}
+      onHeadersChange={(value) => dispatch({ type: 'patch', value: { testHeaders: value, testResult: undefined } })}
+      onBodyChange={(value) => dispatch({ type: 'patch', value: { testBody: value, testResult: undefined } })}
+      loadError={loadError}
+      replayStorageError={replayStorageError}
+      testError={testError}
+      result={testResult}
+    />
   </div>;
 }

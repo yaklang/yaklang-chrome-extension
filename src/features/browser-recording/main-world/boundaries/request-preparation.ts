@@ -134,7 +134,12 @@ export function createRequestPreparationRuntime(
         if (resultBytes !== undefined && resultBytes <= MAX_SERIALIZED_BYTES) emit(() => ({
           operation: 'JSON.stringify',
           label: 'JSON 序列化',
-          transform: { category: 'serializer', provider: 'native', phase: 'output' },
+          transform: {
+            adapterId: 'native.json',
+            providerKind: 'native',
+            category: 'serializer',
+            phase: 'output',
+          },
           inputs: host.collectEvidence(input, '$input'),
           outputs: host.collectEvidence(output, '$output'),
           byteLength: host.byteLength(input),
@@ -161,7 +166,12 @@ export function createRequestPreparationRuntime(
         if (host.byteLength(output)! <= MAX_SERIALIZED_BYTES) emit(() => ({
           operation: 'URLSearchParams.toString',
           label: 'Query/Form 序列化',
-          transform: { category: 'serializer', provider: 'native', phase: 'output' },
+          transform: {
+            adapterId: 'native.url-search-params',
+            providerKind: 'native',
+            category: 'serializer',
+            phase: 'output',
+          },
           inputs: host.collectEvidence(this, '$input'),
           outputs: host.collectEvidence(output, '$output'),
           byteLength: host.byteLength(this),
@@ -184,7 +194,12 @@ export function createRequestPreparationRuntime(
         emit(() => ({
           operation: 'URLSearchParams.sort',
           label: 'Query 参数排序',
-          transform: { category: 'canonicalization', provider: 'native', phase: 'output' },
+          transform: {
+            adapterId: 'native.url-search-params',
+            providerKind: 'native',
+            category: 'canonicalization',
+            phase: 'output',
+          },
           inputs: host.collectEvidence(before, '$input'),
           outputs: host.collectEvidence(after, '$output'),
           byteLength: host.byteLength(before),
@@ -219,7 +234,12 @@ export function createRequestPreparationRuntime(
         return {
           operation: 'axios.request',
           label: 'Axios 请求准备',
-          transform: { category: 'request-builder', provider: 'axios', phase: 'boundary' },
+          transform: {
+            adapterId: 'axios',
+            providerKind: 'library',
+            category: 'request-builder',
+            phase: 'boundary',
+          },
           inputs: evidence,
           outputs: evidence.map((item) => ({ ...item })),
           byteLength: host.byteLength(body),

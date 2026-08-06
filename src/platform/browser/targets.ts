@@ -1,6 +1,7 @@
 import { browser, type Browser } from 'wxt/browser';
 import type { ActiveTabInfo, BrowserTarget } from '@/types/models';
 import { ExtensionError } from '@/shared/errors';
+import { resolveBrowserTabInfo } from './isolation';
 
 type DocumentProbeResult = Browser.scripting.InjectionResult & { documentId?: string };
 
@@ -19,6 +20,15 @@ export async function resolveDocumentTarget(input: BrowserTarget | number): Prom
   const requested: BrowserTarget = typeof input === 'number'
     ? { tabId: input, frameId: 0 }
     : { ...input, frameId: input.frameId ?? 0 };
+  if (import.meta.env.FIREFOX) {
+    try {
+      const frame = await browser.webNavigation.getFrame({ tabId: requested.tabId, frameId: requested.frameId });
+      if (!frame) throw new Error('目标 frame 不存在');
+      return { tabId: requested.tabId, frameId: requested.frameId };
+    } catch (error) {
+      throw new ExtensionError('target_unavailable', error instanceof Error ? error.message : String(error));
+    }
+  }
   let probe: DocumentProbeResult | undefined;
   try {
     [probe] = await browser.scripting.executeScript({
@@ -47,14 +57,7 @@ async function findRecentHttpTab(): Promise<Browser.tabs.Tab | undefined> {
 export async function getTab(tabId?: number): Promise<ActiveTabInfo> {
   const tab = tabId ? await browser.tabs.get(tabId) : await findRecentHttpTab();
   if (!tab?.id || !tab.url) throw new Error('无法读取当前标签页');
-  return {
-    id: tab.id,
-    windowId: tab.windowId,
-    title: tab.title || '未命名页面',
-    url: tab.url,
-    favIconUrl: tab.favIconUrl,
-    lastAccessed: tab.lastAccessed,
-  };
+  return resolveBrowserTabInfo(tab);
 }
 
 export const getActiveTab = () => getTab();

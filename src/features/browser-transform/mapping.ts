@@ -6,6 +6,7 @@ import type {
   BrowserTransformHeader,
   BrowserTransformNodeReference,
   BrowserTransformPacket,
+  BrowserTransformValueSummary,
   BrowserTransformValueEncoding,
 } from '@/types/models';
 import { ExtensionError } from '@/shared/errors';
@@ -21,7 +22,7 @@ const BUILTIN_OPERATIONS = new Set<BrowserTransformBuiltinOperation>([
   'value.literal',
   'json.stringify', 'json.parse', 'text.toString', 'url.encode', 'url.decode',
   'base64.encode', 'base64.decode', 'hex.encode', 'hex.decode',
-  'object.pick', 'object.compose', 'form.compose',
+  'object.pick', 'object.compose', 'form.compose', 'form.serialize',
 ]);
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -228,6 +229,87 @@ function byteResult(bytes: Uint8Array): { type: 'bytes'; byteLength: number; bas
   return { type: 'bytes', byteLength: bytes.byteLength, base64: encodeBase64(bytes) };
 }
 
+export function summarizeTransformValue(value: unknown): BrowserTransformValueSummary {
+  if (value === null) return { type: 'null' };
+  if (value === undefined) return { type: 'undefined' };
+  if (typeof value === 'boolean') return { type: 'boolean' };
+  if (typeof value === 'number') return { type: 'number' };
+  if (typeof value === 'string') return { type: 'string', byteLength: encoder.encode(value).byteLength };
+  if (Array.isArray(value)) return { type: 'array', itemCount: value.length };
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (record.type === 'bytes') {
+      const byteLength = typeof record.byteLength === 'number' && Number.isSafeInteger(record.byteLength)
+        ? Math.max(0, record.byteLength)
+        : typeof record.base64 === 'string' ? Math.floor(record.base64.length * 0.75) : undefined;
+      return { type: 'bytes', byteLength };
+    }
+    return { type: 'object', itemCount: Object.keys(record).length };
+  }
+  return { type: 'undefined' };
+}
+
+interface DifferenceBudget { compared: number; changes: number }
+
+function equivalentTransformValue(left: unknown, right: unknown, budget: DifferenceBudget, depth = 0): boolean {
+  budget.compared += 1;
+  if (Object.is(left, right)) return true;
+  if (budget.compared > 20_000 || depth > 16 || !left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    return left.every((item, index) => equivalentTransformValue(item, right[index], budget, depth + 1));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).filter((key) => !BLOCKED_PATH_SEGMENTS.has(key)).sort();
+  const rightKeys = Object.keys(rightRecord).filter((key) => !BLOCKED_PATH_SEGMENTS.has(key)).sort();
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index]
+      && equivalentTransformValue(leftRecord[key], rightRecord[key], budget, depth + 1));
+}
+
+function appendTransformChanges(
+  before: unknown,
+  after: unknown,
+  path: string,
+  changes: BrowserTransformExecution['fieldChanges'],
+  budget: DifferenceBudget,
+  depth = 0,
+): void {
+  if (changes.length >= 128 || equivalentTransformValue(before, after, budget)) return;
+  if (before === undefined || after === undefined) {
+    changes.push({
+      path,
+      change: before === undefined ? 'added' : 'removed',
+      before: before === undefined ? undefined : summarizeTransformValue(before),
+      after: after === undefined ? undefined : summarizeTransformValue(after),
+    });
+    return;
+  }
+  if (depth < 8 && before && after && typeof before === 'object' && typeof after === 'object'
+    && !Array.isArray(before) && !Array.isArray(after)) {
+    const beforeRecord = before as Record<string, unknown>;
+    const afterRecord = after as Record<string, unknown>;
+    const keys = [...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)])]
+      .filter((key) => !BLOCKED_PATH_SEGMENTS.has(key)).sort().slice(0, 256);
+    for (const key of keys) {
+      appendTransformChanges(beforeRecord[key], afterRecord[key], `${path}.${key}`, changes, budget, depth + 1);
+      if (changes.length >= 128) break;
+    }
+    return;
+  }
+  changes.push({
+    path,
+    change: 'changed',
+    before: summarizeTransformValue(before),
+    after: summarizeTransformValue(after),
+  });
+}
+
+function referenceLabel(reference: BrowserTransformNodeReference): string {
+  return `${reference.nodeId}${reference.path ? `.${reference.path}` : ''}`;
+}
+
 function optionStrings(options: Record<string, unknown> | undefined, key: string, max = 64): string[] {
   const value = options?.[key];
   if (!Array.isArray(value) || value.length > max || value.some((item) => typeof item !== 'string')) {
@@ -275,6 +357,22 @@ function executeBuiltin(operation: BrowserTransformBuiltinOperation, inputs: unk
       throw new ExtensionError('transform_builtin_invalid', 'object.compose 的 keys 必须与输入一一对应');
     }
     return Object.fromEntries(keys.map((key, index) => [key, cloneJsonBody(inputs[index])]));
+  }
+  if (operation === 'form.serialize') {
+    const source = one();
+    if (!source || typeof source !== 'object' || Array.isArray(source)) {
+      throw new ExtensionError('transform_builtin_invalid', 'form.serialize 需要对象输入');
+    }
+    const entries = Object.entries(source as Record<string, unknown>);
+    if (entries.length > 64 || entries.some(([key]) => BLOCKED_PATH_SEGMENTS.has(key))) {
+      throw new ExtensionError('transform_builtin_invalid', 'form.serialize 的字段数量或名称无效');
+    }
+    const form = new URLSearchParams();
+    entries.forEach(([key, value]) => {
+      if (Array.isArray(value)) value.forEach((item) => form.append(key, stringValue(item)));
+      else form.append(key, stringValue(value));
+    });
+    return form.toString();
   }
   const keys = optionStrings(options, 'keys');
   if (keys.length !== inputs.length) throw new ExtensionError('transform_builtin_invalid', 'form.compose 的 keys 必须与输入一一对应');
@@ -387,6 +485,7 @@ export async function executeTransformDirection(
   const logicalInput = cloneJsonBody(context);
   const results = new Map<string, unknown>();
   const nodeDurations: Array<{ nodeId: string; durationMs: number }> = [];
+  const nodeTrace: BrowserTransformExecution['nodeTrace'] = [];
   let outputBody = rawBody;
   let logicalBody = parsed.body;
   let outputUrl = packet.url;
@@ -433,7 +532,35 @@ export async function executeTransformDirection(
       }
       results.set(node.id, value);
     }
-    nodeDurations.push({ nodeId: node.id, durationMs: Math.max(0, performance.now() - nodeStarted) });
+    const durationMs = Math.max(0, performance.now() - nodeStarted);
+    nodeDurations.push({ nodeId: node.id, durationMs });
+    const inputRefs = node.kind === 'context.read' ? [node.path]
+      : node.kind === 'builtin' ? node.inputs.map(referenceLabel)
+        : node.kind === 'page.call' ? node.arguments.map(referenceLabel)
+          : [referenceLabel(node.source)];
+    nodeTrace.push({
+      nodeId: node.id,
+      kind: node.kind,
+      name: node.name,
+      inputRefs,
+      output: summarizeTransformValue(results.get(node.id)),
+      durationMs,
+    });
+  }
+
+  const fieldChanges: BrowserTransformExecution['fieldChanges'] = [];
+  const differenceBudget: DifferenceBudget = { compared: 0, changes: 0 };
+  appendTransformChanges(context.body, logicalBody, 'body', fieldChanges, differenceBudget);
+  appendTransformChanges(context.query, queryRecord(outputUrl), 'query', fieldChanges, differenceBudget);
+  const headerDestinations = new Set(direction.nodes.flatMap((node) => (
+    node.kind === 'output.write' && node.destination.toLowerCase().startsWith('header.')
+      ? [node.destination.slice(7).trim().toLowerCase()]
+      : []
+  )));
+  for (const name of [...headerDestinations].sort()) {
+    const before = context.headers[name];
+    const after = removeHeaders.has(name) ? undefined : setHeaders.get(name)?.value ?? before;
+    appendTransformChanges(before, after, `header.${name}`, fieldChanges, differenceBudget);
   }
 
   return {
@@ -446,6 +573,8 @@ export async function executeTransformDirection(
     logicalInput,
     logicalOutput: cloneJsonBody({ url: outputUrl, body: logicalBody, nodes: Object.fromEntries(results) }),
     nodeDurations,
+    nodeTrace,
+    fieldChanges,
     durationMs: Math.max(0, performance.now() - started),
   };
 }

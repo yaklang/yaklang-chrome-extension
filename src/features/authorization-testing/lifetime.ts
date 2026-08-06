@@ -1,0 +1,1 @@
+export const AUTHORIZATION_WORKSPACE_TTL_MS = 30 * 60_000;
