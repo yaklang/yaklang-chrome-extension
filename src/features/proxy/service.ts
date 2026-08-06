@@ -7,6 +7,7 @@ import type {
 import { getState, updateState } from '@/platform/storage/state';
 import {
   compileProxyRules, previewProxyRules, profileToPac, proxyCompilationRevision,
+  sortedProxyRules,
   type CompiledProxyArtifact, type ProxyCompilationInput,
 } from './compiler';
 import { hashText } from './hash';
@@ -19,6 +20,7 @@ import {
 const SOURCE_REFRESH_ALARM = 'proxy-rule-sources-refresh';
 const MAX_SOURCE_BYTES = 10 * 1024 * 1024;
 const MAX_CONFIGURATION_CONTENT_BYTES = 25 * 1024 * 1024;
+const RESERVED_PROXY_PROFILE_IDS = new Set(['auto', 'direct', 'system', 'yakit-mitm']);
 
 interface StorageArea {
   get(key: string): Promise<Record<string, unknown>>;
@@ -27,7 +29,7 @@ interface StorageArea {
 
 const sessionStorage = (browser.storage as unknown as { session?: StorageArea }).session;
 const authPasswords = new Map<string, string>();
-const sourceRefreshes = new Map<string, Promise<ExtensionState>>();
+const sourceRefreshes = new Map<string, { identity: string; promise: Promise<ExtensionState> }>();
 let proxyState: ExtensionState | undefined;
 
 function isFirefox(): boolean {
@@ -36,6 +38,36 @@ function isFirefox(): boolean {
 
 function isRoutable(profile: ProxyProfile): boolean {
   return profile.kind === 'direct' || profile.kind === 'fixed_servers';
+}
+
+function canonicalProxyProfile(profile: ProxyProfile): ProxyProfile {
+  const name = profile.name.trim();
+  if (profile.id === 'auto') throw new Error('auto 是自动切换模式标识，不能作为代理出口 ID');
+  if (profile.id === 'direct') {
+    if (profile.kind !== 'direct') throw new Error('内置“直接连接”出口的类型不能修改');
+    return { id: 'direct', name: '直接连接', kind: 'direct', bypass: [], builtin: true };
+  }
+  if (profile.id === 'system') {
+    if (profile.kind !== 'system') throw new Error('内置“系统代理”出口的类型不能修改');
+    return { id: 'system', name: '系统代理', kind: 'system', bypass: [], builtin: true };
+  }
+  if (profile.id === 'yakit-mitm') {
+    if (profile.kind !== 'fixed_servers') throw new Error('内置“Yakit MITM”出口必须保持为固定代理');
+    return { ...profile, name: name || 'Yakit MITM', builtin: true };
+  }
+  if (RESERVED_PROXY_PROFILE_IDS.has(profile.id)) throw new Error(`代理出口 ID 已被系统保留：${profile.id}`);
+  return { ...profile, name, builtin: false };
+}
+
+function assertUniqueProfileName(profile: ProxyProfile, profiles: ProxyProfile[]): void {
+  const normalizedName = profile.name.trim().toLocaleLowerCase();
+  if (profiles.some((item) => item.id !== profile.id && item.name.trim().toLocaleLowerCase() === normalizedName)) {
+    throw new Error(`代理出口名称不能重复：${profile.name}`);
+  }
+}
+
+function assertUniqueIds(values: string[], label: string): void {
+  if (new Set(values).size !== values.length) throw new Error(`${label}包含重复 ID`);
 }
 
 function chromeProxyValue(profile: ProxyProfile): object {
@@ -80,8 +112,19 @@ function firefoxProxyValue(profile: ProxyProfile): object {
   return { proxyType: 'manual', http: address, ssl: address, httpProxyAll: true, passthrough: profile.bypass.join(', ') };
 }
 
-async function setPacScript(pacScript: string): Promise<void> {
+async function assertProxyControl(): Promise<void> {
   if (!browser.proxy?.settings) throw new Error('当前浏览器不支持代理 API');
+  const current = await browser.proxy.settings.get({ incognito: false });
+  if (current.levelOfControl === 'controlled_by_other_extensions') {
+    throw new Error('浏览器代理正由其他扩展控制，请先停用其他代理扩展后重试');
+  }
+  if (current.levelOfControl === 'not_controllable') {
+    throw new Error('浏览器代理受系统策略或启动参数控制，当前扩展无法修改');
+  }
+}
+
+async function setPacScript(pacScript: string): Promise<void> {
+  await assertProxyControl();
   if (isFirefox()) {
     await browser.proxy.settings.set({
       value: { proxyType: 'autoConfig', autoConfigUrl: `data:application/x-ns-proxy-autoconfig,${encodeURIComponent(pacScript)}` } as unknown as Browser.proxy.ProxyConfig,
@@ -96,7 +139,7 @@ async function setPacScript(pacScript: string): Promise<void> {
 }
 
 async function setBrowserProxyProfile(profile: ProxyProfile): Promise<void> {
-  if (!browser.proxy?.settings) throw new Error('当前浏览器不支持代理 API');
+  await assertProxyControl();
   const value = isFirefox() ? firefoxProxyValue(profile) : chromeProxyValue(profile);
   await browser.proxy.settings.set({ value: value as Browser.proxy.ProxyConfig, scope: 'regular' });
 }
@@ -153,23 +196,46 @@ export function dirtyProxyState(state: ExtensionState): ExtensionState {
   return { ...state, proxyRuntime: { ...state.proxyRuntime, dirty: true, error: undefined } };
 }
 
-export async function switchProxy(profileId: string): Promise<void> {
-  const state = await getState();
-  const profile = state.proxyProfiles.find((item) => item.id === profileId);
-  if (!profile) throw new Error('代理配置不存在');
-  await setBrowserProxyProfile(profile);
-  await updateState((current) => ({ ...current, activeProxyId: profileId }));
+export async function switchProxy(profileId: string): Promise<ExtensionState> {
+  return updateState(async (current) => {
+    const profile = current.proxyProfiles.find((item) => item.id === profileId);
+    if (!profile) throw new Error('代理配置不存在');
+    await setBrowserProxyProfile(profile);
+    return { ...current, activeProxyId: profileId };
+  });
 }
 
 export async function saveProxyProfile(profile: ProxyProfile): Promise<ExtensionState> {
   return updateState(async (current) => {
+    const canonical = canonicalProxyProfile(profile);
+    assertUniqueProfileName(canonical, current.proxyProfiles);
     const next = dirtyProxyState({
       ...current,
-      proxyProfiles: [...current.proxyProfiles.filter((item) => item.id !== profile.id), profile],
+      proxyProfiles: [...current.proxyProfiles.filter((item) => item.id !== canonical.id), canonical],
     });
-    if (current.activeProxyId === profile.id) await setBrowserProxyProfile(profile);
+    if (current.activeProxyId === canonical.id) await setBrowserProxyProfile(canonical);
     return next;
   });
+}
+
+export async function removeProxyProfile(profileId: string): Promise<ExtensionState> {
+  const saved = await updateState((current) => {
+    const profile = current.proxyProfiles.find((item) => item.id === profileId);
+    if (!profile) throw new Error('代理配置不存在');
+    if (RESERVED_PROXY_PROFILE_IDS.has(profileId) || profile.builtin) throw new Error('内置代理出口不能删除');
+    if (current.activeProxyId === profileId) throw new Error('该出口正在使用，请先切换到其他出口');
+    if (current.proxyRules.some((rule) => rule.proxyProfileId === profileId)
+      || current.proxyRuleSources.some((source) => source.matchProfileId === profileId || source.bypassProfileId === profileId)
+      || current.proxyRouting.defaultProfileId === profileId) {
+      throw new Error('该出口仍被自动切换规则引用，请先修改相关规则');
+    }
+    return dirtyProxyState({
+      ...current,
+      proxyProfiles: current.proxyProfiles.filter((item) => item.id !== profileId),
+    });
+  });
+  await setProxyAuthPassword(profileId, '');
+  return saved;
 }
 
 export async function applyProxyRules(): Promise<ExtensionState> {
@@ -217,41 +283,44 @@ function assertSourceProfiles(input: Pick<ProxyRuleSourceInput, 'matchProfileId'
 }
 
 export async function saveProxyRuleSource(input: ProxyRuleSourceInput): Promise<ProxyRuleSource> {
-  const state = await getState();
-  assertSourceProfiles(input, state);
-  const existing = input.id ? state.proxyRuleSources.find((source) => source.id === input.id) : undefined;
   const normalizedUrl = new URL(input.url).toString();
-  const identityChanged = Boolean(existing && (existing.url !== normalizedUrl || existing.format !== input.format));
-  const source: ProxyRuleSource = {
-    id: existing?.id || crypto.randomUUID(),
-    name: input.name.trim(),
-    url: normalizedUrl,
-    format: input.format,
-    enabled: input.enabled,
-    matchProfileId: input.matchProfileId,
-    bypassProfileId: input.bypassProfileId,
-    order: input.order ?? existing?.order ?? state.proxyRuleSources.length,
-    updateIntervalMinutes: input.updateIntervalMinutes,
-    status: identityChanged ? 'idle' : existing?.status || 'idle',
-    totalRuleCount: identityChanged ? 0 : existing?.totalRuleCount || 0,
-    supportedRuleCount: identityChanged ? 0 : existing?.supportedRuleCount || 0,
-    ignoredRuleCount: identityChanged ? 0 : existing?.ignoredRuleCount || 0,
-    invalidRuleCount: identityChanged ? 0 : existing?.invalidRuleCount || 0,
-    ...(!identityChanged && existing ? {
-      revision: existing.revision,
-      contentHash: existing.contentHash,
-      etag: existing.etag,
-      lastModified: existing.lastModified,
-      lastCheckedAt: existing.lastCheckedAt,
-      lastUpdatedAt: existing.lastUpdatedAt,
-      error: existing.error,
-    } : {}),
-  };
-  await updateState((current) => dirtyProxyState({
-    ...current,
-    proxyRuleSources: [...current.proxyRuleSources.filter((item) => item.id !== source.id), source],
-  }));
-  return source;
+  let savedSource: ProxyRuleSource | undefined;
+  await updateState((current) => {
+    assertSourceProfiles(input, current);
+    const existing = input.id ? current.proxyRuleSources.find((source) => source.id === input.id) : undefined;
+    if (input.id && !existing) throw new Error('规则源不存在');
+    const identityChanged = Boolean(existing && (existing.url !== normalizedUrl || existing.format !== input.format));
+    savedSource = {
+      id: existing?.id || crypto.randomUUID(),
+      name: input.name.trim(),
+      url: normalizedUrl,
+      format: input.format,
+      enabled: input.enabled,
+      matchProfileId: input.matchProfileId,
+      bypassProfileId: input.bypassProfileId,
+      order: input.order ?? existing?.order ?? current.proxyRuleSources.length,
+      updateIntervalMinutes: input.updateIntervalMinutes,
+      status: identityChanged ? 'idle' : existing?.status || 'idle',
+      totalRuleCount: identityChanged ? 0 : existing?.totalRuleCount || 0,
+      supportedRuleCount: identityChanged ? 0 : existing?.supportedRuleCount || 0,
+      ignoredRuleCount: identityChanged ? 0 : existing?.ignoredRuleCount || 0,
+      invalidRuleCount: identityChanged ? 0 : existing?.invalidRuleCount || 0,
+      ...(!identityChanged && existing ? {
+        revision: existing.revision,
+        contentHash: existing.contentHash,
+        etag: existing.etag,
+        lastModified: existing.lastModified,
+        lastCheckedAt: existing.lastCheckedAt,
+        lastUpdatedAt: existing.lastUpdatedAt,
+        error: existing.error,
+      } : {}),
+    };
+    return dirtyProxyState({
+      ...current,
+      proxyRuleSources: [...current.proxyRuleSources.filter((item) => item.id !== savedSource!.id), savedSource!],
+    });
+  });
+  return savedSource!;
 }
 
 async function fetchSource(source: ProxyRuleSource): Promise<Response> {
@@ -277,12 +346,21 @@ async function refreshSourceOperation(sourceId: string, applyActive: boolean): P
   try {
     const response = await fetchSource(source);
     if (response.status === 304) {
-      return updateState((current) => ({
-        ...current,
-        proxyRuleSources: current.proxyRuleSources.map((item) => item.id === sourceId
-          ? { ...item, status: item.revision ? 'ready' : 'idle', lastCheckedAt: Date.now(), error: undefined }
-          : item),
-      }));
+      return updateState(async (current) => {
+        const liveSource = current.proxyRuleSources.find((item) => item.id === sourceId);
+        if (!liveSource || liveSource.url !== source.url || liveSource.format !== source.format) {
+          throw new Error('规则源在下载期间已被修改，本次结果已丢弃');
+        }
+        const staged = {
+          ...current,
+          proxyRuleSources: current.proxyRuleSources.map((item) => item.id === sourceId
+            ? { ...item, status: item.revision ? 'ready' as const : 'idle' as const, lastCheckedAt: Date.now(), error: undefined }
+            : item),
+        };
+        return applyActive && current.activeProxyId === 'auto' && current.proxyRuntime.dirty
+          ? withAppliedRuntime(staged, await applyState(staged))
+          : staged;
+      });
     }
     const text = await response.text();
     if (new TextEncoder().encode(text).byteLength > MAX_SOURCE_BYTES) throw new Error('规则源超过 10 MB 安全上限');
@@ -290,26 +368,26 @@ async function refreshSourceOperation(sourceId: string, applyActive: boolean): P
     if (parsed.rules.length === 0) throw new Error('规则源没有可用的代理规则');
     const revision = `${hashText(parsed.decodedText)}-${parsed.rules.length}`;
     await putSourceRevision(source.id, revision, parsed.decodedText, parsed.rules);
-    const updatedSource: ProxyRuleSource = {
-      ...source,
-      revision,
-      contentHash: hashText(parsed.decodedText),
-      etag: response.headers.get('etag') || undefined,
-      lastModified: response.headers.get('last-modified') || undefined,
-      lastCheckedAt: Date.now(),
-      lastUpdatedAt: Date.now(),
-      status: 'ready',
-      totalRuleCount: parsed.diagnostics.total,
-      supportedRuleCount: parsed.diagnostics.supported,
-      ignoredRuleCount: parsed.diagnostics.ignored,
-      invalidRuleCount: parsed.diagnostics.invalid,
-      error: parsed.diagnostics.warnings.length > 0 ? parsed.diagnostics.warnings.join('\n') : undefined,
-    };
     const saved = await updateState(async (current) => {
       const liveSource = current.proxyRuleSources.find((item) => item.id === sourceId);
       if (!liveSource || liveSource.url !== source.url || liveSource.format !== source.format) {
         throw new Error('规则源在下载期间已被修改，本次结果已丢弃');
       }
+      const updatedSource: ProxyRuleSource = {
+        ...liveSource,
+        revision,
+        contentHash: hashText(parsed.decodedText),
+        etag: response.headers.get('etag') || undefined,
+        lastModified: response.headers.get('last-modified') || undefined,
+        lastCheckedAt: Date.now(),
+        lastUpdatedAt: Date.now(),
+        status: 'ready',
+        totalRuleCount: parsed.diagnostics.total,
+        supportedRuleCount: parsed.diagnostics.supported,
+        ignoredRuleCount: parsed.diagnostics.ignored,
+        invalidRuleCount: parsed.diagnostics.invalid,
+        error: parsed.diagnostics.warnings.length > 0 ? parsed.diagnostics.warnings.join('\n') : undefined,
+      };
       const staged = dirtyProxyState({
         ...current,
         proxyRuleSources: current.proxyRuleSources.map((item) => item.id === sourceId ? updatedSource : item),
@@ -335,11 +413,25 @@ async function refreshSourceOperation(sourceId: string, applyActive: boolean): P
   }
 }
 
-export function refreshProxyRuleSource(sourceId: string, applyActive = true): Promise<ExtensionState> {
+export async function refreshProxyRuleSource(sourceId: string, applyActive = true): Promise<ExtensionState> {
+  const source = (await getState()).proxyRuleSources.find((item) => item.id === sourceId);
+  if (!source) throw new Error('规则源不存在');
+  const identity = `${source.url}\n${source.format}`;
   const existing = sourceRefreshes.get(sourceId);
-  if (existing) return existing;
-  const refresh = refreshSourceOperation(sourceId, applyActive).finally(() => sourceRefreshes.delete(sourceId));
-  sourceRefreshes.set(sourceId, refresh);
+  if (existing?.identity === identity) {
+    const refreshed = await existing.promise;
+    return applyActive && refreshed.activeProxyId === 'auto' && refreshed.proxyRuntime.dirty
+      ? applyProxyRules()
+      : refreshed;
+  }
+  if (existing) {
+    await existing.promise.catch(() => undefined);
+    return refreshProxyRuleSource(sourceId, applyActive);
+  }
+  const refresh = refreshSourceOperation(sourceId, applyActive).finally(() => {
+    if (sourceRefreshes.get(sourceId)?.promise === refresh) sourceRefreshes.delete(sourceId);
+  });
+  sourceRefreshes.set(sourceId, { identity, promise: refresh });
   return refresh;
 }
 
@@ -428,33 +520,98 @@ export async function importProxyConfiguration(configuration: ProxyConfiguration
     (total, item) => total + (item.content ? new TextEncoder().encode(item.content).byteLength : 0), 0,
   );
   if (contentBytes > MAX_CONFIGURATION_CONTENT_BYTES) throw new Error('导入配置中的规则源内容合计不能超过 25 MB');
-  const profileIds = new Set(configuration.profiles.map((profile) => profile.id));
-  if (profileIds.size !== configuration.profiles.length || !profileIds.has(configuration.routing.defaultProfileId)) {
-    throw new Error('代理配置包含重复或缺失的出口 ID');
+  assertUniqueIds(configuration.profiles.map((profile) => profile.id), '代理出口');
+  assertUniqueIds(configuration.rules.map((rule) => rule.id), '手动规则');
+  assertUniqueIds(configuration.sources.map(({ source }) => source.id), '规则订阅');
+  const profiles = configuration.profiles.map(canonicalProxyProfile);
+  const profileNames = profiles.map((profile) => profile.name.trim().toLocaleLowerCase());
+  if (new Set(profileNames).size !== profileNames.length) throw new Error('代理配置包含重名出口');
+  for (const [profileId, kind] of [['direct', 'direct'], ['system', 'system'], ['yakit-mitm', 'fixed_servers']] as const) {
+    if (!profiles.some((profile) => profile.id === profileId && profile.kind === kind)) {
+      throw new Error(`代理配置缺少内置出口：${profileId}`);
+    }
   }
-  const routableIds = new Set(configuration.profiles.filter(isRoutable).map((profile) => profile.id));
+  const profileIds = new Set(profiles.map((profile) => profile.id));
+  const routableIds = new Set(profiles.filter(isRoutable).map((profile) => profile.id));
+  if (!profileIds.has(configuration.routing.defaultProfileId)) throw new Error('代理配置的默认出口不存在');
+  if (!routableIds.has(configuration.routing.defaultProfileId)) throw new Error('代理配置的默认出口必须是直接连接或固定代理');
   if (configuration.rules.some((rule) => !routableIds.has(rule.proxyProfileId))) throw new Error('手动规则引用了不可用的出口');
   if (configuration.sources.some(({ source }) => !routableIds.has(source.matchProfileId) || !routableIds.has(source.bypassProfileId))) {
     throw new Error('规则源引用了不可用的出口');
   }
-  await Promise.all(configuration.sources.map(async ({ source, content }) => {
-    if (!content || !source.revision) return;
+
+  const revisionWrites: Array<{
+    sourceId: string;
+    revision: string;
+    content: string;
+    rules: ReturnType<typeof parseProxyRuleSource>['rules'];
+  }> = [];
+  const proxyRuleSources = configuration.sources.map(({ source, content }) => {
+    if (!content) {
+      return {
+        ...source,
+        revision: undefined,
+        contentHash: undefined,
+        etag: undefined,
+        lastModified: undefined,
+        lastCheckedAt: undefined,
+        lastUpdatedAt: undefined,
+        status: 'idle' as const,
+        totalRuleCount: 0,
+        supportedRuleCount: 0,
+        ignoredRuleCount: 0,
+        invalidRuleCount: 0,
+        error: undefined,
+      };
+    }
     const parsed = parseProxyRuleSource(content, source.format, source.id);
-    await putSourceRevision(source.id, source.revision, parsed.decodedText, parsed.rules);
-  }));
-  return updateState(async (current) => {
-    const direct = configuration.profiles.find((profile) => profile.id === 'direct' && profile.kind === 'direct')
-      || { id: 'direct', name: '直接连接', kind: 'direct' as const, bypass: [], builtin: true };
+    if (parsed.rules.length === 0) throw new Error(`规则源“${source.name}”的导入内容没有可用规则`);
+    const contentHash = hashText(parsed.decodedText);
+    const revision = `${contentHash}-${parsed.rules.length}`;
+    revisionWrites.push({ sourceId: source.id, revision, content: parsed.decodedText, rules: parsed.rules });
+    return {
+      ...source,
+      revision,
+      contentHash,
+      etag: undefined,
+      lastModified: undefined,
+      status: 'ready' as const,
+      totalRuleCount: parsed.diagnostics.total,
+      supportedRuleCount: parsed.diagnostics.supported,
+      ignoredRuleCount: parsed.diagnostics.ignored,
+      invalidRuleCount: parsed.diagnostics.invalid,
+      error: parsed.diagnostics.warnings.length > 0 ? parsed.diagnostics.warnings.join('\n') : undefined,
+    };
+  });
+  await Promise.all(revisionWrites.map((item) => putSourceRevision(
+    item.sourceId, item.revision, item.content, item.rules,
+  )));
+
+  const direct = profiles.find((profile) => profile.id === 'direct')!;
+  let removedSourceIds: string[] = [];
+  const saved = await updateState(async (current) => {
+    const importedSourceIds = new Set(proxyRuleSources.map((source) => source.id));
+    removedSourceIds = current.proxyRuleSources
+      .filter((source) => !importedSourceIds.has(source.id))
+      .map((source) => source.id);
     await setBrowserProxyProfile(direct);
     return dirtyProxyState({
       ...current,
-      proxyProfiles: configuration.profiles,
-      proxyRules: configuration.rules,
-      proxyRuleSources: configuration.sources.map(({ source }) => source),
+      proxyProfiles: profiles,
+      proxyRules: sortedProxyRules(configuration.rules).map((rule, order) => ({ ...rule, order })),
+      proxyRuleSources: [...proxyRuleSources]
+        .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id))
+        .map((source, order) => ({ ...source, order })),
       proxyRouting: configuration.routing,
       activeProxyId: 'direct',
     });
   });
+  for (const sourceId of removedSourceIds) void deleteSource(sourceId).catch(() => undefined);
+  for (const source of proxyRuleSources) {
+    if (source.revision) void pruneSourceRevisions(source.id, source.revision).catch(() => undefined);
+    else void deleteSource(source.id).catch(() => undefined);
+  }
+  return saved;
 }
 
 export async function setProxyAuthPassword(profileId: string, password: string): Promise<void> {

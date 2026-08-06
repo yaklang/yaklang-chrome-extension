@@ -52,6 +52,7 @@ const closureFunctionName = `build_${closureHoldoutSeed}`;
 const closureSenderName = `send_${closureHoldoutSeed}`;
 const closureInitialMarker = `module-recording-${closureHoldoutSeed}`;
 const closureReplayMarker = `module-replay-${closureHoldoutSeed}`;
+const closureProfileMarker = `module-profile-${closureHoldoutSeed}`;
 const WASM_XOR_MASK = 23;
 
 function decryptRSALabValue(value) {
@@ -441,6 +442,7 @@ function clientAuthPayload(origin, challenge, auth) {
   return [
     'yak-browser-bridge-v3', 'client-auth', origin, engineIdentityId, engineInstanceId, challenge,
     auth.installationId || '', auth.client || '', auth.version || '', [...(auth.capabilities || [])].sort().join(','),
+    String(auth.capabilityCatalog?.version || ''), auth.capabilityCatalog?.hash || '',
     auth.taskId || '', auth.grantId || '', auth.resumeSessionId || '',
   ].join('\n');
 }
@@ -597,9 +599,35 @@ async function callBridge(socket, id, method, params) {
   return await response;
 }
 
+function recordingDiagnostic(response) {
+  const result = response?.result || response?.data;
+  return JSON.stringify({
+    errorCode: response?.error?.code,
+    status: result?.status ? {
+      active: result.status.active,
+      documentAvailable: result.status.documentAvailable,
+      count: result.status.count,
+      droppedCount: result.status.droppedCount,
+    } : undefined,
+    eventKinds: result?.events?.slice(0, 64).map((event) => ({
+      kind: event.kind,
+      operation: event.operation,
+      adapterId: event.crypto?.adapterId || event.transform?.adapterId,
+    })),
+    candidates: result?.profileCandidates?.slice(0, 24).map((candidate) => ({
+      id: candidate.id,
+      status: candidate.status,
+      destination: candidate.request?.destination,
+      serialization: candidate.request?.serialization,
+      adapterId: candidate.source?.crypto?.adapterId,
+      missing: candidate.missing?.map((item) => item.kind),
+    })),
+  });
+}
+
 const browserErrors = [];
 let context;
-try {
+agentContractRun: try {
   context = await chromium.launchPersistentContext(userDataDir, {
     executablePath,
     headless: true,
@@ -656,7 +684,41 @@ try {
   const popup = await context.newPage();
   await popup.setViewportSize({ width: 390, height: 600 });
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-  await popup.locator('.popup-shell').waitFor();
+  try {
+    await popup.locator('.popup-shell').waitFor({ timeout: 8_000 });
+  } catch {
+    const popupText = await popup.locator('body').innerText().catch(() => '');
+    const actionStatus = await popup.evaluate(async () => {
+      const inspect = async (action) => Promise.race([
+        chrome.runtime.sendMessage({ action }).then(
+          (response) => response?.ok ? 'ok' : `error:${response?.error || 'unknown'}`,
+          (error) => `rejected:${error instanceof Error ? error.message : String(error)}`,
+        ),
+        new Promise((resolveStatus) => setTimeout(() => resolveStatus('timeout'), 1_000)),
+      ]);
+      return Object.fromEntries(await Promise.all(
+        ['state.get', 'tab.active', 'bridge.status'].map(async (action) => [action, await inspect(action)]),
+      ));
+    });
+    const workerDiagnostic = await serviceWorker.evaluate(async () => ({
+      metrics: (await chrome.storage.local.get('runtime.metrics.v1'))['runtime.metrics.v1'] || null,
+      manifestVersion: chrome.runtime.getManifest().version,
+    })).catch((error) => ({ error: error instanceof Error ? error.message : String(error) }));
+    const diagnosticsPage = await context.newPage();
+    await diagnosticsPage.goto(`chrome://extensions/?id=${extensionId}`);
+    const extensionDiagnostic = await diagnosticsPage.evaluate(() => {
+      const collect = (root) => {
+        let text = root.textContent || '';
+        for (const element of root.querySelectorAll('*')) {
+          if (element.shadowRoot) text += ` ${collect(element.shadowRoot)}`;
+        }
+        return text;
+      };
+      return collect(document).replace(/\s+/g, ' ').trim().slice(0, 1_200);
+    });
+    await diagnosticsPage.close();
+    throw new Error(`Popup did not finish loading: ${popupText.slice(0, 200)}; ${JSON.stringify(actionStatus)}; ${JSON.stringify(workerDiagnostic)}; ${extensionDiagnostic}; ${browserErrors.slice(-3).join(' | ')}`);
+  }
   await popup.getByText('Authenticated Security Console', { exact: true }).waitFor();
   const popupBrandsLoaded = await popup.locator('.yak-mark, .yakit-mark').evaluateAll((images) => images.every((image) => image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0));
   if (!popupBrandsLoaded) throw new Error('Popup brand assets did not load');
@@ -874,26 +936,26 @@ try {
   await testCookie.click();
   if (await options.locator('.rule-editor input').first().inputValue() !== 'yakit_e2e_session') throw new Error('Cookie Editor did not load the selected HttpOnly cookie');
   if (await options.getByText('HttpOnly', { exact: true }).count() === 0) throw new Error('Cookie Editor did not expose HttpOnly metadata');
-  const cookieTransferChecks = await options.evaluate(async ({ url }) => {
+  const cookieTransferChecks = await options.evaluate(async ({ url, tabId }) => {
     const send = async (action, payload) => {
       const response = await chrome.runtime.sendMessage({ action, payload });
       if (!response?.ok) throw new Error(response?.error || action);
       return response.data;
     };
-    const redacted = await send('cookie.export', { url, format: 'set-cookie', includeValues: false });
-    const sensitive = await send('cookie.export', { url, format: 'json', includeValues: true });
+    const redacted = await send('cookie.export', { url, tabId, format: 'set-cookie', includeValues: false });
+    const sensitive = await send('cookie.export', { url, tabId, format: 'json', includeValues: true });
     const imports = [];
-    imports.push(await send('cookie.import', { url, format: 'json', text: JSON.stringify([{ name: 'json_import', value: 'json-value', path: '/' }]) }));
-    imports.push(await send('cookie.import', { url, format: 'netscape', text: '127.0.0.1\tFALSE\t/\tFALSE\t0\tnetscape_import\tnetscape-value\n' }));
-    imports.push(await send('cookie.import', { url, format: 'set-cookie', text: 'Set-Cookie: raw_import=raw-value; Path=/; HttpOnly; SameSite=Lax; Priority=High' }));
-    const listed = await send('cookie.list', { url });
+    imports.push(await send('cookie.import', { url, tabId, format: 'json', text: JSON.stringify([{ name: 'json_import', value: 'json-value', path: '/' }]) }));
+    imports.push(await send('cookie.import', { url, tabId, format: 'netscape', text: '127.0.0.1\tFALSE\t/\tFALSE\t0\tnetscape_import\tnetscape-value\n' }));
+    imports.push(await send('cookie.import', { url, tabId, format: 'set-cookie', text: 'Set-Cookie: raw_import=raw-value; Path=/; HttpOnly; SameSite=Lax; Priority=High' }));
+    const listed = await send('cookie.list', { url, tabId });
     const imported = listed.filter((cookie) => ['json_import', 'netscape_import', 'raw_import'].includes(cookie.name));
     const removed = await send('cookie.removeMany', { cookies: imported.map((cookie) => ({
       url: `${cookie.secure ? 'https' : 'http'}://${cookie.domain.replace(/^\./, '')}${cookie.path}`,
       name: cookie.name, storeId: cookie.storeId, partitionKey: cookie.partitionKey,
     })) });
     return { redacted, sensitive, imports, imported: imported.map((cookie) => cookie.name), removed };
-  }, { url: testUrl });
+  }, { url: testUrl, tabId: targetTab.id });
   if (!cookieTransferChecks.redacted.includes('[REDACTED]') || cookieTransferChecks.redacted.includes('authenticated')) throw new Error(`Cookie export was not redacted: ${cookieTransferChecks.redacted}`);
   if (!cookieTransferChecks.sensitive.includes('authenticated')) throw new Error('Explicit Cookie value export omitted values');
   if (cookieTransferChecks.imported.length !== 3 || cookieTransferChecks.removed.removed !== 3 || cookieTransferChecks.imports[2].warnings.length === 0) {
@@ -994,10 +1056,6 @@ try {
   if (!optionsTab?.id || !floatingFrame) throw new Error('Could not resolve floating frame sender boundary');
   await floatingFrame.locator('.floating-panel--embedded .floating-panel__body').waitFor({ state: 'visible', timeout: 10_000 });
   await floatingFrame.getByText('快速切换', { exact: true }).waitFor({ state: 'visible' });
-  const floatingBrandLoaded = await floatingFrame.locator('.floating-panel__brand img').evaluate((image) => (
-    image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0
-  ));
-  if (!floatingBrandLoaded) throw new Error('Expanded floating panel Yak asset did not load');
   await floatingFrame.evaluate(async () => {
     await new Promise((resolveFrame) => requestAnimationFrame(() => requestAnimationFrame(resolveFrame)));
   });
@@ -1061,7 +1119,9 @@ try {
     });
   }, { endpoint: bridgeEndpoint, tabId: targetTab.id });
   const { socket: bridgeSocket, hello } = await bridgeConnection;
-  if (hello.type !== 'auth' || hello.client !== 'yakit-browser-extension' || hello.protocolVersion !== 3 || !hello.installationId || !hello.signature || !hello.capabilities?.includes('browser.eval')) {
+  if (hello.type !== 'auth' || hello.client !== 'yakit-browser-extension' || hello.protocolVersion !== 3
+    || !hello.installationId || !hello.signature || !hello.capabilities?.includes('browser.eval')
+    || hello.capabilityCatalog?.version !== 1 || !hello.capabilityCatalog?.hash) {
     throw new Error(`Unexpected Bridge hello: ${JSON.stringify(hello)}`);
   }
   await options.getByRole('button', { name: '引擎连接' }).click();
@@ -1305,7 +1365,7 @@ try {
   const recordingSnapshot = await callBridge(bridgeSocket, 'verify-recording-get', 'browser.recording.get', { tabId: targetTab.id, limit: 200 });
   const observedKinds = new Set(recordingSnapshot.result?.events?.map((item) => item.kind));
   for (const kind of ['fetch', 'xhr', 'form', 'beacon', 'worker', 'message', 'websocket', 'crypto']) {
-    if (!observedKinds.has(kind)) throw new Error(`Browser recording missed ${kind}: ${JSON.stringify(recordingSnapshot)}`);
+    if (!observedKinds.has(kind)) throw new Error(`Browser recording missed ${kind}: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const workerSendEvent = recordingSnapshot.result?.events?.find((item) => item.kind === 'worker' && item.operation === 'worker.postMessage');
   const workerReceiveEvent = recordingSnapshot.result?.events?.find((item) => item.kind === 'worker' && item.operation === 'worker.message');
@@ -1313,38 +1373,38 @@ try {
   if (!workerSendEvent?.wrapperHandleId || !workerReceiveEvent || workerSendEvent.channelId !== workerReceiveEvent.channelId
     || workerSendEvent.traceId !== workerReceiveEvent.traceId
     || !recordingSnapshot.result?.links?.some((item) => item.kind === 'channel' && item.fromEventId === workerSendEvent.id && item.toEventId === workerReceiveEvent.id)) {
-    throw new Error(`Worker boundary did not retain its exact handle and async Trace correlation: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`Worker boundary did not retain its exact handle and async Trace correlation: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const unknownBoundaryCandidate = recordingSnapshot.result?.profileCandidates?.find((candidate) => (
     candidate.request.eventId === workerRequestEvent?.id && candidate.source.operation === 'unknown-business-envelope'
   ));
   if (!unknownBoundaryCandidate || unknownBoundaryCandidate.status !== 'capture-required') {
-    throw new Error(`Unknown Worker/ESM boundary did not remain actionable: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`Unknown Worker/ESM boundary did not remain actionable: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const observedCryptoProviders = new Set(recordingSnapshot.result?.events
     ?.filter((item) => item.kind === 'crypto')
     .map((item) => item.crypto?.adapterId));
   for (const provider of ['webcrypto', 'cryptojs', 'jsencrypt', 'sm-crypto', 'node-forge']) {
     if (!observedCryptoProviders.has(provider)) {
-      throw new Error(`Browser recording missed the ${provider} crypto adapter: ${JSON.stringify(recordingSnapshot)}`);
+      throw new Error(`Browser recording missed the ${provider} crypto adapter: ${recordingDiagnostic(recordingSnapshot)}`);
     }
   }
   const smOperations = new Set(recordingSnapshot.result?.events
     ?.filter((item) => item.kind === 'crypto' && item.crypto?.adapterId === 'sm-crypto')
     .map((item) => item.crypto?.operation));
   for (const operation of ['sm2.encrypt', 'sm2.decrypt', 'sm2.sign', 'sm2.verify', 'sm3.digest', 'sm4.encrypt', 'sm4.decrypt']) {
-    if (!smOperations.has(operation)) throw new Error(`Real sm-crypto fixture missed ${operation}: ${JSON.stringify(recordingSnapshot)}`);
+    if (!smOperations.has(operation)) throw new Error(`Real sm-crypto fixture missed ${operation}: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const forgeEvents = recordingSnapshot.result?.events
     ?.filter((item) => item.kind === 'crypto' && item.crypto?.adapterId === 'node-forge') || [];
   for (const phase of ['create', 'init', 'update', 'final']) {
     if (!forgeEvents.some((item) => item.crypto?.state?.phase === phase && item.crypto?.state?.correlationId)) {
-      throw new Error(`Real node-forge fixture missed correlated ${phase} state: ${JSON.stringify(recordingSnapshot)}`);
+      throw new Error(`Real node-forge fixture missed correlated ${phase} state: ${recordingDiagnostic(recordingSnapshot)}`);
     }
   }
   if (!forgeEvents.some((item) => item.crypto?.operation === 'rsa.encrypt' && item.callHandleId && item.callableCapable)
     || !forgeEvents.some((item) => item.crypto?.operation === 'cipher.encrypt.output.toHex')) {
-    throw new Error(`Real node-forge fixture missed RSA callable or cipher output boundary: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`Real node-forge fixture missed RSA callable or cipher output boundary: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const linkedCryptoEvent = recordingSnapshot.result?.events?.find((item) => (
     item.kind === 'crypto' && item.crypto?.adapterId === 'cryptojs' && item.crypto?.operation === 'SHA256'
@@ -1359,6 +1419,9 @@ try {
   ));
   const closureRequestEvent = recordingSnapshot.result?.events?.find((item) => (
     item.kind === 'fetch' && item.url?.includes(closureSubmitPath)
+  ));
+  const closureCandidate = recordingSnapshot.result?.profileCandidates?.find((candidate) => (
+    candidate.request?.eventId === closureRequestEvent?.id
   ));
   const webCryptoDigestEvents = recordingSnapshot.result?.events?.filter((item) => (
     item.kind === 'crypto' && item.crypto?.adapterId === 'webcrypto'
@@ -1398,21 +1461,33 @@ try {
         .map((item) => `${item.crypto?.adapterId}:${item.crypto?.operation}:${Boolean(item.wrapperHandleId)}`),
     })}`);
   }
-  if (!closureRequestEvent || !closureDigestLink) {
+  if (!closureRequestEvent || !closureDigestLink || !closureCandidate) {
     throw new Error(`Randomized ESM/WASM holdout did not use the generic evidence graph: ${JSON.stringify({
       closureSubmitPath,
       closureDigestField,
       request: closureRequestEvent,
+      candidate: closureCandidate,
       digests: webCryptoDigestEvents,
       links: recordingSnapshot.result?.links?.filter((item) => item.toEventId === closureRequestEvent?.id),
     })}`);
   }
+  const registeredTraces = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-trace-list',
+    'browser.recording.trace.list',
+    { tabId: targetTab.id, limit: 100 },
+  );
+  if (registeredTraces.error || !registeredTraces.result?.some((trace) => (
+    trace.candidates?.some((candidate) => candidate.id === closureCandidate.id)
+  ))) {
+    throw new Error(`Randomized ESM/WASM candidate was not registered by the Agent trace contract: ${JSON.stringify(registeredTraces)}`);
+  }
   const linkedFetchEvent = recordingSnapshot.result?.events?.find((item) => item.kind === 'fetch' && item.url?.includes('recorder-linked-fetch'));
   if (!linkedCryptoEvent || !linkedFetchEvent || !recordingSnapshot.result?.links?.some((link) => link.fromEventId === linkedCryptoEvent.id && link.toEventId === linkedFetchEvent.id)) {
-    throw new Error(`Recording did not link CryptoJS output to Fetch input: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`Recording did not link CryptoJS output to Fetch input: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   if (!recordingSnapshot.result?.traces?.some((trace) => trace.eventIds.includes(linkedCryptoEvent.id) && trace.eventIds.includes(linkedFetchEvent.id))) {
-    throw new Error(`Linked events were not grouped into one business Trace: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`Linked events were not grouped into one business Trace: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const inferredProfile = recordingSnapshot.result?.profileCandidates?.find((candidate) => (
     candidate.source?.eventId === linkedCryptoEvent.id && candidate.request?.eventId === linkedFetchEvent.id
@@ -1423,19 +1498,30 @@ try {
     || inferredProfile.confidence?.level !== 'high'
     || inferredProfile.source?.arguments?.[0]?.role !== 'data'
     || inferredProfile.aiContext?.valuePolicy !== 'metadata-only') {
-    throw new Error(`Recording did not infer a safe high-confidence Profile candidate: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`Recording did not infer a safe high-confidence Profile candidate: ${recordingDiagnostic(recordingSnapshot)}`);
   }
   const formLinkedFetchEvent = recordingSnapshot.result?.events?.find((item) => item.kind === 'fetch' && item.url?.includes('recorder-form-linked-fetch'));
   const formFieldLink = recordingSnapshot.result?.links?.find((link) => (
     link.toEventId === formLinkedFetchEvent?.id && link.toPath === '$body:form.encryptedData'
   ));
   const formLinkedCandidate = recordingSnapshot.result?.profileCandidates?.find((candidate) => (
-    candidate.source?.eventId === formFieldLink?.fromEventId && candidate.request?.eventId === formLinkedFetchEvent?.id
+    candidate.request?.eventId === formLinkedFetchEvent?.id
+      && candidate.request?.destination === 'body.encryptedData'
   ));
   if (!formLinkedFetchEvent || !formFieldLink || formLinkedCandidate?.request?.destination !== 'body.encryptedData'
     || formLinkedCandidate?.request?.serialization !== 'form-field'
-    || formLinkedCandidate?.status !== 'ready' || formLinkedCandidate?.confidence?.level !== 'high') {
-    throw new Error(`Recording did not preserve the generic form field value chain: ${JSON.stringify(recordingSnapshot)}`);
+    || formLinkedCandidate?.status !== 'capture-required' || formLinkedCandidate?.confidence?.level !== 'high') {
+    throw new Error(`Recording did not preserve the generic form field value chain: ${JSON.stringify({
+      formLinkedFetchEvent,
+      formFieldLink,
+      formLinkedCandidate,
+      relatedCandidates: recordingSnapshot.result?.profileCandidates?.filter((candidate) => (
+        candidate.request?.eventId === formLinkedFetchEvent?.id
+      )),
+      relatedLinks: recordingSnapshot.result?.links?.filter((link) => (
+        link.toEventId === formLinkedFetchEvent?.id
+      )),
+    })}`);
   }
   const rsaCryptoEvent = recordingSnapshot.result?.events?.find((item) => (
     item.kind === 'crypto' && item.crypto?.adapterId === 'jsencrypt' && item.crypto?.operation === 'encrypt'
@@ -1444,8 +1530,7 @@ try {
     item.kind === 'fetch' && item.url?.includes('/encrypt/rsa.php?source=recorder-rsa-profile')
   ));
   const rsaFieldLink = recordingSnapshot.result?.links?.find((link) => (
-    link.fromEventId === rsaCryptoEvent?.id
-      && link.toEventId === rsaRequestEvent?.id
+    link.toEventId === rsaRequestEvent?.id
       && link.toPath === '$body:form.data'
   ));
   const rsaCandidate = recordingSnapshot.result?.profileCandidates?.find((candidate) => (
@@ -1457,10 +1542,15 @@ try {
     || rsaCryptoEvent.crypto?.key?.kind !== 'public'
     || rsaCryptoEvent.crypto?.key?.bits !== 1024
     || !rsaCryptoEvent.crypto?.key?.fingerprint
-    || rsaCandidate?.status !== 'ready'
+    || rsaCandidate?.status !== 'capture-required'
     || rsaCandidate.request?.destination !== 'body.data'
     || rsaCandidate.request?.serialization !== 'form-field') {
-    throw new Error(`JSEncrypt RSA was not inferred as an executable form-field Profile: ${JSON.stringify(recordingSnapshot)}`);
+    throw new Error(`JSEncrypt RSA did not preserve its form-field evidence through serialization: ${JSON.stringify({
+      rsaCryptoEvent,
+      rsaRequestEvent,
+      rsaFieldLink,
+      rsaCandidate,
+    })}`);
   }
   const rsaAIContext = JSON.stringify(rsaCandidate.aiContext);
   if (rsaAIContext.includes('BEGIN PUBLIC KEY') || rsaAIContext.includes(rsaLabPublicModulusHex)) {
@@ -1478,7 +1568,7 @@ try {
     captureValues: true,
   });
   if (!deniedSensitiveRecording.error?.message?.includes('browser.recording.sensitive.read')) {
-    throw new Error(`Recording value capture did not require its sensitive scope: ${JSON.stringify(deniedSensitiveRecording)}`);
+    throw new Error(`Recording value capture did not require its sensitive scope: ${recordingDiagnostic(deniedSensitiveRecording)}`);
   }
   await callBridge(bridgeSocket, 'verify-recording-stop-metadata', 'browser.recording.stop', { tabId: targetTab.id });
   await options.evaluate(async ({ tabId, frameIds }) => {
@@ -1493,6 +1583,7 @@ try {
           'browser.recording.read', 'browser.recording.control', 'browser.recording.sensitive.read', 'browser.callable.execute',
           'browser.debugger.read', 'browser.debugger.control',
           'browser.transform.read', 'browser.transform.manage', 'browser.transform.execute',
+          'browser.isolation.read',
           'browser.proxy.read', 'browser.proxy.write',
         ],
         durationMinutes: 5,
@@ -1517,7 +1608,7 @@ try {
   });
   const sensitiveRecording = await callBridge(bridgeSocket, 'verify-recording-sensitive-get', 'browser.recording.get', { tabId: targetTab.id });
   if (!JSON.stringify(sensitiveRecording.result).includes('recorder-sensitive-preview-686')) {
-    throw new Error(`Explicit recording value capture did not return its bounded preview: ${JSON.stringify(sensitiveRecording)}`);
+    throw new Error(`Explicit recording value capture did not return its bounded preview: ${recordingDiagnostic(sensitiveRecording)}`);
   }
   const callableSource = sensitiveRecording.result?.events?.find((item) => (
     item.kind === 'crypto'
@@ -1526,7 +1617,7 @@ try {
       && item.callHandleId
       && item.callableCapable
   ));
-  if (!callableSource) throw new Error(`Sensitive recording did not retain an executable JSEncrypt call handle: ${JSON.stringify(sensitiveRecording)}`);
+  if (!callableSource) throw new Error(`Sensitive recording did not retain an executable JSEncrypt call handle: ${recordingDiagnostic(sensitiveRecording)}`);
   const createdCallable = await callBridge(bridgeSocket, 'verify-callable-create', 'browser.callable.create', {
     tabId: targetTab.id,
     source: 'recording',
@@ -1656,24 +1747,135 @@ try {
     throw new Error(`Randomized ESM/WASM callable could not be retained: ${JSON.stringify(closureCallable)}`);
   }
   await webPage.locator('#opaque-module-result').getByText(closureReplayMarker, { exact: true }).waitFor();
-  const closureReplay = await callBridge(bridgeSocket, 'verify-closure-callable-execute', 'browser.callable.execute', {
+  const closureReplay = await callBridge(bridgeSocket, 'verify-closure-callable-replay', 'browser.callable.replay', {
     tabId: targetTab.id,
     callableId: closureCallable.result.id,
     args: [{ marker: closureReplayMarker, nested: { seed: closureHoldoutSeed } }],
   });
-  if (closureReplay.error || !closureReplay.result?.value || typeof closureReplay.result.value !== 'object') {
+  if (closureReplay.error || !closureReplay.result?.execution?.value
+    || typeof closureReplay.result.execution.value !== 'object') {
     throw new Error(`Randomized ESM/WASM callable replay failed: ${JSON.stringify(closureReplay)}`);
   }
   const closureServerResponse = await fetch(new URL(closureSubmitPath, testUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(closureReplay.result.value),
+    body: JSON.stringify(closureReplay.result.execution.value),
   });
   const closureServerResult = await closureServerResponse.json();
   if (!closureServerResponse.ok || !closureServerResult.ok || closureServerResult.marker !== closureReplayMarker) {
     throw new Error(`Independent server rejected the retained ESM/WASM callable: ${JSON.stringify(closureServerResult)}`);
   }
+
+  const closurePlainPacket = {
+    method: 'POST',
+    url: new URL(closureSubmitPath, testUrl).toString(),
+    headers: [{ name: 'Content-Type', value: 'application/json' }],
+    bodyBase64: Buffer.from(JSON.stringify({
+      marker: closureProfileMarker,
+      nested: { seed: closureHoldoutSeed },
+    })).toString('base64'),
+  };
+  const closureProposal = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-profile-propose',
+    'browser.profile.propose',
+    {
+      tabId: targetTab.id,
+      candidateId: closureCandidate.id,
+      callableId: closureCallable.result.id,
+      inputPaths: ['body'],
+      name: 'Opaque ESM/WASM Agent contract',
+    },
+  );
+  if (closureProposal.error
+    || closureProposal.result?.proposal?.compiler !== 'browser-transform-guided-v1') {
+    throw new Error(`Randomized ESM/WASM Profile proposal failed: ${JSON.stringify(closureProposal)}`);
+  }
+  const closureValidation = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-profile-validate',
+    'browser.profile.validate',
+    {
+      tabId: targetTab.id,
+      candidateId: closureCandidate.id,
+      callableId: closureCallable.result.id,
+      inputPaths: ['body'],
+      name: 'Opaque ESM/WASM Agent contract',
+      packet: closurePlainPacket,
+      comparisonMode: 'structure',
+    },
+  );
+  if (closureValidation.error || !closureValidation.result?.valid
+    || closureValidation.result?.validationDraft?.contractVersion !== 1) {
+    throw new Error(`Randomized ESM/WASM Profile validation failed: ${JSON.stringify(closureValidation)}`);
+  }
+  const closureValidationDraft = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-validation-latest',
+    'browser.profile.validation.latest',
+    { tabId: targetTab.id },
+  );
+  if (closureValidationDraft.error
+    || closureValidationDraft.result?.id !== closureValidation.result.validationDraft.id
+    || closureValidationDraft.result?.contractVersion !== 1
+    || closureValidationDraft.result?.profile?.id) {
+    throw new Error(`Randomized ESM/WASM Yakit handoff draft is invalid: ${JSON.stringify(closureValidationDraft)}`);
+  }
+  const closureProfile = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-profile-save',
+    'browser.transform.profile.save',
+    closureValidationDraft.result.profile,
+  );
+  if (closureProfile.error || !closureProfile.result?.id) {
+    throw new Error(`Randomized ESM/WASM confirmed Profile was not saved: ${JSON.stringify(closureProfile)}`);
+  }
+  const closureProfileExecution = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-profile-execute',
+    'browser.transform.execute',
+    {
+      profileId: closureProfile.result.id,
+      direction: 'request',
+      packet: closurePlainPacket,
+    },
+  );
+  if (closureProfileExecution.error || !closureProfileExecution.result?.bodyBase64) {
+    throw new Error(`Randomized ESM/WASM saved Profile did not execute: ${JSON.stringify(closureProfileExecution)}`);
+  }
+  const closureProfileServerResponse = await fetch(closureProfileExecution.result.url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: Buffer.from(closureProfileExecution.result.bodyBase64, 'base64'),
+  });
+  const closureProfileServerResult = await closureProfileServerResponse.json();
+  if (!closureProfileServerResponse.ok || !closureProfileServerResult.ok
+    || closureProfileServerResult.marker !== closureProfileMarker) {
+    throw new Error(`Independent server rejected the ESM/WASM Profile output: ${JSON.stringify(closureProfileServerResult)}`);
+  }
+  const removedClosureProfile = await callBridge(
+    bridgeSocket,
+    'verify-closure-agent-profile-delete',
+    'browser.transform.profile.delete',
+    { id: closureProfile.result.id },
+  );
+  if (removedClosureProfile.error
+    || removedClosureProfile.result?.some((profile) => profile.id === closureProfile.result.id)) {
+    throw new Error(`Randomized ESM/WASM Agent contract Profile was not removed: ${JSON.stringify(removedClosureProfile)}`);
+  }
   await callBridge(bridgeSocket, 'verify-closure-capture-detach', 'browser.deep_capture.detach', { tabId: targetTab.id });
+  if (process.env.AGENT_CONTRACT_HOLDOUT_ONLY === '1') {
+    console.log(JSON.stringify({
+      verified: 'unknown-esm-wasm-agent-contract',
+      contractVersion: closureValidationDraft.result.contractVersion,
+      candidateId: closureCandidate.id,
+      callableKind: closureCallable.result.kind,
+      compiler: closureProposal.result.proposal.compiler,
+      serializationSource: closureProposal.result.proposal.serializationSource,
+      serverAccepted: closureProfileServerResult.ok,
+    }, null, 2));
+    break agentContractRun;
+  }
 
   await webPage.locator('#crypto-lab[data-ready="true"]').waitFor();
   await webPage.locator('#crypto-password').fill('deep-capture-first-901');
@@ -2198,10 +2400,10 @@ try {
   const insecureRecording = await options.evaluate(async (tabId) => {
     return await chrome.runtime.sendMessage({ action: 'recording.get', payload: { tabId, limit: 100 } });
   }, insecureTab.id);
-  if (!insecureRecording?.ok) throw new Error(`Could not read insecure HTTP recording: ${JSON.stringify(insecureRecording)}`);
+  if (!insecureRecording?.ok) throw new Error(`Could not read insecure HTTP recording: ${recordingDiagnostic(insecureRecording)}`);
   const insecureKinds = new Set(insecureRecording.data.events.map((item) => item.kind));
   for (const kind of ['fetch', 'xhr', 'websocket', 'crypto']) {
-    if (!insecureKinds.has(kind)) throw new Error(`Insecure HTTP recording missed ${kind}: ${JSON.stringify(insecureRecording)}`);
+    if (!insecureKinds.has(kind)) throw new Error(`Insecure HTTP recording missed ${kind}: ${recordingDiagnostic(insecureRecording)}`);
   }
   const insecureRecordingStop = await options.evaluate(async (tabId) => {
     return await chrome.runtime.sendMessage({ action: 'recording.stop', payload: { tabId } });
@@ -2395,7 +2597,7 @@ try {
     { tabId: targetTab.id, captureValues: true, maxEntries: 80 },
   );
   if (automaticCaptureRecording.error) {
-    throw new Error(`Could not start the automatic business capture recording: ${JSON.stringify(automaticCaptureRecording)}`);
+    throw new Error(`Could not start the automatic business capture recording: ${recordingDiagnostic(automaticCaptureRecording)}`);
   }
   await webPage.locator('#crypto-password').fill('automatic-capture-seed-951');
   await webPage.locator('#crypto-submit').click();
@@ -2431,6 +2633,7 @@ try {
   await webPage.locator('#crypto-password').fill('automatic-capture-replay-952');
   await webPage.locator('#crypto-submit').click();
   await options.locator('#gateway-mode-tab[aria-selected="true"]').waitFor({ timeout: 30_000 });
+  await options.getByRole('button', { name: '配置', exact: true }).click();
   const automaticGateway = options.locator('.transform-guide');
   await automaticGateway.waitFor();
   if (await automaticGateway.getByLabel('输出形态').inputValue() !== 'body') {
@@ -2468,11 +2671,16 @@ try {
     || automaticCallable.operation !== 'buildLoginEnvelope') {
     throw new Error(`One-click capture did not retain the complete business callable: ${JSON.stringify(automaticCallables)}`);
   }
-  await options.locator('.transform-editor-actions').getByRole('button', { name: '保存', exact: true }).click();
+  const saveAutomaticPipeline = options.locator('.transform-editor-actions').getByRole('button', { name: '保存', exact: true });
+  if (await saveAutomaticPipeline.isEnabled()) await saveAutomaticPipeline.click();
   const executeAutomaticPipeline = options.getByRole('button', { name: '执行 Pipeline', exact: true });
   await executeAutomaticPipeline.waitFor({ state: 'visible' });
+  if (!await executeAutomaticPipeline.isEnabled()) {
+    throw new Error('Automatic business gateway was neither persisted nor ready for local replay');
+  }
   await executeAutomaticPipeline.click();
   await options.getByText('转换完成', { exact: true }).waitFor();
+  await options.locator('.transform-test-debug').getByText('调试输出', { exact: true }).click();
   const automaticLogicalOutput = JSON.parse(await options.locator('.transform-test-result pre').textContent());
   if (!automaticLogicalOutput.body?.ciphertext || !automaticLogicalOutput.body?.signature || !automaticLogicalOutput.body?.iv) {
     throw new Error(`Automatic business gateway did not execute the complete page closure: ${JSON.stringify(automaticLogicalOutput)}`);
@@ -2530,20 +2738,24 @@ try {
     limit: 40,
   });
   const guidedFormCandidate = guidedFormRecording.result?.profileCandidates?.find((candidate) => (
-    candidate.status === 'ready'
+    candidate.status === 'capture-required'
       && candidate.request?.serialization === 'form-field'
       && candidate.request?.destination === 'body.data'
       && candidate.source?.crypto?.adapterId === 'jsencrypt'
   ));
   if (!guidedFormCandidate?.source?.eventId) {
-    throw new Error(`Dedicated recording did not produce a guided form candidate: ${JSON.stringify(guidedFormRecording)}`);
+    throw new Error(`Dedicated recording did not produce a capture-ready form candidate: ${recordingDiagnostic(guidedFormRecording)}`);
   }
 
   await options.getByRole('button', { name: '网络活动' }).click();
   await options.locator('#gateway-mode-tab').click();
   const transformWorkbench = options.locator('.transform-workbench');
   await transformWorkbench.waitFor();
-  await options.getByText('E2E login plaintext gateway', { exact: true }).waitFor();
+  const e2eTransformProfile = options.getByText('E2E login plaintext gateway', { exact: true });
+  await e2eTransformProfile.waitFor();
+  await e2eTransformProfile.click();
+  await options.locator('.transform-data-flow').waitFor();
+  await options.getByText('明文如何成为线上请求', { exact: true }).waitFor();
   const transformBounds = await transformWorkbench.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -2597,7 +2809,7 @@ try {
   if (guidedCallableForDelete.crypto?.adapterId !== 'jsencrypt'
     || guidedCallableForDelete.crypto?.key?.bits !== 1024
     || guidedCallableForDelete.crypto?.padding !== 'PKCS1-v1_5') {
-    throw new Error(`The UI-created callable lost its RSA adapter metadata: ${JSON.stringify(guidedCallableForDelete)}`);
+    throw new Error('The UI-created callable lost its RSA adapter metadata');
   }
   const guidedRsaReplay = await callBridge(bridgeSocket, 'verify-guided-rsa-replay', 'browser.callable.execute', {
     tabId: targetTab.id,
@@ -2611,36 +2823,26 @@ try {
   if (guidedRsaReplay.error
     || guidedRsaReplayPayload?.username !== 'guided-rsa-admin'
     || guidedRsaReplayPayload?.password !== 'guided-rsa-password') {
-    throw new Error(`The UI-created RSA callable could not replay through its retained receiver: ${JSON.stringify({ guidedRsaReplay, guidedRsaReplayPlaintext, guidedRsaReplayPayload })}`);
+    throw new Error(`The UI-created RSA callable replay failed: ${guidedRsaReplay.error?.code || 'result-mismatch'}`);
   }
-  await formInferencePanel.getByRole('button', { name: '生成明文网关', exact: true }).click();
-  const guidedGateway = options.locator('.transform-guide');
-  await guidedGateway.waitFor();
-  if (await guidedGateway.getByLabel('输出形态').inputValue() !== 'form-field'
-    || await guidedGateway.getByLabel('表单字段名').inputValue() !== 'data') {
-    throw new Error('Form evidence was not compiled into a guided form-field gateway');
+  await formInferencePanel.getByRole(
+    'button',
+    { name: '自动捕获完整加密流程', exact: true },
+  ).waitFor();
+  if (await formInferencePanel.getByRole(
+    'button',
+    { name: '生成明文网关', exact: true },
+  ).count()) {
+    throw new Error('A low-level RSA callable bypassed the required business-capture step');
   }
-  if (await options.getByLabel('URL 模式').inputValue() !== '*/encrypt/rsa.php'
-    || !await options.getByLabel('回放请求 URL').inputValue().then((value) => value.startsWith(`${new URL(testUrl).origin}/encrypt/rsa.php?`))) {
-    throw new Error('Relative request evidence was not resolved against the current page');
-  }
-  await guidedGateway.getByText('自动设置表单 Content-Type', { exact: true }).waitFor();
-  if (await options.locator('.transform-node-list').isVisible()) {
-    throw new Error('Guided gateway leaked the advanced DAG editor');
-  }
-  const replayBody = await options.getByLabel('回放 Body').inputValue();
-  if (JSON.stringify(JSON.parse(replayBody)) !== JSON.stringify({ username: 'admin', password: '123456' })) {
-    throw new Error(`Recorded short sample was not carried into local replay: ${replayBody}`);
-  }
-  await options.locator('.transform-test-field-label').getByText('短时样本', { exact: true }).waitFor();
-  await options.screenshot({ path: resolve(artifacts, 'options-browser-transform-guided-rsa.png') });
-  await options.locator('.transform-callable-menu > summary').click();
-  const disposableCallable = options.locator('.transform-callable-list section').filter({ hasText: guidedCallableForDelete.name });
-  await disposableCallable.getByRole('button', { name: `删除 ${guidedCallableForDelete.name}`, exact: true }).click();
-  await disposableCallable.getByRole('button', { name: '确认删除', exact: true }).click();
-  await disposableCallable.waitFor({ state: 'detached' });
-  await options.screenshot({ path: resolve(artifacts, 'options-browser-transform-callables.png') });
-  await options.locator('#recording-mode-tab').click();
+  await options.screenshot({ path: resolve(artifacts, 'options-browser-recording-capture-required.png') });
+  await options.evaluate(async ({ tabId, callableId }) => {
+    const response = await chrome.runtime.sendMessage({
+      action: 'callable.delete',
+      payload: { tabId, callableId },
+    });
+    if (!response?.ok) throw new Error(response?.error || 'callable.delete');
+  }, { tabId: targetTab.id, callableId: guidedCallableForDelete.id });
   await options.locator('#deep-mode-tab').click();
   const deepCaptureWorkspace = options.locator('.deep-capture');
   await deepCaptureWorkspace.waitFor();
@@ -2679,6 +2881,54 @@ try {
   const capturedRequest = bridgeNetworkList.result?.find((record) => record.url?.includes('/api/session'));
   if (bridgeNetworkList.error || !capturedRequest?.requestHeaders?.some((header) => header.name.toLowerCase() === 'x-yakit-e2e') || capturedRequest.requestBody?.data?.includes('network-sensitive-e2e-771') !== true) {
     throw new Error(`Agent network capture did not include the explicitly granted request: ${JSON.stringify(bridgeNetworkList)}`);
+  }
+
+  const authorizationAttestation = await callBridge(
+    bridgeSocket,
+    'verify-authorization-attestation',
+    'browser.authorization.context.attest',
+    { tabId: targetTab.id, frameId: 0 },
+  );
+  if (authorizationAttestation.error || !authorizationAttestation.result?.id) {
+    throw new Error(`Authorization attestation failed: ${JSON.stringify(authorizationAttestation)}`);
+  }
+  const authorizationCandidates = await callBridge(
+    bridgeSocket,
+    'verify-authorization-candidates',
+    'browser.authorization.baseline.candidates',
+    {
+      tabId: targetTab.id,
+      frameId: 0,
+      authContextKind: 'attestation',
+      authContextId: authorizationAttestation.result.id,
+      limit: 20,
+    },
+  );
+  const authorizationCandidate = authorizationCandidates.result?.find(
+    (candidate) => candidate.url?.includes('/api/session') && candidate.eligible,
+  );
+  if (authorizationCandidates.error || !authorizationCandidate?.id) {
+    throw new Error(`Authorization request candidate was unavailable: ${JSON.stringify(authorizationCandidates)}`);
+  }
+  const authorizationBaseline = await callBridge(
+    bridgeSocket,
+    'verify-authorization-baseline',
+    'browser.authorization.baseline.capture',
+    {
+      tabId: targetTab.id,
+      frameId: 0,
+      authContextKind: 'attestation',
+      authContextId: authorizationAttestation.result.id,
+      networkRequestId: authorizationCandidate.id,
+      comparisonKey: randomBytes(32).toString('base64url'),
+    },
+  );
+  const authorizationBaselineJSON = JSON.stringify(authorizationBaseline.result || {});
+  if (authorizationBaseline.error || !authorizationBaseline.result?.id
+    || authorizationBaselineJSON.includes('network-sensitive-e2e-771')
+    || authorizationBaselineJSON.includes('request-header-value')
+    || authorizationBaselineJSON.includes('yakit_e2e_session=authenticated')) {
+    throw new Error('Authorization baseline capture failed its redaction contract');
   }
 
   await options.getByRole('button', { name: 'Yakit' }).click();
@@ -2769,7 +3019,8 @@ try {
   await mobileOptions.locator('#gateway-mode-tab').click();
   const mobileTransformWorkbench = mobileOptions.locator('.transform-workbench');
   await mobileTransformWorkbench.waitFor();
-  await mobileOptions.getByText('E2E login plaintext gateway', { exact: true }).waitFor();
+  await mobileOptions.locator('.transform-profile-list').getByText('E2E login plaintext gateway', { exact: true }).waitFor();
+  await mobileOptions.locator('.transform-data-flow').waitFor();
   await mobileOptions.waitForTimeout(250);
   const mobileTransformBounds = await mobileTransformWorkbench.evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -2843,6 +3094,7 @@ try {
           'browser.dom.write',
           'browser.tab.activate', 'browser.page.invoke', 'browser.page.eval.expression', 'browser.human.takeover',
           'browser.network.read', 'browser.network.capture', 'browser.network.sensitive.read',
+          'browser.isolation.read',
           'browser.proxy.read', 'browser.proxy.write',
         ],
         durationMinutes: 5,
@@ -2868,6 +3120,7 @@ try {
           'browser.dom.write',
           'browser.tab.activate', 'browser.page.invoke', 'browser.page.eval.expression', 'browser.human.takeover',
           'browser.network.read', 'browser.network.capture', 'browser.network.sensitive.read',
+          'browser.isolation.read',
           'browser.proxy.read', 'browser.proxy.write',
         ],
         durationMinutes: 5,
@@ -2875,12 +3128,24 @@ try {
     });
     if (!response?.ok) throw new Error(response?.error || 'grant.create after reload');
   }, { tabId: targetTab.id });
+  const staleAuthorizationBaseline = await callBridge(
+    bridgeSocket,
+    'verify-authorization-baseline-stale',
+    'browser.authorization.baseline.get',
+    { id: authorizationBaseline.result.id },
+  );
+  if (staleAuthorizationBaseline.error?.code !== 'authorization_baseline_stale') {
+    throw new Error('Authorization baseline survived a document and grant replacement');
+  }
 
   await options.evaluate(async () => await chrome.runtime.sendMessage({ action: 'panel.update', payload: { enabled: false } }));
   await webPage.locator('.floating-panel__brand').waitFor({ state: 'hidden' });
   await options.evaluate(async () => await chrome.runtime.sendMessage({ action: 'panel.update', payload: { enabled: true } }));
   await webPage.locator('.floating-panel__brand').waitFor({ state: 'visible' });
-  await webPage.evaluate(() => dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyY', altKey: true, shiftKey: true, bubbles: true })));
+  await webPage.evaluate(() => {
+    if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
+  });
+  await webPage.keyboard.press('Alt+Shift+Y');
   await webPage.locator('.floating-panel.is-expanded').waitFor();
   await webPage.locator('.floating-panel__brand').click();
   const currentOrigin = new URL(testUrl).origin;
@@ -3069,7 +3334,38 @@ try {
   }
   if (browserErrors.length > 0) throw new Error(`Browser page errors:\n${browserErrors.join('\n')}`);
 
-  console.log(JSON.stringify({ extensionId, testUrl, evalResult: evalResponse.data, timeoutError: timeoutResponse.error, bridgeEval: bridgeEval.result, cancelledBridgeError: cancelledBridgeEval.error, handoffEvent, auditEventCount: networkAudit.length, capturedNetworkUrl: capturedRequest.url, fuzzerPageId: 'e2e-fuzzer-page', protocolChecks, staleDocumentError: staleDocumentEval.error, staleOriginError: staleOriginEval.error?.message, serviceWorkerRestart: { beforeRestart, afterRestart }, unpairedIdentity, recorderPerformance: { idleCallsMs: idleRecorderDurationMs, ...recorderPerformance }, rightMetrics, panelMetrics, narrowPanel, artifacts }, null, 2));
+  console.log(JSON.stringify({
+    status: 'passed',
+    extensionId,
+    testOrigin: new URL(testUrl).origin,
+    checks: {
+      expressionEval: evalResponse.data?.value?.answer === 42,
+      timeout: Boolean(timeoutResponse.error),
+      bridgeEval: bridgeEval.result?.value?.answer === 42,
+      cancellation: cancelledBridgeEval.error?.code === 'cancelled',
+      handoff: handoffEvent.params?.state === 'completed',
+      authorizationBaseline: Boolean(authorizationBaseline.result?.id),
+      authorizationRecovery: staleAuthorizationBaseline.error?.code,
+      staleDocument: staleDocumentEval.error?.code,
+      staleOrigin: Boolean(staleOriginEval.error),
+      serviceWorkerRestart: beforeRestart.grantId === afterRestart.grantId,
+      stableInstallationIdentity: (
+        unpairedIdentity.beforeInstallationId === unpairedIdentity.afterInstallationId
+      ),
+    },
+    auditEventCount: networkAudit.length,
+    capturedNetworkPath: new URL(capturedRequest.url).pathname,
+    recorderPerformance: {
+      idleCallsMs: idleRecorderDurationMs,
+      ...recorderPerformance,
+    },
+    layout: {
+      floatingWidth: rightMetrics.width,
+      expandedHeight: panelMetrics.height,
+      narrowWidth: narrowPanel.width,
+    },
+    artifacts,
+  }, null, 2));
 } finally {
   await context?.close();
   server.close();

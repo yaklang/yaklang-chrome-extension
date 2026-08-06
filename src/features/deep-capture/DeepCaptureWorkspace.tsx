@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle, Braces, Bug, Check, ChevronDown, ChevronRight, CirclePause, Clock3, Code2, Copy,
-  Crosshair, FileKey2, Fingerprint, Layers3, Play, RefreshCw, ShieldAlert, Sparkles, Trash2, Unplug, Variable, Webhook,
+  Crosshair, FileKey2, Fingerprint, Layers3, Play, RefreshCw, RotateCcw, ShieldAlert, Sparkles, Trash2, Unplug, Variable, Webhook,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import type {
   ActiveTabInfo, BrowserDeepCaptureFrame, BrowserDeepCaptureMatcher, BrowserDeepCaptureStatus,
-  BrowserPageCallable, BrowserPageCallableExecution, BrowserPageCallableTransaction,
+  BrowserPageCallable, BrowserPageCallableExecution,
   BrowserProfileInferenceCandidate, BrowserRecordingEvent,
 } from '@/types/models';
 import './deep-capture-workspace.css';
@@ -21,6 +21,8 @@ interface DeepCaptureWorkspaceProps {
   selectedEvent?: BrowserRecordingEvent;
   selectedCandidate?: BrowserProfileInferenceCandidate;
   autoArmRequest?: number;
+  recoveryProfileId?: string;
+  autoRecoveryRequest?: number;
   busy: boolean;
   run: RunTask;
   onPausedChange?: (paused: boolean) => void;
@@ -29,6 +31,7 @@ interface DeepCaptureWorkspaceProps {
     callable: BrowserPageCallable,
     sample?: CapturedCallableSample,
   ) => void | Promise<void>;
+  onRecoveryCaptured?: (profileId: string) => void | Promise<void>;
 }
 
 const STATUS_LABELS: Record<BrowserDeepCaptureStatus['state'], string> = {
@@ -84,24 +87,6 @@ function jsonPreview(value: unknown): string {
   try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
-function requestTransaction(
-  candidate: BrowserProfileInferenceCandidate,
-  tab: ActiveTabInfo,
-): BrowserPageCallableTransaction {
-  const expectedDestinations = candidate.sources
-    .map((source) => source.destination)
-    .filter((destination): destination is string => Boolean(destination));
-  return {
-    request: {
-      method: candidate.request.method.toUpperCase(),
-      url: new URL(candidate.request.url, tab.url).toString(),
-      expectedDestinations,
-    },
-    inputMode: 'auto',
-    boundaries: ['fetch', 'xhr', 'beacon', 'form'],
-  };
-}
-
 const RISK_LABELS: Record<'network' | 'dom' | 'navigation' | 'storage', string> = {
   network: '包含网络发送',
   dom: '读取或修改 DOM',
@@ -116,7 +101,17 @@ const FRAME_SOURCE_LABELS: Record<BrowserDeepCaptureFrame['sourceKind'], string>
 };
 
 export function DeepCaptureWorkspace({
-  tab, selectedEvent, selectedCandidate, autoArmRequest = 0, busy, run, onPausedChange, onUseRecommendedCallable,
+  tab,
+  selectedEvent,
+  selectedCandidate,
+  autoArmRequest = 0,
+  recoveryProfileId = '',
+  autoRecoveryRequest = 0,
+  busy,
+  run,
+  onPausedChange,
+  onUseRecommendedCallable,
+  onRecoveryCaptured,
 }: DeepCaptureWorkspaceProps) {
   const suggestedMatcher = useMemo(() => eventMatcher(selectedEvent, selectedCandidate), [selectedCandidate, selectedEvent]);
   const [matcherKind, setMatcherKind] = useState<'crypto' | 'boundary' | 'request'>(suggestedMatcher?.kind || 'request');
@@ -142,6 +137,7 @@ export function DeepCaptureWorkspace({
   const [expandedVariableKey, setExpandedVariableKey] = useState('');
   const statusRef = useRef<BrowserDeepCaptureStatus | undefined>(undefined);
   const handledAutoArmRequest = useRef(0);
+  const handledAutoRecoveryRequest = useRef(0);
   const handledAutoCapturePause = useRef(0);
   const automaticFlowRequested = useRef(false);
 
@@ -218,6 +214,23 @@ export function DeepCaptureWorkspace({
       setStatus(next);
     }, '自动分析已武装，请在目标页面重复刚才的操作');
   }, [autoArmRequest, busy, run, status, suggestedMatcher, tab]);
+
+  useEffect(() => {
+    if (!autoRecoveryRequest || handledAutoRecoveryRequest.current >= autoRecoveryRequest
+      || !recoveryProfileId || !tab || !status || busy) return;
+    if (status.state === 'paused') return;
+    handledAutoRecoveryRequest.current = autoRecoveryRequest;
+    void run(async () => {
+      setExecution(undefined);
+      automaticFlowRequested.current = true;
+      const next = await request('transform.recovery.start', { id: recoveryProfileId });
+      setStatus(next);
+      if (next.matcher?.kind === 'request') {
+        setMatcherKind('request');
+        setUrlPattern(next.matcher.urlPattern);
+      }
+    }, '恢复捕获已武装，请在目标页面重复一次原业务操作');
+  }, [autoRecoveryRequest, busy, recoveryProfileId, run, status, tab]);
 
   useEffect(() => {
     if (!tab || !['armed', 'paused', 'attached'].includes(status?.state || '')) return undefined;
@@ -313,6 +326,19 @@ export function DeepCaptureWorkspace({
     setStatus(await request('deep.capture.status', target));
   }, '业务函数已捕获，页面已恢复');
 
+  const captureRecovery = (strategy: 'selected-frame' | 'request-transaction') => run(async () => {
+    if (!recoveryProfileId || !target || !selectedFrame) throw new Error('恢复计划或页面调用帧已经失效');
+    await request('transform.recovery.capture', {
+      id: recoveryProfileId,
+      ...target,
+      callFrameId: selectedFrame.id,
+      strategy,
+    });
+    setCallables(await request('callable.list', target).catch(() => []));
+    setStatus(await request('deep.capture.status', target));
+    await onRecoveryCaptured?.(recoveryProfileId);
+  }, '新页面函数已捕获；请使用本地回放验证后再确认启用');
+
   const recordedRecommendation = selectedCandidate?.status === 'ready'
     && Boolean(selectedCandidate.source.callHandleId)
     ? selectedCandidate : undefined;
@@ -334,7 +360,10 @@ export function DeepCaptureWorkspace({
   useEffect(() => {
     const pause = status?.pause;
     const automatic = pause?.automaticCapture;
-    if (!automaticFlowRequested.current || !paused || !pause || pause.collecting || !target || !tab || selectedCandidate?.status !== 'capture-required'
+    const inferenceCapture = selectedCandidate?.status === 'capture-required';
+    const recoveryCapture = Boolean(recoveryProfileId);
+    if (!automaticFlowRequested.current || !paused || !pause || pause.collecting || !target || !tab
+      || (!inferenceCapture && !recoveryCapture)
       || automatic?.state !== 'ready' || !automatic.frameId || handledAutoCapturePause.current === pause.pausedAt) return;
     const capturedPause = pause;
     const capturedFrameId = automatic.frameId;
@@ -343,6 +372,19 @@ export function DeepCaptureWorkspace({
     automaticFlowRequested.current = false;
     void run(async () => {
       const frame = capturedPause.frames.find((item) => item.id === capturedFrameId);
+      if (recoveryProfileId) {
+        await request('transform.recovery.capture', {
+          id: recoveryProfileId,
+          ...target,
+          callFrameId: capturedFrameId,
+          strategy: captureStrategy,
+        });
+        setCallables(await request('callable.list', target).catch(() => []));
+        setStatus(await request('deep.capture.status', target));
+        await onRecoveryCaptured?.(recoveryProfileId);
+        return;
+      }
+      if (!selectedCandidate) throw new Error('自动推断候选已经失效');
       const callableName = frame?.functionName && frame.functionName !== '(anonymous)'
         ? `${frame.functionName} ${captureStrategy === 'request-transaction' ? '请求事务' : '业务封装'}`
         : undefined;
@@ -352,7 +394,7 @@ export function DeepCaptureWorkspace({
           source: 'deep-capture',
           strategy: 'request-transaction',
           callFrameId: capturedFrameId,
-          transaction: requestTransaction(selectedCandidate, tab),
+          candidateId: selectedCandidate.id,
           ...(callableName ? { name: callableName } : {}),
         })
         : await request('callable.create', {
@@ -360,6 +402,7 @@ export function DeepCaptureWorkspace({
           source: 'deep-capture',
           strategy: 'selected-frame',
           callFrameId: capturedFrameId,
+          candidateId: selectedCandidate.id,
           ...(callableName ? { name: callableName } : {}),
         });
       setCallables((current) => [...current.filter((item) => item.id !== callable.id), callable]);
@@ -370,10 +413,22 @@ export function DeepCaptureWorkspace({
         callable,
         captureStrategy === 'request-transaction' ? undefined : capturedCallableSample(frame),
       );
-    }, captureStrategy === 'request-transaction'
-      ? '页面请求事务与明文网关已自动保存，真实发送将在回放时被截获'
-      : '完整业务加密流程与明文网关已自动保存');
-  }, [onUseRecommendedCallable, paused, run, selectedCandidate, status?.pause, tab, target]);
+    }, recoveryProfileId
+      ? '新页面函数已捕获，旧网关继续停用；请完成本地回放验证'
+      : captureStrategy === 'request-transaction'
+        ? '页面请求事务与明文网关已自动保存，真实发送将在回放时被截获'
+        : '完整业务加密流程与明文网关已自动保存');
+  }, [
+    onRecoveryCaptured,
+    onUseRecommendedCallable,
+    paused,
+    recoveryProfileId,
+    run,
+    selectedCandidate,
+    status?.pause,
+    tab,
+    target,
+  ]);
 
   const useRecordedRecommendation = () => run(async () => {
     if (!target || !recordedRecommendation?.source.callHandleId) throw new Error('推荐调用已经失效');
@@ -417,12 +472,28 @@ export function DeepCaptureWorkspace({
   const selectedCaptureReady = selectedFrame?.sourceKind === 'page'
     && selectedFrame.functionInspection?.resolved
     && !selectedFrame.functionInspection.riskFlags.length;
+  const recoveryCaptureStrategy = selectedFrame?.functionInspection?.riskFlags.length
+    ? 'request-transaction' as const
+    : 'selected-frame' as const;
+  const recoverySelectionReady = selectedFrame?.sourceKind === 'page'
+    && selectedFrame.functionInspection?.resolved
+    && !selectedFrame.functionInspection.riskFlags.includes('storage');
+  const workerTargets = status?.workerTargets || [];
+  const attachedWorkerCount = workerTargets.filter((target) => target.state === 'attached').length;
+  const workerScriptCount = workerTargets.reduce((total, target) => total + target.scriptCount, 0);
+  const boundarySummary = status?.boundary?.workers === 'unavailable'
+    ? ' · Worker 证据不可用'
+    : workerTargets.length
+      ? ` · Worker/SW ${attachedWorkerCount}/${workerTargets.length}`
+      : '';
+  const boundaryTitle = status?.workerTargetError
+    || `主文档可捕获；Source Map 只记录来源元数据；Worker/Service Worker 仅记录同源目标与脚本证据（${workerTargets.length} 个目标，${workerScriptCount} 个脚本），不会伪装成页面函数；WASM 仅展示外围 JS 与可读作用域证据`;
 
   return <div className="deep-capture">
     <div className="deep-capture__command">
       <div className="deep-capture__identity">
         <span className={`deep-status-dot state-${status?.state || 'detached'}`}><i /></span>
-        <div><strong>深度捕获</strong><small>{STATUS_LABELS[status?.state || 'detached']}{status?.matcher && status.matcher.kind !== 'request' ? ` · ${status.matcher.operation}` : ''}</small></div>
+        <div><strong>深度捕获</strong><small title={boundaryTitle}>{STATUS_LABELS[status?.state || 'detached']}{status?.matcher && status.matcher.kind !== 'request' ? ` · ${status.matcher.operation}` : ''} · 主文档{boundarySummary}</small></div>
       </div>
       <ol className="deep-stage-strip">
         {stages.map((stage, index) => <li key={stage.label} className={`${stage.done ? 'is-done' : ''} ${stage.current ? 'is-current' : ''}`}>
@@ -437,6 +508,7 @@ export function DeepCaptureWorkspace({
 
     {loadError && <div className="deep-message is-error"><AlertTriangle size={15} /><span>{loadError}</span></div>}
     {status?.error && <div className="deep-message is-warning"><ShieldAlert size={15} /><span>{status.error}</span></div>}
+    {status?.workerTargetError && <div className="deep-message is-warning"><ShieldAlert size={15} /><span>{status.workerTargetError}；主文档捕获仍可继续</span></div>}
 
     {!paused ? <>
       <section className="deep-arm-panel">
@@ -487,9 +559,13 @@ export function DeepCaptureWorkspace({
         <div>
           <small>{automaticCapture.state === 'ready' ? '自动业务边界' : automaticCapture.state === 'ambiguous' ? '需要确认' : automaticCapture.state === 'blocked' ? '安全阻止' : '需要高级定位'}</small>
           <strong>{automaticCapture.state === 'ready'
-            ? automaticCapture.strategy === 'request-transaction'
-              ? '已定位页面发送流程，正在建立截获式回放'
-              : '已定位完整页面业务函数，正在保存并生成明文网关'
+            ? recoveryProfileId
+              ? automaticCapture.strategy === 'request-transaction'
+                ? '已重新定位页面发送流程，正在建立待验证绑定'
+                : '已重新定位页面业务函数，正在建立待验证绑定'
+              : automaticCapture.strategy === 'request-transaction'
+                ? `已定位页面发送流程${selectedCandidate?.capturePlan?.transaction?.prerequisites.length ? ` · ${selectedCandidate.capturePlan.transaction.prerequisites.length} 个在线前置请求` : ''}，正在建立截获式回放`
+                : '已定位完整页面业务函数，正在保存并生成明文网关'
             : automaticCapture.state === 'ambiguous'
               ? '多个页面函数同样接近真实加密边界'
               : automaticCapture.state === 'blocked'
@@ -527,18 +603,22 @@ export function DeepCaptureWorkspace({
         </section>
         <aside className="deep-adapter-editor">
           <header><Braces size={14} /><strong>函数评估</strong></header>
-          <div className="deep-frame-summary"><strong>{selectedFrame?.functionName || '未选择调用帧'}</strong><small>{selectedFrame ? `${compactUrl(selectedFrame.url)}:${selectedFrame.lineNumber}:${selectedFrame.columnNumber}` : ''}</small><span>{selectedFrame?.thisPreview || ''}</span></div>
+          <div className="deep-frame-summary"><strong>{selectedFrame?.functionName || '未选择调用帧'}</strong><small>{selectedFrame ? `${compactUrl(selectedFrame.url)}:${selectedFrame.lineNumber}:${selectedFrame.columnNumber}` : ''}</small>{selectedFrame?.sourceMapUrl && <small title={selectedFrame.sourceMapUrl}>Source Map 元数据 · {compactUrl(selectedFrame.sourceMapUrl)}</small>}<span>{selectedFrame?.thisPreview || ''}</span></div>
           {selectedFrame?.sourceKind === 'extension-hook' ? <div className="deep-function-assessment is-hook"><Bug size={15} /><span><strong>这是插件注入的观测帧</strong><small>它只负责记录或设置断点，不是页面业务代码。请选择调用栈中标记为“页面函数”的下游帧。</small></span></div> : selectedFrame?.functionInspection?.resolved ? <div className={`deep-function-assessment ${selectedFrame.functionInspection.riskFlags.length ? 'has-risk' : 'is-clean'}`}>
             {selectedFrame.functionInspection.riskFlags.length ? <><ShieldAlert size={15} /><span><strong>已阻止注册为可回放函数</strong><small>{selectedFrame.functionInspection.riskFlags.map((risk) => RISK_LABELS[risk]).join(' · ')}。直接调用可能改变页面或发送真实请求。</small></span></> : <><Check size={15} /><span><strong>函数对象已自动解析</strong><small>{selectedFrame.functionInspection.parameterCount || 0} 个参数 · {selectedFrame.functionInspection.resolution === 'receiver-method' ? '页面方法' : selectedFrame.functionInspection.resolution === 'scope-binding' ? '闭包绑定' : '当前栈帧'} · 未发现明显副作用</small></span></>}
           </div> : <div className="deep-function-assessment has-risk"><AlertTriangle size={15} /><span><strong>无法唯一解析当前函数</strong><small>{selectedFrame?.functionInspection?.candidateCount ? `发现 ${selectedFrame.functionInspection.candidateCount} 个同分候选；` : ''}请选择其他业务栈帧，或在高级模式中指定闭包变量。</small></span></div>}
-          <div className="deep-adapter-editor__primary"><Button variant="primary" disabled={busy || !selectedCaptureReady || !callableName.trim()} onClick={() => void createCallable('selected-frame')}><Sparkles size={14} />捕获所选业务函数</Button><small>{selectedCaptureReady ? '函数引用、receiver、来源位置与参数数量由暂停现场自动保存' : '只有唯一解析且无明显副作用的页面函数可以保存'}</small></div>
-          <details className="deep-expression-editor" open={expressionEditorOpen} onToggle={(event) => setExpressionEditorOpen(event.currentTarget.open)}>
+          <div className="deep-adapter-editor__primary">{recoveryProfileId
+            ? <Button variant="primary" disabled={busy || !recoverySelectionReady} onClick={() => void captureRecovery(recoveryCaptureStrategy)}><RotateCcw size={14} />{recoveryCaptureStrategy === 'request-transaction' ? '按所选函数恢复请求事务' : '用所选函数恢复绑定'}</Button>
+            : <Button variant="primary" disabled={busy || !selectedCaptureReady || !callableName.trim()} onClick={() => void createCallable('selected-frame')}><Sparkles size={14} />捕获所选业务函数</Button>}<small>{recoveryProfileId
+              ? recoverySelectionReady ? '新绑定会保持停用，直到本地回放验证和用户确认都完成' : '选择唯一可解析且不访问页面存储的业务函数'
+              : selectedCaptureReady ? '函数引用、receiver、来源位置与参数数量由暂停现场自动保存' : '只有唯一解析且无明显副作用的页面函数可以保存'}</small></div>
+          {!recoveryProfileId && <details className="deep-expression-editor" open={expressionEditorOpen} onToggle={(event) => setExpressionEditorOpen(event.currentTarget.open)}>
             <summary>高级：函数引用表达式</summary>
             <p>仅用于匿名闭包或特殊打包产物。表达式必须在所选暂停帧中返回 Function，且仍会经过副作用门控。</p>
             <label><span>页面函数名称</span><input value={callableName} onChange={(event) => setCallableName(event.target.value)} /></label>
             <label><span>函数引用</span><textarea rows={5} value={functionExpression} onChange={(event) => setFunctionExpression(event.target.value)} spellCheck={false} placeholder="buildLoginEnvelope" /></label>
             <div className="deep-adapter-editor__actions"><Button variant="ghost" disabled={busy || !selectedFrame || selectedFrame.sourceKind !== 'page' || Boolean(selectedFrame.functionInspection?.riskFlags.length) || !callableName.trim() || !functionExpression.trim()} onClick={() => void createCallable('expression')}><Code2 size={14} />验证表达式并捕获</Button></div>
-          </details>
+          </details>}
         </aside>
       </div>
       </details>

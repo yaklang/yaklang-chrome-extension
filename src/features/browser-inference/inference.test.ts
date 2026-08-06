@@ -39,6 +39,9 @@ const safeArguments: BrowserRecordingCallArgument[] = [
 const cryptoJsAES = {
   adapterId: 'cryptojs', providerKind: 'library', family: 'symmetric', operation: 'AES.encrypt', algorithm: 'AES.encrypt',
 } as const;
+const cryptoJsAESDecrypt = {
+  adapterId: 'cryptojs', providerKind: 'library', family: 'symmetric', operation: 'AES.decrypt', algorithm: 'AES.decrypt',
+} as const;
 const webCryptoAES = {
   adapterId: 'webcrypto', providerKind: 'native', family: 'symmetric', operation: 'encrypt', algorithm: 'AES-GCM',
 } as const;
@@ -115,6 +118,114 @@ describe('browser profile inference', () => {
     expect(candidates[0].aiContext.valuePolicy).toBe('metadata-only');
   });
 
+  it('captures the business envelope when a request uses a structured crypto result subfield', () => {
+    const crypto = event({
+      id: 'structured-crypto', sequence: 1, kind: 'crypto', operation: 'encrypt', crypto: cryptoJsAES,
+      callHandleId: 'structured-handle', callableCapable: true, arguments: safeArguments,
+      inputs: [{ path: '$input', fingerprint: 'plain', encoding: 'text', byteLength: 8 }],
+      outputs: [{ path: '$output.ciphertext', fingerprint: 'encoded-child', encoding: 'hex', byteLength: 16 }],
+    });
+    const request = event({
+      id: 'structured-request', sequence: 2, kind: 'fetch', operation: 'request', method: 'POST',
+      url: 'https://example.test/submit',
+      inputs: [{ path: '$body:json.password', fingerprint: 'encoded-child', encoding: 'hex', byteLength: 16 }],
+    });
+    const [candidate] = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0 },
+      events: [crypto, request],
+      links: [link({
+        id: 'structured-output-link',
+        fromEventId: crypto.id,
+        fromPath: '$output.ciphertext',
+        toEventId: request.id,
+        toPath: '$body:json.password',
+      })],
+    });
+
+    expect(candidate).toMatchObject({
+      status: 'capture-required',
+      request: { destination: 'body.password', serialization: 'json-field' },
+      capturePlan: {
+        transaction: {
+          version: 2,
+          prerequisites: [],
+          request: { expectedDestinations: ['body.password'], bodyFormat: 'json' },
+        },
+      },
+    });
+    expect(candidate.missing[0].label).toContain('上层业务函数');
+  });
+
+  it('compiles an evidence-linked online key request into an ordered request transaction', () => {
+    const keyRequest = event({
+      id: 'key-request', sequence: 1, kind: 'fetch', operation: 'request', direction: 'send',
+      channelId: 'fetch-key', method: 'GET', url: 'http://127.0.0.1:82/encrypt/server_generate_key.php',
+    });
+    const crypto = event({
+      id: 'crypto-online-key', sequence: 3, kind: 'crypto', operation: 'AES.encrypt', crypto: cryptoJsAES,
+      callHandleId: 'handle-online-key', callableCapable: true, arguments: safeArguments,
+      inputs: [
+        { path: '$key', fingerprint: 'server-key', encoding: 'base64', byteLength: 24 },
+        { path: '$options.iv', fingerprint: 'server-iv', encoding: 'base64', byteLength: 24 },
+      ],
+      outputs: [{ path: '$output:string', fingerprint: 'server-cipher', encoding: 'text', byteLength: 88 }],
+    });
+    // Fetch body readers emit their final structured response after the consumer resumes.
+    const keyResponse = event({
+      id: 'key-response', sequence: 4, kind: 'fetch', operation: 'response', direction: 'receive',
+      channelId: 'fetch-key', method: 'GET', url: 'http://127.0.0.1:82/encrypt/server_generate_key.php',
+      statusCode: 200, dataType: 'Object', resultByteLength: 76,
+      outputs: [
+        { path: '$body.aes_key', fingerprint: 'server-key', encoding: 'base64', byteLength: 24 },
+        { path: '$body.aes_iv', fingerprint: 'server-iv', encoding: 'base64', byteLength: 24 },
+      ],
+    });
+    const finalRequest = event({
+      id: 'server-aes-request', sequence: 5, kind: 'fetch', operation: 'request', direction: 'send',
+      channelId: 'fetch-final', method: 'POST', url: 'http://127.0.0.1:82/encrypt/aesserver.php',
+      inputs: [{ path: '$body:json.encryptedData', fingerprint: 'server-cipher', encoding: 'text', byteLength: 88 }],
+    });
+    const events = [keyRequest, crypto, keyResponse, finalRequest];
+    const candidates = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0, documentId: 'document-1' },
+      events,
+      links: buildRecordingLinks(events),
+    });
+    const candidate = candidates.find((item) => item.request.eventId === finalRequest.id);
+
+    expect(candidate).toMatchObject({
+      status: 'capture-required',
+      capturePlan: {
+        transaction: {
+          version: 2,
+          prerequisites: [{
+            boundary: 'fetch',
+            method: 'GET',
+            url: keyRequest.url,
+            requestBodyFormat: 'none',
+            response: {
+              statusCode: 200,
+              url: keyResponse.url,
+              bodyFormat: 'json',
+              requiredPaths: ['body.aes_key', 'body.aes_iv'],
+            },
+          }],
+          request: {
+            boundary: 'fetch',
+            method: 'POST',
+            url: finalRequest.url,
+            expectedDestinations: ['body.encryptedData'],
+            bodyFormat: 'json',
+          },
+        },
+      },
+    });
+    expect(candidate?.summary).toContain('在线前置请求');
+    expect(candidate?.evidence).toContainEqual(expect.objectContaining({
+      kind: 'response-boundary', strength: 'proven', eventIds: [keyRequest.id, keyResponse.id, crypto.id],
+    }));
+  });
+
   it('follows a bounded exact-value chain through an intermediate encoder', () => {
     const crypto = event({
       id: 'crypto-1', sequence: 1, kind: 'crypto', operation: 'encrypt', crypto: webCryptoAES,
@@ -144,6 +255,76 @@ describe('browser profile inference', () => {
     expect(cryptoCandidate?.request.destination).toBe('header.x-signature');
     expect(cryptoCandidate?.evidence.filter((item) => item.kind === 'exact-value')).toHaveLength(2);
     expect(cryptoCandidate?.flow).toContain('1 个中间转换');
+  });
+
+  it('keeps the field destination when an envelope also links to the whole request body', () => {
+    const crypto = event({
+      id: 'crypto-1', sequence: 1, kind: 'crypto', operation: 'SHA256', crypto: cryptoJsHmac,
+      callHandleId: 'handle-1', callableCapable: true, arguments: safeArguments,
+      outputs: [{ path: '$output', fingerprint: 'digest', encoding: 'text', byteLength: 64 }],
+    });
+    const envelope = event({
+      id: 'form-envelope', sequence: 2, kind: 'transform', operation: 'URLSearchParams',
+      inputs: [{ path: '$input:form.encryptedData', fingerprint: 'digest', encoding: 'text', byteLength: 64 }],
+      outputs: [
+        { path: '$output', fingerprint: 'form-body', encoding: 'text', byteLength: 96 },
+        { path: '$output:form.encryptedData', fingerprint: 'digest', encoding: 'text', byteLength: 64 },
+        { path: '$output:form.channel', fingerprint: 'channel', encoding: 'text', byteLength: 7 },
+      ],
+    });
+    const request = event({
+      id: 'request-1', sequence: 3, kind: 'fetch', operation: 'request', method: 'POST',
+      url: 'https://example.test/session',
+      inputs: [
+        { path: '$body', fingerprint: 'form-body', encoding: 'text', byteLength: 96 },
+        { path: '$body:form.encryptedData', fingerprint: 'digest', encoding: 'text', byteLength: 64 },
+        { path: '$body:form.channel', fingerprint: 'channel', encoding: 'text', byteLength: 7 },
+      ],
+    });
+    const [candidate] = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0 },
+      events: [crypto, envelope, request],
+      links: [
+        link({
+          id: 'crypto-envelope',
+          fromEventId: crypto.id,
+          fromPath: '$output',
+          toEventId: envelope.id,
+          toPath: '$input:form.encryptedData',
+        }),
+        link({
+          id: 'envelope-body',
+          fromEventId: envelope.id,
+          fromPath: '$output',
+          toEventId: request.id,
+          toPath: '$body',
+        }),
+        link({
+          id: 'envelope-field',
+          fromEventId: envelope.id,
+          fromPath: '$output:form.encryptedData',
+          toEventId: request.id,
+          toPath: '$body:form.encryptedData',
+        }),
+        link({
+          id: 'envelope-channel',
+          fromEventId: envelope.id,
+          fromPath: '$output:form.channel',
+          toEventId: request.id,
+          toPath: '$body:form.channel',
+        }),
+      ],
+    });
+
+    expect(candidate.request).toMatchObject({
+      destination: 'body.encryptedData',
+      serialization: 'form-field',
+    });
+    expect(candidate.status).toBe('capture-required');
+    expect(candidate.evidence).toContainEqual(expect.objectContaining({
+      id: 'evidence-link-envelope-field',
+      toPath: '$body:form.encryptedData',
+    }));
   });
 
   it.each([
@@ -284,6 +465,7 @@ describe('browser profile inference', () => {
     expect(candidate.request.mappings.map((item) => item.destination)).toEqual([
       'body.encryptedData', 'body.encryptedKey', 'body.encryptedIv',
     ]);
+    expect(candidate.request.bodyFormat).toBe('json');
     expect(candidate.status).toBe('capture-required');
     expect(candidate.summary).toContain('3 个密码调用');
     expect(candidate.missing[0].label).toContain('随机 Key、IV、Nonce');
@@ -336,7 +518,12 @@ describe('browser profile inference', () => {
   it('traces canonical JSON through a signature and Axios into a request header', () => {
     const canonical = event({
       id: 'canonical-json', sequence: 1, kind: 'transform', operation: 'JSON.stringify',
-      transform: { category: 'serializer', provider: 'native', phase: 'output' },
+      transform: {
+        adapterId: 'native.json',
+        providerKind: 'native',
+        category: 'serializer',
+        phase: 'output',
+      },
       inputs: [{ path: '$input.account', fingerprint: 'account', encoding: 'text', byteLength: 5 }],
       outputs: [{ path: '$output', fingerprint: 'canonical', encoding: 'text', byteLength: 42 }],
     });
@@ -348,7 +535,12 @@ describe('browser profile inference', () => {
     });
     const axios = event({
       id: 'axios', sequence: 3, kind: 'transform', operation: 'axios.request',
-      transform: { category: 'request-builder', provider: 'axios', phase: 'boundary' },
+      transform: {
+        adapterId: 'axios',
+        providerKind: 'library',
+        category: 'request-builder',
+        phase: 'boundary',
+      },
       inputs: [{ path: '$headers.X-Signature', fingerprint: 'signed', encoding: 'hex', byteLength: 64 }],
       outputs: [{ path: '$headers.X-Signature', fingerprint: 'signed', encoding: 'hex', byteLength: 64 }],
     });
@@ -368,5 +560,50 @@ describe('browser profile inference', () => {
     }));
     expect(candidate.flow).toContain('1 个输入准备步骤');
     expect(candidate.flow).toContain('1 个中间转换');
+  });
+
+  it.each([
+    ['response observed before decrypt', 1, 2],
+    ['response body reader completed after decrypt', 3, 2],
+  ])('infers a ready response gateway when %s', (_label, responseSequence, decryptSequence) => {
+    const response = event({
+      id: 'encrypted-response', sequence: responseSequence, kind: 'fetch', operation: 'response',
+      direction: 'receive', method: 'GET', url: 'https://example.test/api/profile', statusCode: 200,
+      outputs: [{ path: '$body:json.encryptedData', fingerprint: 'response-cipher', encoding: 'text', byteLength: 88 }],
+    });
+    const decrypt = event({
+      id: 'decrypt-response', sequence: decryptSequence, kind: 'crypto', operation: 'AES.decrypt',
+      crypto: cryptoJsAESDecrypt,
+      callHandleId: 'decrypt-handle', callableCapable: true,
+      arguments: safeArguments,
+      inputs: [{ path: '$input', fingerprint: 'response-cipher', encoding: 'text', byteLength: 88 }],
+      outputs: [{ path: '$output', fingerprint: 'response-plain', encoding: 'text', byteLength: 42 }],
+    });
+    const events = [response, decrypt];
+    const [candidate] = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0, documentId: 'document-1' },
+      events,
+      links: buildRecordingLinks(events),
+    });
+
+    expect(candidate).toMatchObject({
+      direction: 'response',
+      status: 'ready',
+      request: {
+        eventId: response.id,
+        destination: 'body.encryptedData',
+        serialization: 'json-field',
+      },
+      source: { eventId: decrypt.id, callHandleId: 'decrypt-handle' },
+      confidence: { level: 'high', score: 100 },
+    });
+    expect(candidate.pipeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'context.read', source: 'body.encryptedData' }),
+      expect.objectContaining({ kind: 'output.write', destination: 'body' }),
+    ]));
+    expect(candidate.evidence).toContainEqual(expect.objectContaining({
+      kind: 'response-boundary', strength: 'proven',
+    }));
+    expect(candidate.aiContext.requiredDecision).toBe('none');
   });
 });

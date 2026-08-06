@@ -191,6 +191,35 @@ describe('crypto adapter runtime', () => {
     expect(discoveries).toBe(6);
   });
 
+  it('installs an async-ready adapter as soon as its page-owned readiness promise settles', async () => {
+    vi.useFakeTimers();
+    const document = fakeDocument();
+    const owner: Record<string, unknown> = {};
+    let ready = false;
+    let resolveReady!: () => void;
+    const readiness = new Promise<void>((resolve) => { resolveReady = resolve; });
+    const asyncAdapter: PageCryptoAdapter = {
+      manifest: { id: 'vendor', displayName: 'Vendor', providerKind: 'library', dynamic: true, globalPaths: ['Vendor'] },
+      ready: () => readiness,
+      discover: () => ready ? [operation(owner)] : [],
+    };
+    const runtime = createCryptoAdapterRuntime([asyncAdapter], scope(document), toolkit(), {
+      unique: () => 'wrapper-ready',
+      invoke(_operation, target, thisArg, args) { return Reflect.apply(target, thisArg, args); },
+    });
+
+    runtime.start();
+    expect(owner.encrypt).toBeUndefined();
+    owner.encrypt = (value: string) => value;
+    ready = true;
+    resolveReady();
+    await readiness;
+    await Promise.resolve();
+
+    expect(runtime.wrapperFunction('wrapper-ready')).toBe(owner.encrypt);
+    runtime.stop();
+  });
+
   it('installs returned session operations immediately and restores them across restart', () => {
     vi.useFakeTimers();
     const document = fakeDocument();

@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { browser } from 'wxt/browser';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { FloatingPanel } from '@/features/floating-panel/FloatingPanel';
 import type { ActiveTabInfo, BridgeStatus, ExtensionState } from '@/types/models';
@@ -15,6 +14,7 @@ watchTheme();
 function FloatingApp() {
   const [initial, setInitial] = useState<{ state: ExtensionState; tab?: ActiveTabInfo; bridge: BridgeStatus }>();
   const [error, setError] = useState('');
+  const hostChannel = new URLSearchParams(location.search).get('channel') || '';
 
   useEffect(() => {
     const tabId = Number(new URLSearchParams(location.search).get('tabId'));
@@ -35,8 +35,7 @@ function FloatingApp() {
       initialState={initial.state}
       initialTab={initial.tab}
       initialBridge={initial.bridge}
-      yakIconUrl={browser.runtime.getURL('/yak.svg')}
-      embedded
+      hostChannel={hostChannel}
     />
   );
 }

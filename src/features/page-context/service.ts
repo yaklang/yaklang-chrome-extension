@@ -11,6 +11,7 @@ import { CONTEXT_DIGEST_STORAGE_KEY } from '@/protocol/storage';
 import { listCookies } from '@/features/cookies/service';
 import { ExtensionError } from '@/shared/errors';
 import { getTab, resolveDocumentTarget, scriptingTarget } from '@/platform/browser/targets';
+import { resolveTabCookieStoreId } from '@/platform/browser/isolation';
 
 async function collectDocumentContext(input: { options: PageContextOptions; captureId: string }) {
   const MAX_SCANNED_ELEMENTS = 10_000;
@@ -454,6 +455,47 @@ function storedDigest(input: ContextDigest): StoredContextDigest {
   return { ...input, nodes: [...input.nodes], storageKeys: [...input.storageKeys], cookieNames: [...input.cookieNames] };
 }
 
+function normalizeStoredContextDigest(input: unknown): { key: string; digest: ContextDigest } | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const entry = input as Partial<StoredContextDigest> & { key?: unknown };
+  if (typeof entry.key !== 'string' || !/^\d+:\d+$/.test(entry.key)
+    || typeof entry.captureId !== 'string' || !entry.captureId
+    || typeof entry.title !== 'string' || typeof entry.url !== 'string'
+    || !Array.isArray(entry.nodes) || !Array.isArray(entry.storageKeys) || !Array.isArray(entry.cookieNames)
+    || !['authenticated', 'unauthenticated', 'unknown'].includes(String(entry.authentication))) return undefined;
+  const nodes = entry.nodes.slice(-400).flatMap((item) => {
+    if (!Array.isArray(item) || item.length !== 2 || typeof item[0] !== 'string'
+      || !item[1] || typeof item[1] !== 'object' || Array.isArray(item[1])) return [];
+    const value = item[1] as Partial<PageContextChange & { signature: string }>;
+    if (typeof value.semanticKey !== 'string' || typeof value.tag !== 'string'
+      || typeof value.text !== 'string' || typeof value.signature !== 'string') return [];
+    return [[item[0].slice(0, 500), {
+      semanticKey: value.semanticKey.slice(0, 500),
+      tag: value.tag.slice(0, 120),
+      text: value.text.slice(0, 500),
+      nodeId: typeof value.nodeId === 'string' ? value.nodeId.slice(0, 240) : undefined,
+      signature: value.signature.slice(0, 2_048),
+    }] as [string, PageContextChange & { signature: string }]];
+  });
+  return {
+    key: entry.key,
+    digest: {
+      captureId: entry.captureId.slice(0, 240),
+      documentId: typeof entry.documentId === 'string' ? entry.documentId.slice(0, 500) : undefined,
+      title: entry.title.slice(0, 1_000),
+      url: entry.url.slice(0, 8_192),
+      authentication: entry.authentication as PageAuthenticationSignals['status'],
+      included: typeof entry.included === 'string' && /^(true|false):(true|false):(true|false)$/.test(entry.included)
+        ? entry.included
+        : 'true:false:false',
+      nodes: new Map(nodes),
+      formSignature: typeof entry.formSignature === 'string' ? entry.formSignature.slice(0, 64 * 1024) : '',
+      storageKeys: new Set(entry.storageKeys.filter((value): value is string => typeof value === 'string').slice(-200)),
+      cookieNames: new Set(entry.cookieNames.filter((value): value is string => typeof value === 'string').slice(-200)),
+    },
+  };
+}
+
 async function restoreContextDigests(): Promise<void> {
   if (!contextSessionStorage) return;
   try {
@@ -461,22 +503,8 @@ async function restoreContextDigests(): Promise<void> {
     const values = stored[CONTEXT_DIGEST_STORAGE_KEY];
     if (!Array.isArray(values)) return;
     for (const item of values.slice(-MAX_PERSISTED_CONTEXT_DIGESTS)) {
-      const entry = item as Partial<StoredContextDigest> & { key?: unknown };
-      if (typeof entry.key !== 'string' || typeof entry.captureId !== 'string' || typeof entry.title !== 'string'
-        || typeof entry.url !== 'string' || !Array.isArray(entry.nodes) || !Array.isArray(entry.storageKeys)
-        || !Array.isArray(entry.cookieNames) || !['authenticated', 'unauthenticated', 'unknown'].includes(String(entry.authentication))) continue;
-      contextDigests.set(entry.key, {
-        captureId: entry.captureId,
-        documentId: typeof entry.documentId === 'string' ? entry.documentId : undefined,
-        title: entry.title,
-        url: entry.url,
-        authentication: entry.authentication as PageAuthenticationSignals['status'],
-        included: typeof entry.included === 'string' ? entry.included : 'dom',
-        nodes: new Map(entry.nodes),
-        formSignature: typeof entry.formSignature === 'string' ? entry.formSignature : '',
-        storageKeys: new Set(entry.storageKeys.filter((value): value is string => typeof value === 'string')),
-        cookieNames: new Set(entry.cookieNames.filter((value): value is string => typeof value === 'string')),
-      });
+      const normalized = normalizeStoredContextDigest(item);
+      if (normalized) contextDigests.set(normalized.key, normalized.digest);
     }
   } catch {
     // Context diff remains available in memory when session storage is unavailable.
@@ -603,6 +631,28 @@ function authenticationSignals(
   };
 }
 
+function isCollectedDocumentContext(
+  input: unknown,
+): input is Awaited<ReturnType<typeof collectDocumentContext>> {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
+  const value = input as {
+    document?: Record<string, unknown>;
+    authenticationSeed?: Record<string, unknown>;
+  };
+  return Boolean(
+    value.document
+    && typeof value.document.url === 'string'
+    && typeof value.document.title === 'string'
+    && Array.isArray(value.document.interactive)
+    && Array.isArray(value.document.forms)
+    && value.authenticationSeed
+    && typeof value.authenticationSeed.passwordFieldCount === 'number'
+    && typeof value.authenticationSeed.hasLoginControl === 'boolean'
+    && typeof value.authenticationSeed.hasLogoutControl === 'boolean'
+    && typeof value.authenticationSeed.hasAccountControl === 'boolean',
+  );
+}
+
 export async function capturePageContext(options: PageContextOptions = {}, input?: BrowserTarget | number): Promise<PageContext> {
   const tab = await getTab(typeof input === 'number' ? input : input?.tabId);
   if (!/^https?:/i.test(tab.url)) throw new Error('当前页面不允许采集上下文');
@@ -624,12 +674,24 @@ export async function capturePageContext(options: PageContextOptions = {}, input
   const [{ result, error }] = injections;
   if (error) throw new ExtensionError('context_capture_failed', `页面上下文采集失败：${error}`);
   if (result === undefined) throw new ExtensionError('context_capture_failed', '页面上下文采集脚本没有返回结果');
-  const collected = result as Awaited<ReturnType<typeof collectDocumentContext>>;
-  const [cookies, frames, lifecycle] = await Promise.all([
-    options.includeCookies ? listCookies(collected.document.url) : undefined,
-    getFrameInventory(target.tabId),
-    getPageLifecycle(target.tabId, target.frameId, target.documentId),
-  ]);
+  if (!isCollectedDocumentContext(result)) {
+    throw new ExtensionError('context_capture_failed', '页面上下文采集脚本没有返回结构化上下文');
+  }
+  const collected = result;
+  const cookieStoreId = options.includeCookies ? await resolveTabCookieStoreId(target.tabId) : undefined;
+  let cookies: Awaited<ReturnType<typeof listCookies>> | undefined;
+  let frames: Awaited<ReturnType<typeof getFrameInventory>>;
+  let lifecycle: Awaited<ReturnType<typeof getPageLifecycle>>;
+  try {
+    [cookies, frames, lifecycle] = await Promise.all([
+      options.includeCookies ? listCookies(collected.document.url, cookieStoreId) : undefined,
+      getFrameInventory(target.tabId),
+      getPageLifecycle(target.tabId, target.frameId, target.documentId),
+    ]);
+  } catch (supplementError) {
+    const message = supplementError instanceof Error ? supplementError.message : String(supplementError);
+    throw new ExtensionError('context_capture_failed', `页面上下文补充数据读取失败：${message}`);
+  }
   const authentication = authenticationSignals(collected.authenticationSeed, collected.document, cookies?.map((cookie) => cookie.name) || []);
   const contextWithoutDiff: Omit<PageContext, 'diff'> = {
     captureId,

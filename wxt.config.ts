@@ -4,6 +4,11 @@ import { defineConfig } from 'wxt';
 export default defineConfig({
   srcDir: 'src',
   modules: ['@wxt-dev/module-react'],
+  vite: () => ({
+    build: {
+      modulePreload: false,
+    },
+  }),
   manifest: ({ mode, browser }) => ({
     name: 'Yakit Browser Agent',
     description: 'Yakit 浏览器安全测试工具与 AI 上下文桥接',
@@ -18,6 +23,7 @@ export default defineConfig({
     storage: {
       managed_schema: 'managed-storage-schema.json',
     },
+    ...(browser !== 'firefox' ? { incognito: 'spanning' as const } : {}),
     permissions: [
       'proxy',
       'storage',
@@ -29,6 +35,7 @@ export default defineConfig({
       'declarativeNetRequest',
       'webRequest',
       'webNavigation',
+      ...(browser === 'firefox' ? ['contextualIdentities' as const] : []),
       ...(browser === 'firefox' ? [] : ['debugger']),
       ...(browser === 'firefox' ? ['webRequestBlocking'] : ['webRequestAuthProvider']),
       ...(browser !== 'firefox' && ['production', 'store', 'enterprise'].includes(mode) ? ['userScripts'] : []),
@@ -53,7 +60,11 @@ export default defineConfig({
     },
     web_accessible_resources: [
       {
-        resources: [...((mode === 'store' || (browser !== 'firefox' && mode === 'production')) ? [] : ['page-main-world.js']), 'floating.html', 'yak.svg', 'icon/yakitlogo.png'],
+        resources: [
+          ...((mode === 'store' || (browser !== 'firefox' && mode === 'production')) ? [] : ['page-main-world.js']),
+          ...(browser === 'firefox' ? ['page-recorder-main-world.js'] : []),
+          'floating.html', 'yak.svg', 'icon/yakitlogo.png',
+        ],
         matches: ['<all_urls>'],
         use_dynamic_url: true,
       },

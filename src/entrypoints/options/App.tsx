@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { browser, type Browser } from 'wxt/browser';
 import {
   Activity, AlertTriangle, Bot, Braces, Check, ChevronRight, CircleGauge, CloudDownload, Cookie, Copy,
-  Database, Download, Eye, History, KeyRound, MousePointer2, Network, Play, Power, Radio,
+  Database, Download, Eye, Fingerprint, History, KeyRound, MousePointer2, Network, Play, Power, Radio,
   RefreshCw, Route, Save, Search, Send, Server, ShieldCheck, Square, Trash2, Upload, UserRoundCog, Wrench, X,
 } from 'lucide-react';
 import { ProductBrand, YakitMark } from '@/components/brand/Brand';
@@ -18,6 +18,8 @@ import { AutoSwitchView } from '@/features/proxy/ui/AutoSwitchView';
 import { ProxyProfilesView } from '@/features/proxy/ui/ProxyProfilesView';
 import { RuleSourcesView } from '@/features/proxy/ui/RuleSourcesView';
 import { RecordingWorkspace } from '@/features/browser-recording/RecordingWorkspace';
+import { AuthorizationTestingWorkspace } from '@/features/authorization-testing/ui/AuthorizationTestingWorkspace';
+import { gatewayShareActive, gatewayShareGrantInput } from '@/features/grants/gateway-share';
 import { CAPABILITY_LABELS, CONTROL_CAPABILITY_SCOPES, READ_CAPABILITY_SCOPES, isControlScopeSet } from '@/protocol/capabilities';
 import { AGENT_RUNTIME_STORAGE_KEY, AUDIT_STORAGE_KEY, isStateStorageChange } from '@/protocol/storage';
 import type {
@@ -30,11 +32,17 @@ import { errorMessage, request } from '@/platform/messaging/runtime';
 import { APPEARANCE_STORAGE_KEY, getAppearance, setThemePreference, type ThemePreference } from '@/platform/storage/appearance';
 import './App.css';
 
-type Section = 'overview' | 'proxies' | 'rules' | 'sources' | 'cookies' | 'user-agent' | 'network' | 'context' | 'engine' | 'activity';
+type Section = 'overview' | 'authorization' | 'proxies' | 'rules' | 'sources' | 'cookies' | 'user-agent' | 'network' | 'context' | 'engine' | 'activity';
 const FIREFOX_AMO_BUILD = import.meta.env.FIREFOX && import.meta.env.MODE === 'store';
 
 const NAVIGATION: Array<{ label: string; icon?: ReactNode; items: Array<{ id: Section; label: string; icon: ReactNode }> }> = [
-  { label: '工作区', items: [{ id: 'overview', label: '运行概览', icon: <CircleGauge size={17} /> }] },
+  {
+    label: '工作区',
+    items: [
+      { id: 'overview', label: '运行概览', icon: <CircleGauge size={17} /> },
+      { id: 'authorization', label: '授权测试', icon: <Fingerprint size={17} /> },
+    ],
+  },
   {
     label: '网络与流量',
     items: [
@@ -212,10 +220,13 @@ function App() {
 
       <main className="workspace">
         <header className="topbar">
-          <div className="topbar-tab">
+          {section === 'authorization' ? <div className="topbar-workspace-context">
+            <Fingerprint size={16} />
+            <div><strong>授权测试</strong><small>A/B 页面在工作区内选择</small></div>
+          </div> : <div className="topbar-tab">
             <span className="topbar-tab__favicon">{tab?.favIconUrl ? <img src={tab.favIconUrl} alt="" /> : <Radio size={13} />}</span>
             <select className="target-tab-select" aria-label="目标标签页" value={tab?.id || ''} onChange={(event) => void selectTab(Number(event.target.value))}><option value="" disabled>选择目标标签页</option>{tabs.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select>
-          </div>
+          </div>}
           <div className="topbar-actions"><span className={`permission-state ${state.activeGrant ? 'enabled' : ''}`}><ShieldCheck size={14} />{state.activeGrant ? `${isControlScopeSet(state.activeGrant.scopes) ? '控制' : '只读'}会话` : '未共享'}</span><Button size="icon" variant="ghost" title="刷新状态" onClick={() => void load()}><RefreshCw size={17} /></Button></div>
         </header>
 
@@ -223,12 +234,13 @@ function App() {
 
         <div className="content-area">
           {section === 'overview' && <Overview state={state} bridge={bridge} tab={tab} navigate={navigate} run={run} busy={busy} />}
+          {section === 'authorization' && <AuthorizationTestingWorkspace state={state} setState={setState} tabs={tabs} activeTab={tab} bridge={bridge} refreshTabs={refreshTabs} run={run} busy={busy} />}
           {section === 'proxies' && <ProxyProfilesView state={state} setState={setState} run={run} busy={busy} tab={tab} />}
           {section === 'rules' && <AutoSwitchView state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'sources' && <RuleSourcesView state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'cookies' && <CookieEditor key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'user-agent' && <UserAgents state={state} setState={setState} tab={tab} run={run} busy={busy} />}
-          {section === 'network' && <NetworkActivity key={tab?.id || 0} tab={tab} bridge={bridge} run={run} busy={busy} />}
+          {section === 'network' && <NetworkActivity key={tab?.id || 0} state={state} setState={setState} tab={tab} bridge={bridge} run={run} busy={busy} />}
           {section === 'context' && <ContextTool key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'engine' && <EngineSettings state={state} setState={setState} bridge={bridge} setBridge={setBridge} tabs={tabs} run={run} busy={busy} />}
           {section === 'activity' && <ActivityLog run={run} busy={busy} />}
@@ -384,7 +396,8 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
   });
   const keyOf = cookieKey;
   const reload = () => run(async () => {
-    setCookies(await request('cookie.list', { url }));
+    if (!tab?.id) throw new Error('请选择目标标签页');
+    setCookies(await request('cookie.list', { url, tabId: tab.id }));
     setSelected(new Set());
   });
   const editCookie = (cookie: BrowserCookie) => {
@@ -414,7 +427,13 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
   }
   const removeInputs = (items: BrowserCookie[]) => items.map(cookieRemovalInput);
   const downloadExport = async () => {
-    const text = await request('cookie.export', { url, format: transferFormat, includeValues: includeExportValues });
+    if (!tab?.id) throw new Error('请选择目标标签页');
+    const text = await request('cookie.export', {
+      url,
+      tabId: tab.id,
+      format: transferFormat,
+      includeValues: includeExportValues,
+    });
     const blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
     const anchor = document.createElement('a');
     anchor.href = blobUrl;
@@ -426,12 +445,12 @@ function CookieEditor({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () 
   return <div className="section-view">
     <div className="page-heading"><div><h1>Cookie Editor</h1><p>HttpOnly、Cookie Store、CHIPS 分区与多格式交换。</p></div><button disabled={busy || !url} onClick={() => void reload()}><RefreshCw size={16} />刷新</button></div>
     <div className="url-bar"><input value={url} onChange={(event) => setUrl(event.target.value)} /><span>{cookies.length} cookies</span></div>
-    <div className="cookie-toolbar"><div className="network-search"><Search size={14} /><input aria-label="搜索 Cookie" placeholder="搜索名称、Domain 或 Path" value={query} onChange={(event) => setQuery(event.target.value)} /></div><select aria-label="Cookie 筛选" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}><option value="all">全部</option><option value="session">Session</option><option value="persistent">持久</option><option value="httpOnly">HttpOnly</option><option value="partitioned">Partitioned</option></select><select aria-label="Cookie 排序" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="name">按名称</option><option value="domain">按 Domain</option><option value="expires">按过期时间</option><option value="size">按值大小</option></select><select aria-label="Cookie 分组" value={group} onChange={(event) => setGroup(event.target.value as typeof group)}><option value="domain">Domain 分组</option><option value="path">Path 分组</option><option value="none">不分组</option></select><Button variant="danger" disabled={busy || selected.size === 0} onClick={() => void run(async () => { const result = await request('cookie.removeMany', { cookies: removeInputs(cookies.filter((cookie) => selected.has(keyOf(cookie)))) }); setTransferStatus(`删除 ${result.removed}，失败 ${result.failed}`); setCookies(await request('cookie.list', { url })); setSelected(new Set()); }, '已执行批量删除')}><Trash2 size={14} />删除 {selected.size || ''}</Button></div>
+    <div className="cookie-toolbar"><div className="network-search"><Search size={14} /><input aria-label="搜索 Cookie" placeholder="搜索名称、Domain 或 Path" value={query} onChange={(event) => setQuery(event.target.value)} /></div><select aria-label="Cookie 筛选" value={filter} onChange={(event) => setFilter(event.target.value as typeof filter)}><option value="all">全部</option><option value="session">Session</option><option value="persistent">持久</option><option value="httpOnly">HttpOnly</option><option value="partitioned">Partitioned</option></select><select aria-label="Cookie 排序" value={sort} onChange={(event) => setSort(event.target.value as typeof sort)}><option value="name">按名称</option><option value="domain">按 Domain</option><option value="expires">按过期时间</option><option value="size">按值大小</option></select><select aria-label="Cookie 分组" value={group} onChange={(event) => setGroup(event.target.value as typeof group)}><option value="domain">Domain 分组</option><option value="path">Path 分组</option><option value="none">不分组</option></select><Button variant="danger" disabled={busy || selected.size === 0} onClick={() => void run(async () => { if (!tab?.id) throw new Error('请选择目标标签页'); const result = await request('cookie.removeMany', { cookies: removeInputs(cookies.filter((cookie) => selected.has(keyOf(cookie)))) }); setTransferStatus(`删除 ${result.removed}，失败 ${result.failed}`); setCookies(await request('cookie.list', { url, tabId: tab.id })); setSelected(new Set()); }, '已执行批量删除')}><Trash2 size={14} />删除 {selected.size || ''}</Button></div>
     <div className="cookie-layout"><div className="cookie-table"><div className="table-head cookie-columns"><input aria-label="选择全部可见 Cookie" type="checkbox" checked={visibleCookies.length > 0 && visibleCookies.every((cookie) => selected.has(keyOf(cookie)))} onChange={(event) => setSelected(event.target.checked ? new Set(visibleCookies.map(keyOf)) : new Set())} /><span>名称</span><span>值</span><span>Domain / Path</span><span>属性</span><span /></div>{visibleCookies.length === 0 ? <Empty>没有符合条件的 Cookie。</Empty> : [...groupedCookies].map(([groupName, items]) => <div className="cookie-group" key={groupName}><div className="cookie-group__heading"><strong>{groupName}</strong><span>{items.length}</span></div>{items.map((cookie) => {
         const cookieKey = keyOf(cookie);
-        return <div className="table-row cookie-columns" key={cookieKey}><input aria-label={`选择 ${cookie.name}`} type="checkbox" checked={selected.has(cookieKey)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(cookieKey); else next.delete(cookieKey); return next; })} /><button className="cookie-name-button" title="编辑 Cookie" onClick={() => editCookie(cookie)}><strong>{cookie.name}</strong></button><code className="cookie-value" title={cookie.value}>{cookie.value}</code><span><small>{cookie.domain}</small><small>{cookie.path}</small></span><span className="tag-list">{cookie.httpOnly && <i>HttpOnly</i>}{cookie.secure && <i>Secure</i>}{cookie.partitionKey && <i>Partitioned</i>}{cookie.sameSite && <i>{cookie.sameSite}</i>}{cookie.priority && <i>{cookie.priority}</i>}{cookie.sameParty && <i>SameParty</i>}</span><button className="icon-button danger" title="删除 Cookie" onClick={() => void run(async () => { await request('cookie.remove', removeInputs([cookie])[0]); setCookies(await request('cookie.list', { url })); }, 'Cookie 已删除')}><Trash2 size={15} /></button></div>;
+        return <div className="table-row cookie-columns" key={cookieKey}><input aria-label={`选择 ${cookie.name}`} type="checkbox" checked={selected.has(cookieKey)} onChange={(event) => setSelected((current) => { const next = new Set(current); if (event.target.checked) next.add(cookieKey); else next.delete(cookieKey); return next; })} /><button className="cookie-name-button" title="编辑 Cookie" onClick={() => editCookie(cookie)}><strong>{cookie.name}</strong></button><code className="cookie-value" title={cookie.value}>{cookie.value}</code><span><small>{cookie.domain}</small><small>{cookie.path}</small></span><span className="tag-list">{cookie.httpOnly && <i>HttpOnly</i>}{cookie.secure && <i>Secure</i>}{cookie.partitionKey && <i>Partitioned</i>}{cookie.sameSite && <i>{cookie.sameSite}</i>}{cookie.priority && <i>{cookie.priority}</i>}{cookie.sameParty && <i>SameParty</i>}</span><button className="icon-button danger" title="删除 Cookie" onClick={() => void run(async () => { if (!tab?.id) throw new Error('请选择目标标签页'); await request('cookie.remove', removeInputs([cookie])[0]); setCookies(await request('cookie.list', { url, tabId: tab.id })); }, 'Cookie 已删除')}><Trash2 size={15} /></button></div>;
       })}</div>)}</div>
-      <div className="rule-editor cookie-editor-pane"><h2>写入 Cookie</h2><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="值"><textarea rows={4} value={draft.value} onChange={(event) => setDraft({ ...draft, value: event.target.value })} /></Field><Field label="Domain" hint="留空创建 HostOnly Cookie"><input value={draft.domain || ''} onChange={(event) => setDraft({ ...draft, domain: event.target.value || undefined })} /></Field><Field label="Path"><input value={draft.path} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></Field><Field label="过期时间"><input type="datetime-local" value={draft.expirationDate ? new Date(draft.expirationDate * 1_000).toISOString().slice(0, 16) : ''} onChange={(event) => setDraft({ ...draft, expirationDate: event.target.value ? new Date(event.target.value).getTime() / 1_000 : undefined })} /></Field><Field label="SameSite"><select value={draft.sameSite} onChange={(event) => setDraft({ ...draft, sameSite: event.target.value as CookieInput['sameSite'] })}><option value="unspecified">Unspecified</option><option value="lax">Lax</option><option value="strict">Strict</option><option value="no_restriction">None</option></select></Field><Field label="Partition top-level site"><input placeholder="https://top.example" value={draft.partitionKey?.topLevelSite || ''} onChange={(event) => setDraft({ ...draft, partitionKey: event.target.value ? { ...draft.partitionKey, topLevelSite: event.target.value } : undefined })} /></Field><label className="check-row"><input type="checkbox" checked={draft.secure} onChange={(event) => setDraft({ ...draft, secure: event.target.checked })} />Secure</label><label className="check-row"><input type="checkbox" checked={draft.httpOnly} onChange={(event) => setDraft({ ...draft, httpOnly: event.target.checked })} />HttpOnly</label><label className="check-row"><input type="checkbox" disabled={!draft.partitionKey} checked={draft.partitionKey?.hasCrossSiteAncestor || false} onChange={(event) => setDraft({ ...draft, partitionKey: { ...draft.partitionKey, hasCrossSiteAncestor: event.target.checked } })} />Cross-site ancestor</label><button className="primary-button" disabled={busy || !url || !draft.name} onClick={() => void run(async () => { await request('cookie.set', { url, ...draft }); setCookies(await request('cookie.list', { url })); }, 'Cookie 已写入')}><Save size={16} />保存 Cookie</button><div className="cookie-transfer"><h2>导入 / 导出</h2><div><select value={transferFormat} onChange={(event) => setTransferFormat(event.target.value as CookieTransferFormat)}><option value="json">JSON</option><option value="netscape">Netscape</option><option value="set-cookie">Set-Cookie</option></select><label className="check-row"><input type="checkbox" checked={includeExportValues} onChange={(event) => setIncludeExportValues(event.target.checked)} />导出原始值</label></div><textarea rows={6} value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴 Cookie 数据" /><div className="editor-actions"><Button variant="primary" disabled={busy || !importText.trim()} onClick={() => void run(async () => { const result = await request('cookie.import', { url, format: transferFormat, text: importText }); setTransferStatus(`导入 ${result.imported}，失败 ${result.failed}${result.warnings.length ? `；${result.warnings.join('；')}` : ''}`); setCookies(await request('cookie.list', { url })); }, 'Cookie 导入完成')}><Upload size={14} />导入</Button><Button variant="ghost" disabled={busy || cookies.length === 0} onClick={() => void run(downloadExport, includeExportValues ? 'Cookie 已导出（包含值）' : 'Cookie 已脱敏导出')}><Download size={14} />导出</Button></div>{transferStatus && <p className="transfer-status">{transferStatus}</p>}</div></div>
+      <div className="rule-editor cookie-editor-pane"><h2>写入 Cookie</h2><Field label="名称"><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field><Field label="值"><textarea rows={4} value={draft.value} onChange={(event) => setDraft({ ...draft, value: event.target.value })} /></Field><Field label="Domain" hint="留空创建 HostOnly Cookie"><input value={draft.domain || ''} onChange={(event) => setDraft({ ...draft, domain: event.target.value || undefined })} /></Field><Field label="Path"><input value={draft.path} onChange={(event) => setDraft({ ...draft, path: event.target.value })} /></Field><Field label="过期时间"><input type="datetime-local" value={draft.expirationDate ? new Date(draft.expirationDate * 1_000).toISOString().slice(0, 16) : ''} onChange={(event) => setDraft({ ...draft, expirationDate: event.target.value ? new Date(event.target.value).getTime() / 1_000 : undefined })} /></Field><Field label="SameSite"><select value={draft.sameSite} onChange={(event) => setDraft({ ...draft, sameSite: event.target.value as CookieInput['sameSite'] })}><option value="unspecified">Unspecified</option><option value="lax">Lax</option><option value="strict">Strict</option><option value="no_restriction">None</option></select></Field><Field label="Partition top-level site"><input placeholder="https://top.example" value={draft.partitionKey?.topLevelSite || ''} onChange={(event) => setDraft({ ...draft, partitionKey: event.target.value ? { ...draft.partitionKey, topLevelSite: event.target.value } : undefined })} /></Field><label className="check-row"><input type="checkbox" checked={draft.secure} onChange={(event) => setDraft({ ...draft, secure: event.target.checked })} />Secure</label><label className="check-row"><input type="checkbox" checked={draft.httpOnly} onChange={(event) => setDraft({ ...draft, httpOnly: event.target.checked })} />HttpOnly</label><label className="check-row"><input type="checkbox" disabled={!draft.partitionKey} checked={draft.partitionKey?.hasCrossSiteAncestor || false} onChange={(event) => setDraft({ ...draft, partitionKey: { ...draft.partitionKey, hasCrossSiteAncestor: event.target.checked } })} />Cross-site ancestor</label><button className="primary-button" disabled={busy || !url || !draft.name || !tab?.id} onClick={() => void run(async () => { if (!tab?.id) throw new Error('请选择目标标签页'); await request('cookie.set', { url, tabId: tab.id, ...draft }); setCookies(await request('cookie.list', { url, tabId: tab.id })); }, 'Cookie 已写入')}><Save size={16} />保存 Cookie</button><div className="cookie-transfer"><h2>导入 / 导出</h2><div><select value={transferFormat} onChange={(event) => setTransferFormat(event.target.value as CookieTransferFormat)}><option value="json">JSON</option><option value="netscape">Netscape</option><option value="set-cookie">Set-Cookie</option></select><label className="check-row"><input type="checkbox" checked={includeExportValues} onChange={(event) => setIncludeExportValues(event.target.checked)} />导出原始值</label></div><textarea rows={6} value={importText} onChange={(event) => setImportText(event.target.value)} placeholder="粘贴 Cookie 数据" /><div className="editor-actions"><Button variant="primary" disabled={busy || !importText.trim() || !tab?.id} onClick={() => void run(async () => { if (!tab?.id) throw new Error('请选择目标标签页'); const result = await request('cookie.import', { url, tabId: tab.id, format: transferFormat, text: importText }); setTransferStatus(`导入 ${result.imported}，失败 ${result.failed}${result.warnings.length ? `；${result.warnings.join('；')}` : ''}`); setCookies(await request('cookie.list', { url, tabId: tab.id })); }, 'Cookie 导入完成')}><Upload size={14} />导入</Button><Button variant="ghost" disabled={busy || cookies.length === 0} onClick={() => void run(downloadExport, includeExportValues ? 'Cookie 已导出（包含值）' : 'Cookie 已脱敏导出')}><Download size={14} />导出</Button></div>{transferStatus && <p className="transfer-status">{transferStatus}</p>}</div></div>
     </div>
   </div>;
 }
@@ -498,7 +517,21 @@ function networkLabel(record: NetworkRequestRecord): { host: string; path: strin
   }
 }
 
-function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; bridge: BridgeStatus; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
+function NetworkActivity({
+  state,
+  setState,
+  tab,
+  bridge,
+  run,
+  busy,
+}: {
+  state: ExtensionState;
+  setState: (state: ExtensionState) => void;
+  tab?: ActiveTabInfo;
+  bridge: BridgeStatus;
+  run: (task: () => Promise<void>, success?: string) => Promise<void>;
+  busy: boolean;
+}) {
   const [status, setStatus] = useState<NetworkCaptureStatus>();
   const [records, setRecords] = useState<NetworkRequestRecord[]>([]);
   const [selectedId, setSelectedId] = useState('');
@@ -510,6 +543,12 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
   const [captureHeaders, setCaptureHeaders] = useState(false);
   const [captureBody, setCaptureBody] = useState(false);
   const [query, setQuery] = useState('');
+  const transformShared = gatewayShareActive(state.activeGrant, tab);
+
+  const shareTransform = async () => {
+    if (!tab) throw new Error('请先选择需要共享的页面');
+    setState(await request('grant.create', gatewayShareGrantInput(state, tab)));
+  };
 
   const load = useCallback(async () => {
     if (!tab) return;
@@ -562,6 +601,14 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
   const canGeneratePoc = bridge.state === 'connected' && Boolean(bridge.capabilities?.includes('yakit.poc.generate'));
   const canPrepareAnalysis = bridge.state === 'connected' && Boolean(bridge.capabilities?.includes('yakit.browser_request.prepare_analysis'));
   const captureTarget = status?.active ? status.target : tab ? { tabId: tab.id } : undefined;
+  const persistenceHint = status?.persistence === 'degraded'
+    ? `会话存储失败，当前记录仅保留在内存中${status.persistenceError ? `：${status.persistenceError}` : ''}`
+    : status?.persistence === 'memory-only'
+      ? '当前浏览器不提供会话存储，记录仅保留在内存中'
+      : status?.persistence === 'pending'
+        ? '最新记录正在写入浏览器会话存储'
+        : status?.persistence === 'persisted' ? '记录已写入浏览器会话存储' : undefined;
+  const persistenceSuffix = status?.persistence === 'degraded' || status?.persistence === 'memory-only' ? ' · 仅内存' : '';
 
   const start = () => run(async () => {
     if (!tab) throw new Error('请选择目标标签页');
@@ -575,7 +622,7 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
 
   return <div className="section-view network-view">
     <div className="page-heading"><div><h1>网络活动</h1><p>HTTP 请求、表单导航、实时通信与前端加密调用。</p></div><div className="network-heading-actions">
-      <span className={`capture-state ${status?.active ? 'active' : ''}`}><i />{status?.active ? `${status.count} 条请求` : '未捕获'}</span>
+      <span className={`capture-state ${status?.active ? 'active' : ''}`} title={persistenceHint}><i />{status?.active ? `${status.count} 条请求${persistenceSuffix}` : '未捕获'}</span>
       {status?.active ? <Button variant="ghost" disabled={busy || !captureTarget} onClick={() => void run(async () => { setStatus(await request('network.capture.stop', captureTarget!)); setRecords([]); setSelectedId(''); }, '网络捕获已停止')}><Square size={14} />停止</Button> : <Button variant="primary" disabled={busy || !tab?.url?.startsWith('http')} onClick={() => void start()}><Play size={14} />开始捕获</Button>}
     </div></div>
 
@@ -614,7 +661,15 @@ function NetworkActivity({ tab, bridge, run, busy }: { tab?: ActiveTabInfo; brid
       </aside>
     </div>}
 
-    <RecordingWorkspace tab={tab} busy={busy} run={run} />
+    <RecordingWorkspace
+      tab={tab}
+      busy={busy}
+      run={run}
+      gatewayShared={transformShared}
+      gatewayShareExpiresAt={transformShared ? state.activeGrant?.expiresAt : undefined}
+      gatewayBridgeConnected={bridge.state === 'connected'}
+      onShareGateway={shareTransform}
+    />
   </div>;
 }
 

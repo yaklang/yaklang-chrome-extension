@@ -21,8 +21,9 @@ class FakeWorker extends EventTarget {
     super();
   }
 
-  postMessage(value: unknown): void {
-    this.sent.push(value);
+  postMessage(value: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions): void {
+    const transfer = Array.isArray(transferOrOptions) ? transferOrOptions : transferOrOptions?.transfer;
+    this.sent.push(transfer?.length ? structuredClone(value, { transfer }) : value);
   }
 
   reply(value: unknown): void {
@@ -38,8 +39,9 @@ class FakeWorker extends EventTarget {
 class FakeMessagePort extends EventTarget {
   sent: unknown[] = [];
 
-  postMessage(value: unknown): void {
-    this.sent.push(value);
+  postMessage(value: unknown, transferOrOptions?: Transferable[] | StructuredSerializeOptions): void {
+    const transfer = Array.isArray(transferOrOptions) ? transferOrOptions : transferOrOptions?.transfer;
+    this.sent.push(transfer?.length ? structuredClone(value, { transfer }) : value);
   }
 
   reply(value: unknown): void {
@@ -140,6 +142,47 @@ describe('communication boundary runtime', () => {
     ]));
     expect(emitted.find((item) => item.operation === 'request')).toMatchObject({
       kind: 'beacon', method: 'POST', wrapperHandleId: expect.any(String),
+    });
+    runtime.stop();
+  });
+
+  it('fingerprints transferable ArrayBuffer values before the page transfers ownership', () => {
+    const scope = fakeWindow();
+    const emitted: CommunicationBoundaryEvent[] = [];
+    let sequence = 0;
+    const runtime = createCommunicationBoundaryRuntime(scope, {
+      unique: (prefix) => `${prefix}-${++sequence}`,
+      describe(value, path) {
+        const bytes = value instanceof ArrayBuffer ? new Uint8Array(value) : undefined;
+        return {
+          dataType: value?.constructor?.name || typeof value,
+          byteLength: bytes?.byteLength,
+          evidence: [{
+            path,
+            fingerprint: `bytes:${bytes ? [...bytes].join(',') : ''}`,
+            encoding: 'hex',
+            byteLength: bytes?.byteLength || 0,
+          }],
+        };
+      },
+      stackInfo: () => ({}),
+      emit(event, context) {
+        emitted.push(event);
+        return { traceId: context?.traceId || 'trace-transfer' };
+      },
+      afterWrapperInvoke: () => undefined,
+    });
+    runtime.start();
+    const worker = new scope.Worker('/worker.js');
+    const buffer = Uint8Array.from([1, 2, 3, 4]).buffer;
+
+    worker.postMessage(buffer, [buffer]);
+
+    expect(buffer.byteLength).toBe(0);
+    expect(worker.sent[0]).toBeInstanceOf(ArrayBuffer);
+    expect(emitted.find((event) => event.operation === 'worker.postMessage')).toMatchObject({
+      byteLength: 4,
+      inputs: [expect.objectContaining({ fingerprint: 'bytes:1,2,3,4', byteLength: 4 })],
     });
     runtime.stop();
   });

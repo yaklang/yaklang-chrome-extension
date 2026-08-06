@@ -97,7 +97,7 @@ export function AutoSwitchView({ state, setState, run, busy, tab }: ProxyViewPro
     </div>
 
     <section className={`proxy-apply-band ${active ? 'is-active' : ''} ${state.proxyRuntime.dirty ? 'is-dirty' : ''}`}>
-      <div className="proxy-mode-state"><span><i />{active ? '自动切换运行中' : '自动切换未启用'}</span><strong>{state.proxyRuntime.dirty ? '存在未应用的更改' : state.proxyRuntime.appliedAt ? '配置与浏览器一致' : '尚未生成 PAC'}</strong></div>
+      <div className="proxy-mode-state"><span><i />{active ? '自动切换运行中' : '自动切换未启用'}</span><strong>{state.proxyRuntime.dirty ? '存在未应用的更改' : active ? '配置与浏览器一致' : state.proxyRuntime.appliedAt ? 'PAC 已就绪，可立即启用' : '尚未生成 PAC'}</strong></div>
       <Field label="默认出口"><select value={state.proxyRouting.defaultProfileId} onChange={(event) => void run(async () => setState(await request('proxy.rules.settings', { ...state.proxyRouting, defaultProfileId: event.target.value })), '默认出口已更新')}>{routableProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field>
       <Field label="代理失败"><select value={state.proxyRouting.failMode} onChange={(event) => void run(async () => setState(await request('proxy.rules.settings', { ...state.proxyRouting, failMode: event.target.value as 'open' | 'closed' })), '失败策略已更新')}><option value="closed">保持失败</option><option value="open">回退到 DIRECT</option></select></Field>
       <div className="proxy-compile-metrics"><span><strong>{state.proxyRuntime.manualRuleCount}</strong> 手动</span><span><strong>{state.proxyRuntime.sourceRuleCount}</strong> 订阅</span><span><strong>{formatBytes(state.proxyRuntime.compiledBytes)}</strong> PAC</span></div>
@@ -141,7 +141,7 @@ export function AutoSwitchView({ state, setState, run, busy, tab }: ProxyViewPro
               }
             }}
           >
-            <span className="proxy-rule-order"><Button size="icon" variant="ghost" aria-label="上移规则" disabled={index === 0} onClick={(event) => { event.stopPropagation(); void reorder(rule, -1); }}><ArrowUp size={13} /></Button><Button size="icon" variant="ghost" aria-label="下移规则" disabled={index === rules.length - 1} onClick={(event) => { event.stopPropagation(); void reorder(rule, 1); }}><ArrowDown size={13} /></Button></span>
+            <span className="proxy-rule-order"><Button size="icon" variant="ghost" aria-label="上移规则" disabled={busy || index === 0} onClick={(event) => { event.stopPropagation(); void reorder(rule, -1); }}><ArrowUp size={13} /></Button><Button size="icon" variant="ghost" aria-label="下移规则" disabled={busy || index === rules.length - 1} onClick={(event) => { event.stopPropagation(); void reorder(rule, 1); }}><ArrowDown size={13} /></Button></span>
             <span><strong>{rule.name}</strong><small>{CONDITION_LABELS[rule.condition.type]}</small></span>
             <code title={rule.condition.value}>{rule.condition.value}</code>
             <span>{profile?.name || '出口已删除'}</span>

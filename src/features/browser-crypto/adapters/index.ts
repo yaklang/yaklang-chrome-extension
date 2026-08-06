@@ -6,6 +6,10 @@ import { smCryptoAdapter } from './sm-crypto';
 import { nodeForgeAdapter } from './node-forge';
 import { jsrsasignAdapter } from './jsrsasign';
 import { joseAdapter } from './jose';
+import { libsodiumAdapter } from './libsodium';
+import { tweetNaclAdapter } from './tweetnacl';
+import { nobleAdapter } from './noble';
+import { openPgpAdapter } from './openpgp';
 
 export const PAGE_CRYPTO_ADAPTERS: PageCryptoAdapter[] = [
   webCryptoAdapter,
@@ -15,6 +19,10 @@ export const PAGE_CRYPTO_ADAPTERS: PageCryptoAdapter[] = [
   nodeForgeAdapter,
   jsrsasignAdapter,
   joseAdapter,
+  libsodiumAdapter,
+  tweetNaclAdapter,
+  nobleAdapter,
+  openPgpAdapter,
 ];
 
 export type {

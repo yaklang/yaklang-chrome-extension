@@ -62,8 +62,18 @@ describe('request preparation evidence', () => {
     expect(events.map((event) => event.operation)).toEqual([
       'JSON.stringify', 'URLSearchParams.sort', 'URLSearchParams.toString',
     ]);
-    expect(events[0].transform).toEqual({ category: 'serializer', provider: 'native', phase: 'output' });
-    expect(events[1].transform).toEqual({ category: 'canonicalization', provider: 'native', phase: 'output' });
+    expect(events[0].transform).toEqual({
+      adapterId: 'native.json',
+      providerKind: 'native',
+      category: 'serializer',
+      phase: 'output',
+    });
+    expect(events[1].transform).toEqual({
+      adapterId: 'native.url-search-params',
+      providerKind: 'native',
+      category: 'canonicalization',
+      phase: 'output',
+    });
     runtime.stop();
   });
 
@@ -87,7 +97,12 @@ describe('request preparation evidence', () => {
 
     expect(result).toBeInstanceOf(Promise);
     const axios = events.find((event) => event.operation === 'axios.request');
-    expect(axios?.transform).toEqual({ category: 'request-builder', provider: 'axios', phase: 'boundary' });
+    expect(axios?.transform).toEqual({
+      adapterId: 'axios',
+      providerKind: 'library',
+      category: 'request-builder',
+      phase: 'boundary',
+    });
     expect(axios?.inputs).toEqual(expect.arrayContaining([
       expect.objectContaining({ path: '$headers.X-Signature', fingerprint: 'fp:signed-value' }),
       expect.objectContaining({ path: '$query.nonce', fingerprint: 'fp:nonce-value' }),

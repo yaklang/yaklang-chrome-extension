@@ -29,6 +29,8 @@ export class RetainedCallBudget<T extends RetainedCallBudgetEntry> {
 
   #retainedBytes = 0;
 
+  #droppedCount = 0;
+
   constructor(options: Partial<RetainedCallBudgetOptions> = {}) {
     this.#options = { ...DEFAULT_OPTIONS, ...options };
   }
@@ -41,21 +43,31 @@ export class RetainedCallBudget<T extends RetainedCallBudgetEntry> {
     return this.#entries.size;
   }
 
+  get droppedCount(): number {
+    return this.#droppedCount;
+  }
+
   get(id: string): T | undefined {
     return this.#entries.get(id);
   }
 
   add(entry: T): boolean {
     const weight = Math.max(0, Math.ceil(entry.retainedBytes));
-    if (weight > this.#options.maxEntryBytes || weight > this.#options.maxBytes) return false;
+    if (weight > this.#options.maxEntryBytes || weight > this.#options.maxBytes) {
+      this.#droppedCount += 1;
+      return false;
+    }
     this.delete(entry.id);
     while (this.#order.length >= this.#options.maxCount
       || (this.#order.length > 0 && this.#retainedBytes + weight > this.#options.maxBytes)) {
       const oldest = this.#order[0];
       if (!oldest) break;
-      this.delete(oldest);
+      this.remove(oldest, true);
     }
-    if (this.#retainedBytes + weight > this.#options.maxBytes) return false;
+    if (this.#retainedBytes + weight > this.#options.maxBytes) {
+      this.#droppedCount += 1;
+      return false;
+    }
     this.#entries.set(entry.id, { ...entry, retainedBytes: weight });
     this.#order.push(entry.id);
     this.#retainedBytes += weight;
@@ -63,12 +75,17 @@ export class RetainedCallBudget<T extends RetainedCallBudgetEntry> {
   }
 
   delete(id: string): boolean {
+    return this.remove(id, false);
+  }
+
+  private remove(id: string, dropped: boolean): boolean {
     const current = this.#entries.get(id);
     if (!current) return false;
     this.#entries.delete(id);
     const index = this.#order.indexOf(id);
     if (index >= 0) this.#order.splice(index, 1);
     this.#retainedBytes = Math.max(0, this.#retainedBytes - current.retainedBytes);
+    if (dropped) this.#droppedCount += 1;
     return true;
   }
 
@@ -76,5 +93,6 @@ export class RetainedCallBudget<T extends RetainedCallBudgetEntry> {
     this.#entries.clear();
     this.#order.length = 0;
     this.#retainedBytes = 0;
+    this.#droppedCount = 0;
   }
 }

@@ -17,35 +17,6 @@ html, body { width: 100%; height: 100%; margin: 0; pointer-events: none; }
 .floating-panel--right { right: 0; }
 .floating-panel.is-expanded { width: min(326px, calc(100vw - 8px)); }
 
-/* Header: follows theme surface, brand tile keeps the dark logo chip */
-.floating-panel__header {
-  height: 46px;
-  display: flex;
-  align-items: center;
-  overflow: hidden;
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--foreground);
-  user-select: none;
-  touch-action: none;
-}
-.floating-panel--left .floating-panel__header { border-left: 0; border-radius: 0 8px 8px 0; }
-.floating-panel--right .floating-panel__header { flex-direction: row-reverse; border-right: 0; border-radius: 8px 0 0 8px; }
-.floating-panel.is-expanded .floating-panel__header { border-radius: 8px 8px 0 0; }
-.floating-panel__brand { position: relative; width: 44px; height: 44px; flex: 0 0 44px; padding: 0; display: grid; place-items: center; border: 0; background: transparent; }
-.floating-panel__brand img { width: 42px; height: 42px; display: block; object-fit: contain; pointer-events: none; }
-.floating-panel__signal { position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; border: 1px solid var(--surface); border-radius: 50%; background: #90979e; }
-.floating-panel__signal.connected { background: #45b77d; }
-.floating-panel__signal.connecting { background: #e3a632; }
-.floating-panel__signal.negotiating { background: #e3a632; }
-.floating-panel__signal.error { background: #dc5e5e; }
-.floating-panel__title { min-width: 0; flex: 1; display: grid; gap: 1px; padding: 0 10px; }
-.floating-panel__title strong, .floating-panel__title span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.floating-panel__title strong { color: var(--foreground); font-size: var(--text-md); font-weight: 600; line-height: 17px; }
-.floating-panel__title span { color: var(--muted); font-size: var(--text-sm); line-height: 15px; }
-.floating-panel__grip { color: var(--muted); }
-.floating-panel__header > svg:last-child { margin: 0 10px 0 4px; color: var(--muted); }
-
 .floating-panel__body {
   overflow: hidden;
   border: 1px solid var(--border-strong);

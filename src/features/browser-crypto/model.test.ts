@@ -4,6 +4,7 @@ import {
   cryptoDeepCaptureMatcher,
   cryptoEventLabel,
   isForwardCryptoEvent,
+  isReverseCryptoEvent,
   normalizeBrowserRecordingCrypto,
 } from './model';
 
@@ -50,6 +51,8 @@ describe('browser crypto model', () => {
   it('classifies forward and reverse RSA calls', () => {
     expect(isForwardCryptoEvent(cryptoEvent('encrypt'))).toBe(true);
     expect(isForwardCryptoEvent(cryptoEvent('decrypt'))).toBe(false);
+    expect(isReverseCryptoEvent(cryptoEvent('decrypt'))).toBe(true);
+    expect(isReverseCryptoEvent(cryptoEvent('verify'))).toBe(false);
   });
 
   it('uses adapter-aware labels and exact wrapper handles for deep capture', () => {

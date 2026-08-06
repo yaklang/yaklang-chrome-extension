@@ -26,13 +26,17 @@ function emptyDirection(enabled = false): BrowserTransformDirection {
   return { enabled, nodes: [] };
 }
 
-function candidateOutput(candidate?: BrowserProfileInferenceCandidate): {
+function candidateGuidance(candidate?: BrowserProfileInferenceCandidate): {
+  inputPaths?: string[];
   outputKind?: GuidedTransformOutputKind;
   outputField?: string;
 } {
   const destination = candidate?.request.destination;
   const serialization = candidate?.request.serialization;
   if (!destination) return {};
+  if (candidate?.direction === 'response') {
+    return { inputPaths: [destination], outputKind: 'body' };
+  }
   if (serialization === 'form-field') return { outputKind: 'form-field', outputField: destination.slice(5) };
   if (serialization === 'json-field') return { outputKind: 'json-field', outputField: destination.slice(5) };
   if (serialization === 'header') return { outputKind: 'header', outputField: destination.slice(7) };
@@ -46,20 +50,24 @@ export function createBrowserTransformProfileInput(
   callable?: BrowserPageCallable,
   candidate?: BrowserProfileInferenceCandidate,
 ): BrowserTransformProfileInput {
-  const guide = defaultGuidedTransform(callable, candidateOutput(candidate));
+  const guide = defaultGuidedTransform(callable, candidateGuidance(candidate));
+  const compiled = callable ? compileGuidedTransform(guide, callable) : emptyDirection(true);
+  const responseDirection = candidate?.direction === 'response';
   const routeEvent = candidate ? {
     url: candidate.request.url,
     method: candidate.request.method,
   } : event;
   return {
-    name: routeEvent?.url ? `${routeEvent.method || 'HTTP'} ${routeOf(routeEvent, tab)} 明文网关` : `${tab.title || '当前页面'} 明文网关`,
+    name: routeEvent?.url
+      ? `${routeEvent.method || 'HTTP'} ${routeOf(routeEvent, tab)} ${responseDirection ? '响应' : '请求'}明文网关`
+      : `${tab.title || '当前页面'} 明文网关`,
     enabled: true,
     target: { tabId: tab.id, frameId: 0 },
     origin: originOf(tab.url),
     match: { methods: routeEvent?.method ? [routeEvent.method.toUpperCase()] : ['POST'], urlPattern: routeOf(routeEvent, tab) },
-    request: callable ? compileGuidedTransform(guide, callable) : emptyDirection(true),
-    response: emptyDirection(false),
+    request: responseDirection ? emptyDirection(false) : compiled,
+    response: responseDirection ? compiled : emptyDirection(false),
     failMode: 'closed',
-    maxConcurrency: 2,
+    maxConcurrency: callable?.kind === 'request-transaction' ? 1 : 2,
   };
 }

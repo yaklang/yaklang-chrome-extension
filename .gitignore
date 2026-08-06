@@ -33,3 +33,9 @@ web-ext.config.ts
 
 ord/
 .artifacts/
+
+# Tool-specific clients are developed and packaged outside this repository.
+/integrations/browser-transform/
+
+# Product and research documents are maintained locally and are not versioned.
+/docs/

@@ -6,6 +6,11 @@ import { hashText } from './hash';
 
 const MAX_PAC_BYTES = 4 * 1024 * 1024;
 const LARGE_PAC_BYTES = 1024 * 1024;
+const PAC_COMPILER_VERSION = 2;
+const TRIE_MATCH_SUFFIX = 1;
+const TRIE_MATCH_EXACT = 2;
+const TRIE_MATCH_SUBDOMAIN = 4;
+const SIMPLE_HOST_PATTERN = /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/i;
 
 export interface ProxyCompilationInput {
   manualRules: ProxyRule[];
@@ -53,9 +58,20 @@ function wildcardRegex(pattern: string): string {
   return `^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replaceAll('*', '.*').replaceAll('?', '.')}$`;
 }
 
+function simpleSubdomainWildcard(value: string): string | undefined {
+  const normalized = value.trim().toLowerCase().replace(/\.$/, '');
+  if (!normalized.startsWith('*.')) return undefined;
+  const domain = normalized.slice(2);
+  return domain && SIMPLE_HOST_PATTERN.test(domain) ? domain : undefined;
+}
+
 function addTrieCondition(trie: TrieNode, condition: ProxyCondition): boolean {
-  if (condition.type !== 'host_exact' && condition.type !== 'host_suffix') return false;
-  const labels = condition.value.toLowerCase().replace(/\.$/, '').split('.').filter(Boolean).reverse();
+  const wildcardDomain = condition.type === 'host_wildcard'
+    ? simpleSubdomainWildcard(condition.value)
+    : undefined;
+  if (condition.type !== 'host_exact' && condition.type !== 'host_suffix' && !wildcardDomain) return false;
+  const domain = wildcardDomain || condition.value.toLowerCase().replace(/\.$/, '');
+  const labels = domain.split('.').filter(Boolean).reverse();
   if (labels.length === 0) return false;
   let node = trie;
   for (const label of labels) {
@@ -64,12 +80,22 @@ function addTrieCondition(trie: TrieNode, condition: ProxyCondition): boolean {
     if (!existing || typeof existing === 'number') node[key] = {};
     node = node[key] as TrieNode;
   }
-  node.$ = (node.$ || 0) | (condition.type === 'host_suffix' ? 1 : 2);
+  const matchFlag = condition.type === 'host_suffix'
+    ? TRIE_MATCH_SUFFIX
+    : wildcardDomain
+      ? TRIE_MATCH_SUBDOMAIN
+      : TRIE_MATCH_EXACT;
+  node.$ = (node.$ || 0) | matchFlag;
   return true;
 }
 
 interface ConditionCompiler {
   regexps: Array<{ value: string; flags: string }>;
+}
+
+interface ResolvedProxyCondition {
+  condition: ProxyCondition;
+  result: string;
 }
 
 function compileCondition(condition: ProxyCondition, compiler: ConditionCompiler): string {
@@ -106,15 +132,51 @@ function resolveProfile(
 }
 
 function resolveNamedSourceProfile(name: string, source: ProxyRuleSource, profiles: ProxyProfile[]): ProxyProfile {
-  const profile = profiles.find((item) => item.id === name || item.name === name);
+  const exactId = profiles.find((item) => item.id === name);
+  const named = profiles.filter((item) => item.name === name);
+  if (!exactId && named.length > 1) {
+    throw new Error(`规则源“${source.name}”引用了重名出口：${name}`);
+  }
+  const profile = exactId || named[0];
   if (!profile || !['direct', 'fixed_servers'].includes(profile.kind)) {
     throw new Error(`规则源“${source.name}”引用了未知或不可路由的出口：${name}`);
   }
   return profile;
 }
 
+function compileResolvedConditions(
+  items: ResolvedProxyCondition[],
+  compiler: ConditionCompiler,
+  tries: TrieNode[],
+): string[] {
+  const blocks: string[] = [];
+  let start = 0;
+  while (start < items.length) {
+    const result = items[start].result;
+    let end = start + 1;
+    while (end < items.length && items[end].result === result) end += 1;
+    const trie: TrieNode = {};
+    const conditions: string[] = [];
+    for (let index = start; index < end; index += 1) {
+      const condition = items[index].condition;
+      if (!addTrieCondition(trie, condition)) conditions.push(compileCondition(condition, compiler));
+    }
+    if (Object.keys(trie).length > 0) {
+      const trieIndex = tries.push(trie) - 1;
+      conditions.unshift(`__matchHost(host,__tries[${trieIndex}])`);
+    }
+    const chunkSize = 64;
+    for (let index = 0; index < conditions.length; index += chunkSize) {
+      blocks.push(`if(${conditions.slice(index, index + chunkSize).join('||')})return ${json(result)};`);
+    }
+    start = end;
+  }
+  return blocks;
+}
+
 export function proxyCompilationRevision(input: ProxyCompilationInput): string {
   return hashText(JSON.stringify({
+    compiler: PAC_COMPILER_VERSION,
     manual: sortedProxyRules(input.manualRules).map((rule) => [
       rule.id, rule.enabled, rule.order, rule.condition.type, rule.condition.value, rule.proxyProfileId, rule.updatedAt,
     ]),
@@ -138,44 +200,30 @@ function sourceBlock(
   if (rules.length === 0) return [];
   const hasCustomResults = rules.some((rule) => rule.resultProfileName);
   if (hasCustomResults) {
-    return rules.map((rule) => {
+    const resolved = rules.map((rule): ResolvedProxyCondition => {
       const target = rule.exception
         ? resolveProfile(source.bypassProfileId, input.profiles, input.routing.defaultProfileId)
         : rule.resultProfileName
           ? resolveNamedSourceProfile(rule.resultProfileName, source, input.profiles)
           : resolveProfile(source.matchProfileId, input.profiles, source.matchProfileId);
-      return `if(${compileCondition(rule.condition, compiler)})return ${json(profileToPac(target, input.routing.failMode))};`;
+      return { condition: rule.condition, result: profileToPac(target, input.routing.failMode) };
     });
+    return compileResolvedConditions(resolved, compiler, tries);
   }
 
-  const blocks: string[] = [];
+  const resolved: ResolvedProxyCondition[] = [];
   for (const exception of [true, false]) {
     const selected = rules.filter((rule) => rule.exception === exception);
     if (selected.length === 0) continue;
-    const trie: TrieNode = {};
-    const slow: string[] = [];
-    for (const rule of selected) {
-      if (!addTrieCondition(trie, rule.condition)) slow.push(compileCondition(rule.condition, compiler));
-    }
-    const conditions: string[] = [];
-    if (Object.keys(trie).length > 0) {
-      const trieIndex = tries.push(trie) - 1;
-      conditions.push(`__matchHost(host,__tries[${trieIndex}])`);
-    }
-    conditions.push(...slow);
-    if (conditions.length === 0) continue;
     const target = resolveProfile(
       exception ? source.bypassProfileId : source.matchProfileId,
       input.profiles,
       input.routing.defaultProfileId,
     );
-    const result = json(profileToPac(target, input.routing.failMode));
-    const chunkSize = 64;
-    for (let index = 0; index < conditions.length; index += chunkSize) {
-      blocks.push(`if(${conditions.slice(index, index + chunkSize).join('||')})return ${result};`);
-    }
+    const result = profileToPac(target, input.routing.failMode);
+    for (const rule of selected) resolved.push({ condition: rule.condition, result });
   }
-  return blocks;
+  return compileResolvedConditions(resolved, compiler, tries);
 }
 
 export function compileProxyRules(input: ProxyCompilationInput): CompiledProxyArtifact {
@@ -183,21 +231,24 @@ export function compileProxyRules(input: ProxyCompilationInput): CompiledProxyAr
   const tries: TrieNode[] = [];
   const body: string[] = [];
   const enabledManualRules = sortedProxyRules(input.manualRules).filter((rule) => rule.enabled);
-  for (const rule of enabledManualRules) {
+  const manualConditions = enabledManualRules.map((rule): ResolvedProxyCondition => {
     const target = resolveProfile(rule.proxyProfileId, input.profiles, input.routing.defaultProfileId);
-    body.push(`if(${compileCondition(rule.condition, compiler)})return ${json(profileToPac(target, input.routing.failMode))};`);
-  }
+    return { condition: rule.condition, result: profileToPac(target, input.routing.failMode) };
+  });
+  for (const block of compileResolvedConditions(manualConditions, compiler, tries)) body.push(block);
 
   let sourceRuleCount = 0;
   for (const source of sortedProxyRuleSources(input.sources).filter((item) => item.enabled && item.revision)) {
     const rules = input.sourceRules.get(source.id) || [];
     sourceRuleCount += rules.length;
-    body.push(...sourceBlock(source, rules, input, compiler, tries));
+    for (const block of sourceBlock(source, rules, input, compiler, tries)) body.push(block);
   }
 
   const fallback = resolveProfile(input.routing.defaultProfileId, input.profiles, 'direct');
-  const regexps = `[${compiler.regexps.map((item) => `new RegExp(${json(item.value)},${json(item.flags)})`).join(',')}]`;
-  const pacScript = `var __rx=${regexps},__tries=${json(tries)};function __matchHost(host,trie){var parts=host.toLowerCase().split('.'),node=trie;for(var i=parts.length-1;i>=0;i--){node=node[':'+parts[i]];if(!node)return false;if((node.$||0)&1)return true}return !!((node.$||0)&2)}function FindProxyForURL(url,host){${body.join('')}return ${json(profileToPac(fallback, input.routing.failMode))};}`;
+  const regexpSpecs = compiler.regexps.map((item) => [item.value, item.flags]);
+  const regexps = `JSON.parse(${json(json(regexpSpecs))})`;
+  const serializedTries = json(json(tries));
+  const pacScript = `var __rx=${regexps},__tries=JSON.parse(${serializedTries});for(var __i=0;__i<__rx.length;__i++)__rx[__i]=new RegExp(__rx[__i][0],__rx[__i][1]);function __matchHost(host,trie){var parts=host.toLowerCase().split('.'),node=trie;for(var i=parts.length-1;i>=0;i--){node=node[':'+parts[i]];if(!node)return false;var flag=node.$||0;if((flag&1)||((flag&4)&&i>0))return true}return !!((node.$||0)&2)}function FindProxyForURL(url,host){${body.join('')}return ${json(profileToPac(fallback, input.routing.failMode))};}`;
   const compiledBytes = new TextEncoder().encode(pacScript).byteLength;
   if (compiledBytes > MAX_PAC_BYTES) {
     throw new Error(`编译后的 PAC 为 ${(compiledBytes / 1024 / 1024).toFixed(2)} MB，超过 4 MB 安全上限；请停用重叠规则源或拆分自动切换方案`);
@@ -215,18 +266,18 @@ export function compileProxyRules(input: ProxyCompilationInput): CompiledProxyAr
   };
 }
 
-export function proxyConditionMatches(condition: ProxyCondition, rawUrl: string): boolean {
+function conditionMatches(condition: ProxyCondition, rawUrl: string, host: string): boolean {
+  const value = condition.value.trim();
+  if (condition.type === 'host_exact') return host === value.toLowerCase();
+  if (condition.type === 'host_suffix') {
+    const domain = value.toLowerCase();
+    return host === domain || host.endsWith(`.${domain}`);
+  }
+  if (condition.type === 'url_prefix') return rawUrl.startsWith(value);
+  if (condition.type === 'keyword') return rawUrl.includes(value);
+  const wildcardDomain = condition.type === 'host_wildcard' ? simpleSubdomainWildcard(value) : undefined;
+  if (wildcardDomain) return host.endsWith(`.${wildcardDomain}`);
   try {
-    const url = new URL(rawUrl);
-    const host = url.hostname.toLowerCase();
-    const value = condition.value.trim();
-    if (condition.type === 'host_exact') return host === value.toLowerCase();
-    if (condition.type === 'host_suffix') {
-      const domain = value.toLowerCase();
-      return host === domain || host.endsWith(`.${domain}`);
-    }
-    if (condition.type === 'url_prefix') return rawUrl.startsWith(value);
-    if (condition.type === 'keyword') return rawUrl.includes(value);
     const regexp = new RegExp(
       condition.type === 'host_wildcard' || condition.type === 'url_wildcard' ? wildcardRegex(value) : value,
       'i',
@@ -237,11 +288,20 @@ export function proxyConditionMatches(condition: ProxyCondition, rawUrl: string)
   }
 }
 
+export function proxyConditionMatches(condition: ProxyCondition, rawUrl: string): boolean {
+  try {
+    return conditionMatches(condition, rawUrl, new URL(rawUrl).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 export function previewProxyRules(url: string, input: ProxyCompilationInput): ProxyRulePreview {
   const parsed = new URL(url);
+  const hostname = parsed.hostname.toLowerCase();
   const trace: ProxyRouteTrace[] = [];
   for (const rule of sortedProxyRules(input.manualRules).filter((item) => item.enabled)) {
-    const matched = proxyConditionMatches(rule.condition, url);
+    const matched = conditionMatches(rule.condition, url, hostname);
     if (trace.length < 12) trace.push({
       kind: 'manual', name: rule.name, condition: `${rule.condition.type}: ${rule.condition.value}`,
       matched, profileId: rule.proxyProfileId,
@@ -257,10 +317,15 @@ export function previewProxyRules(url: string, input: ProxyCompilationInput): Pr
   for (const source of sortedProxyRuleSources(input.sources).filter((item) => item.enabled && item.revision)) {
     const rules = input.sourceRules.get(source.id) || [];
     const hasCustomResults = rules.some((rule) => rule.resultProfileName);
-    const previewOrder = hasCustomResults
-      ? rules
-      : [...rules.filter((rule) => rule.exception), ...rules.filter((rule) => !rule.exception)];
-    const matchedRule = previewOrder.find((rule) => proxyConditionMatches(rule.condition, url));
+    let matchedRule: NormalizedProxyRule | undefined;
+    if (hasCustomResults) {
+      matchedRule = rules.find((rule) => conditionMatches(rule.condition, url, hostname));
+    } else {
+      for (const exception of [true, false]) {
+        matchedRule = rules.find((rule) => rule.exception === exception && conditionMatches(rule.condition, url, hostname));
+        if (matchedRule) break;
+      }
+    }
     trace.push({
       kind: 'source', name: source.name, condition: matchedRule?.condition.value, matched: Boolean(matchedRule),
       profileId: matchedRule?.exception ? source.bypassProfileId : source.matchProfileId,

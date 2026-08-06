@@ -7,7 +7,13 @@ import type {
   BridgeConfig,
   BridgePairingStatus,
   BridgePublicKey,
+  CapabilityScope,
   BrowserCookie,
+  BrowserIncognitoIdentityResult,
+  BrowserFirefoxContainerIdentityResult,
+  BrowserFirefoxManagedContainer,
+  BrowserIsolationInspection,
+  BrowserIsolationProof,
   BrowserDeepCaptureMatcher,
   BrowserDeepCaptureStatus,
   CookieInput,
@@ -24,13 +30,18 @@ import type {
   NetworkRequestRecord,
   BrowserPageCallable,
   BrowserPageCallableExecution,
-  BrowserPageCallableTransaction,
   BrowserRecordingSnapshot,
   BrowserRecordingStatus,
   BrowserTransformExecuteInput,
   BrowserTransformExecution,
+  BrowserTransformPacket,
   BrowserTransformProfile,
   BrowserTransformProfileInput,
+  BrowserTransformProfileProposalResult,
+  BrowserTransformProfileValidationResult,
+  BrowserTransformRecoveryPlan,
+  BrowserTransformRecoveryValidationResult,
+  BrowserTransformValidationDraft,
   PageContext,
   PageContextOptions,
   PageEvalRequest,
@@ -60,6 +71,35 @@ export interface ExtensionRequestMap {
   'tab.get': { input: { tabId: number }; output: ActiveTabInfo };
   'tab.list': { input: undefined; output: ActiveTabInfo[] };
   'frame.list': { input: { tabId: number }; output: PageFrameSummary[] };
+  'isolation.inspect': { input: { tabIds?: number[] }; output: BrowserIsolationInspection };
+  'isolation.proof.create': { input: { leftTabId: number; rightTabId: number }; output: BrowserIsolationProof };
+  'isolation.incognito.open': { input: { url: string }; output: BrowserIncognitoIdentityResult };
+  'isolation.container.open': { input: { url: string; name?: string }; output: BrowserFirefoxContainerIdentityResult };
+  'isolation.container.list': { input: undefined; output: BrowserFirefoxManagedContainer[] };
+  'isolation.container.remove': { input: { cookieStoreId: string }; output: { cookieStoreId: string; removedTabs: number } };
+  'authorization.engine.task': {
+    input: {
+      schema:
+        | 'authorization.workspace.create'
+        | 'authorization.workspace.inspect'
+        | 'authorization.baseline.candidates'
+        | 'authorization.baseline.bind'
+        | 'authorization.logical.bind'
+        | 'authorization.plan.create'
+        | 'authorization.plan.execute'
+        | 'authorization.evidence.inspect'
+        | 'authorization.evidence.packet'
+        | 'authorization.evidence.diff'
+        | 'authorization.evidence.validate';
+      payload: Record<string, unknown>;
+      timeoutMs?: number;
+    };
+    output: unknown;
+  };
+  'authorization.yakit.open': {
+    input: { workspaceId: string };
+    output: { workspaceId: string; opened: boolean };
+  };
   'proxy.save': { input: ProxyProfile; output: ExtensionState };
   'proxy.delete': { input: { id: string }; output: ExtensionState };
   'proxy.switch': { input: { id: string }; output: ExtensionState };
@@ -81,12 +121,12 @@ export interface ExtensionRequestMap {
   'proxy.auth.status': { input: { profileId: string }; output: { configured: boolean } };
   'proxy.config.export': { input: undefined; output: ProxyConfiguration };
   'proxy.config.import': { input: { configuration: ProxyConfiguration }; output: ExtensionState };
-  'cookie.list': { input: { url: string }; output: BrowserCookie[] };
-  'cookie.set': { input: CookieInput; output: BrowserCookie };
+  'cookie.list': { input: { url: string; tabId: number }; output: BrowserCookie[] };
+  'cookie.set': { input: CookieInput & { tabId: number }; output: BrowserCookie };
   'cookie.remove': { input: CookieRemoveInput; output: undefined };
   'cookie.removeMany': { input: { cookies: CookieRemoveInput[] }; output: { removed: number; failed: number } };
-  'cookie.import': { input: { url: string; format: CookieTransferFormat; text: string }; output: CookieImportResult };
-  'cookie.export': { input: { url: string; format: CookieTransferFormat; includeValues: boolean }; output: string };
+  'cookie.import': { input: { url: string; tabId: number; format: CookieTransferFormat; text: string }; output: CookieImportResult };
+  'cookie.export': { input: { url: string; tabId: number; format: CookieTransferFormat; includeValues: boolean }; output: string };
   'ua.catalog': { input: undefined; output: UserAgentProfile[] };
   'ua.resolve': { input: { url: string }; output: UserAgentResolution };
   'ua.profile.save': { input: UserAgentProfileInput; output: UserAgentProfile };
@@ -104,6 +144,7 @@ export interface ExtensionRequestMap {
     shortcutEnabled?: boolean; autoCollapseFullscreen?: boolean;
   }; output: ExtensionState };
   'grant.create': { input: GrantCreateInput; output: ExtensionState };
+  'grant.refresh': { input: undefined; output: ExtensionState };
   'grant.revoke': { input: undefined; output: ExtensionState };
   'handoff.resolve': { input: { id: string; outcome: 'completed' | 'cancelled' }; output: ExtensionState };
   'network.capture.start': { input: { tabId?: number; frameId?: number; documentId?: string; captureHeaders?: boolean; captureBody?: boolean; maxEntries?: number; maxBodyBytes?: number }; output: NetworkCaptureStatus };
@@ -122,8 +163,8 @@ export interface ExtensionRequestMap {
   'recording.stop': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
   'callable.create': { input: ({ tabId?: number; frameId?: number; documentId?: string } & (
     | { source: 'recording'; callHandleId: string; name: string }
-    | { source: 'deep-capture'; strategy: 'selected-frame'; callFrameId: string; name?: string }
-    | { source: 'deep-capture'; strategy: 'request-transaction'; callFrameId: string; name?: string; transaction: BrowserPageCallableTransaction }
+    | { source: 'deep-capture'; strategy: 'selected-frame'; callFrameId: string; name?: string; candidateId?: string }
+    | { source: 'deep-capture'; strategy: 'request-transaction'; callFrameId: string; name?: string; candidateId: string }
     | { source: 'deep-capture'; strategy: 'expression'; callFrameId: string; name: string; functionExpression: string }
   )); output: BrowserPageCallable };
   'callable.list': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserPageCallable[] };
@@ -134,9 +175,62 @@ export interface ExtensionRequestMap {
   'deep.capture.keepalive': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
   'deep.capture.resume': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
   'deep.capture.detach': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserDeepCaptureStatus };
+  'analysis.profile.propose': {
+    input: {
+      tabId?: number;
+      frameId?: number;
+      documentId?: string;
+      candidateId: string;
+      callableId: string;
+      inputPaths?: string[];
+      name?: string;
+    };
+    output: BrowserTransformProfileProposalResult;
+  };
+  'analysis.profile.validate': {
+    input: {
+      tabId?: number;
+      frameId?: number;
+      documentId?: string;
+      candidateId: string;
+      callableId: string;
+      inputPaths?: string[];
+      name?: string;
+      packet: BrowserTransformPacket;
+      observed?: BrowserTransformPacket;
+      comparisonMode?: 'structure' | 'exact';
+    };
+    output: BrowserTransformProfileValidationResult;
+  };
+  'analysis.profile.validation.latest': {
+    input: { tabId?: number; frameId?: number; documentId?: string };
+    output: BrowserTransformValidationDraft | null;
+  };
   'transform.profile.list': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserTransformProfile[] };
   'transform.profile.save': { input: BrowserTransformProfileInput; output: BrowserTransformProfile };
   'transform.profile.delete': { input: { id: string }; output: BrowserTransformProfile[] };
+  'transform.recovery.get': { input: { id: string }; output: BrowserTransformRecoveryPlan };
+  'transform.recovery.start': { input: { id: string }; output: BrowserDeepCaptureStatus };
+  'transform.recovery.capture': {
+    input: {
+      id: string;
+      tabId: number;
+      frameId: number;
+      documentId?: string;
+      callFrameId: string;
+      strategy: 'selected-frame' | 'request-transaction';
+    };
+    output: BrowserTransformRecoveryPlan;
+  };
+  'transform.recovery.validate': {
+    input: { id: string; packet: BrowserTransformPacket };
+    output: BrowserTransformRecoveryValidationResult;
+  };
+  'transform.recovery.confirm': {
+    input: { id: string; validationId: string };
+    output: BrowserTransformProfile;
+  };
+  'transform.recovery.reset': { input: { id: string }; output: BrowserTransformRecoveryPlan };
   'transform.execute': { input: BrowserTransformExecuteInput; output: BrowserTransformExecution };
   'audit.list': { input: { limit?: number }; output: AuditEvent[] };
   'audit.clear': { input: undefined; output: undefined };
@@ -173,6 +267,54 @@ export interface ExtensionResponse<T = unknown> {
   data?: T;
   error?: string;
   errorCode?: string;
+  errorData?: unknown;
+}
+
+export type BridgeCapabilityDomain =
+  | 'system'
+  | 'page'
+  | 'isolation'
+  | 'authorization'
+  | 'handoff'
+  | 'network'
+  | 'recording'
+  | 'callable'
+  | 'debugger'
+  | 'transform'
+  | 'proxy';
+
+export type BridgeCapabilityAccess =
+  | 'read'
+  | 'sensitive-read'
+  | 'write'
+  | 'control'
+  | 'execute'
+  | 'dangerous';
+
+export type BridgeCapabilityTargetMode = 'none' | 'tab' | 'document' | 'profile';
+
+export interface BridgeCapabilityScopeCondition {
+  scope: CapabilityScope;
+  when: string;
+}
+
+export interface BridgeCapabilityDescriptor {
+  method: string;
+  domain: BridgeCapabilityDomain;
+  access: BridgeCapabilityAccess;
+  summary: string;
+  scopes: CapabilityScope[];
+  conditionalScopes?: BridgeCapabilityScopeCondition[];
+  targetMode: BridgeCapabilityTargetMode;
+  defaultTimeoutMs: number;
+  paramsSchema: Record<string, unknown>;
+}
+
+export interface BridgeCapabilityCatalog {
+  version: number;
+  schemaDialect: 'http://json-schema.org/draft-07/schema#';
+  hash: string;
+  capabilities: BridgeCapabilityDescriptor[];
 }
 
 export interface BridgeEnvelope {
@@ -181,11 +323,12 @@ export interface BridgeEnvelope {
   method?: string;
   params?: unknown;
   result?: unknown;
-  error?: { code: string; message: string };
+  error?: { code: string; message: string; data?: unknown };
   client?: string;
   version?: string;
   protocolVersion?: number;
   capabilities?: string[];
+  capabilityCatalog?: BridgeCapabilityCatalog;
   sessionId?: string;
   taskId?: string;
   grantId?: string;

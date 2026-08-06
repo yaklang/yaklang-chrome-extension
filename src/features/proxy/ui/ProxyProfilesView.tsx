@@ -22,12 +22,18 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
   const [passwordConfigured, setPasswordConfigured] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     setPassword('');
-    void request('proxy.auth.status', { profileId: draft.id }).then((result) => setPasswordConfigured(result.configured));
+    setPasswordConfigured(false);
+    void request('proxy.auth.status', { profileId: draft.id })
+      .then((result) => { if (!cancelled) setPasswordConfigured(result.configured); })
+      .catch(() => { if (!cancelled) setPasswordConfigured(false); });
+    return () => { cancelled = true; };
   }, [draft.id]);
 
-  const save = () => run(async () => {
-    setState(await request('proxy.save', draft));
+  const persistDraft = async () => {
+    const saved = await request('proxy.save', draft);
+    setState(saved);
     if (draft.authEnabled) {
       if (password) await request('proxy.auth.set', { profileId: draft.id, password });
     } else {
@@ -35,12 +41,22 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
     }
     setPassword('');
     setPasswordConfigured(Boolean(draft.authEnabled && (password || passwordConfigured)));
+    return saved;
+  };
+
+  const save = () => run(async () => {
+    await persistDraft();
   }, '代理出口已保存');
 
+  const saveAndUse = () => run(async () => {
+    await persistDraft();
+    setState(await request('proxy.switch', { id: draft.id }));
+  }, `${draft.name} 已保存并启用`);
+
   const remove = () => run(async () => {
-    setState(await request('proxy.delete', { id: draft.id }));
-    await request('proxy.auth.set', { profileId: draft.id, password: '' });
-    setDraft(state.proxyProfiles[0] || createProfile());
+    const updated = await request('proxy.delete', { id: draft.id });
+    setState(updated);
+    setDraft(updated.proxyProfiles[0] || createProfile());
   }, '代理出口已删除');
 
   return <div className="section-view proxy-page">
@@ -91,7 +107,7 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
         </section>}
         <div className="proxy-editor-actions">
           <Button variant="primary" disabled={busy || !draft.name || (draft.kind === 'fixed_servers' && (!draft.host || !draft.port))} onClick={() => void save()}><Save size={16} />保存</Button>
-          <Button disabled={busy} onClick={() => void run(async () => setState(await request('proxy.switch', { id: draft.id })), `${draft.name} 已启用`)}><Power size={16} />立即使用</Button>
+          <Button disabled={busy || !draft.name || (draft.kind === 'fixed_servers' && (!draft.host || !draft.port))} onClick={() => void saveAndUse()}><Power size={16} />保存并使用</Button>
           {!draft.builtin && <Button variant="danger" disabled={busy} onClick={() => void remove()}><Trash2 size={16} />删除</Button>}
         </div>
       </section>

@@ -56,6 +56,38 @@ export const joseManifest: CryptoAdapterManifest = {
   globalPaths: ['jose'],
 };
 
+export const libsodiumManifest: CryptoAdapterManifest = {
+  id: 'libsodium',
+  displayName: 'libsodium.js',
+  providerKind: 'library',
+  dynamic: true,
+  globalPaths: ['sodium'],
+};
+
+export const tweetNaclManifest: CryptoAdapterManifest = {
+  id: 'tweetnacl',
+  displayName: 'TweetNaCl.js',
+  providerKind: 'library',
+  dynamic: true,
+  globalPaths: ['nacl'],
+};
+
+export const nobleManifest: CryptoAdapterManifest = {
+  id: 'noble',
+  displayName: 'noble-*',
+  providerKind: 'library',
+  dynamic: true,
+  globalPaths: ['noble', 'nobleCiphers', 'nobleHashes', 'nobleCurves'],
+};
+
+export const openPgpManifest: CryptoAdapterManifest = {
+  id: 'openpgp',
+  displayName: 'OpenPGP.js',
+  providerKind: 'library',
+  dynamic: true,
+  globalPaths: ['openpgp'],
+};
+
 export const CRYPTO_ADAPTER_MANIFESTS: Readonly<Record<string, CryptoAdapterManifest>> = Object.freeze(
   Object.fromEntries([
     webCryptoManifest,
@@ -65,6 +97,10 @@ export const CRYPTO_ADAPTER_MANIFESTS: Readonly<Record<string, CryptoAdapterMani
     nodeForgeManifest,
     jsrsasignManifest,
     joseManifest,
+    libsodiumManifest,
+    tweetNaclManifest,
+    nobleManifest,
+    openPgpManifest,
   ].map((manifest) => [manifest.id, Object.freeze(manifest)])),
 );
 

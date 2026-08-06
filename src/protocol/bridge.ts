@@ -1,7 +1,11 @@
 import * as v from 'valibot';
 import type { BridgeEnvelope } from '@/types/messages';
 import type { BridgePublicKey } from '@/types/models';
-import { browserTransformExecuteSchema, browserTransformProfileInputSchema } from './transform';
+import {
+  browserTransformExecuteSchema,
+  browserTransformPacketSchema,
+  browserTransformProfileInputSchema,
+} from './transform';
 
 export const BRIDGE_PROTOCOL_VERSION = 3;
 export const BRIDGE_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
@@ -28,7 +32,16 @@ export interface BridgePairingEnvelope {
 }
 
 const id = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
+const comparisonKey = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{43}$/));
+const sha256Fingerprint = v.pipe(v.string(), v.regex(/^sha256:[a-f0-9]{64}$/));
 const tabId = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
+const httpUrl = v.pipe(
+  v.string(),
+  v.trim(),
+  v.url(),
+  v.maxLength(8_192),
+  v.check((value) => ['http:', 'https:'].includes(new URL(value).protocol), '只允许 HTTP(S) URL'),
+);
 const optionalTabId = v.optional(tabId);
 const optionalFrameId = v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(0)));
 const optionalDocumentId = v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160)));
@@ -65,11 +78,95 @@ const deepCaptureMatcher = v.variant('kind', [
 ]);
 const captureId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
 const nodeId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80));
-
-const capabilityParams = {
+const valuePath = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(512));
+const authorizationSelector = v.strictObject({
+  source: v.picklist(['wire', 'logical']),
+  location: v.picklist(['header', 'path', 'query', 'body']),
+  path: valuePath,
+});
+const authorizationResourceValue = v.strictObject({
+  version: v.literal(1),
+  baselineId: id,
+  source: v.picklist(['wire', 'logical']),
+  location: v.picklist(['header', 'path', 'query', 'body']),
+  path: valuePath,
+  valueType: v.picklist(['string', 'number', 'boolean']),
+  byteLength: v.pipe(v.number(), v.safeInteger(), v.minValue(0), v.maxValue(8 * 1_024)),
+  valueBase64: v.pipe(v.string(), v.maxLength(11_000), v.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)),
+  valueFingerprint: v.pipe(v.string(), v.regex(/^workspace-hmac-sha256:[a-f0-9]{64}$/)),
+  logicalBindingFingerprint: v.optional(sha256Fingerprint),
+});
+export const capabilityParams = {
   'system.ping': v.optional(v.strictObject({})),
   'browser.tabs': v.optional(v.strictObject({})),
   'browser.frames': v.optional(v.strictObject({ tabId: optionalTabId })),
+  'browser.isolation.inspect': v.optional(v.strictObject({
+    tabIds: v.optional(v.pipe(v.array(tabId), v.minLength(1), v.maxLength(256))),
+  })),
+  'browser.isolation.proof': v.pipe(v.strictObject({
+    leftTabId: tabId,
+    rightTabId: tabId,
+  }), v.check((input) => input.leftTabId !== input.rightTabId, '双身份槽位不能选择同一个标签页')),
+  'browser.isolation.incognito.open': v.strictObject({ url: httpUrl }),
+  'browser.isolation.container.open': v.strictObject({
+    url: httpUrl,
+    name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(50))),
+  }),
+  'browser.isolation.container.list': v.optional(v.strictObject({})),
+  'browser.isolation.container.remove': v.strictObject({
+    cookieStoreId: v.pipe(v.string(), v.regex(/^firefox-container-[0-9]+$/)),
+  }),
+  'browser.authorization.context.capture': v.strictObject({
+    ...targetFields,
+    isolationProofId: id,
+    slotId: v.picklist(['left', 'right']),
+    accountLabel: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(80))),
+  }),
+  'browser.authorization.context.get': v.strictObject({ id }),
+  'browser.authorization.context.attest': v.strictObject(targetFields),
+  'browser.authorization.context.attestation.get': v.strictObject({ id }),
+  'browser.authorization.baseline.capture': v.strictObject({
+    ...targetFields,
+    authContextKind: v.picklist(['handle', 'attestation']),
+    authContextId: id,
+    networkRequestId: id,
+    comparisonKey,
+  }),
+  'browser.authorization.baseline.candidates': v.strictObject({
+    ...targetFields,
+    authContextKind: v.picklist(['handle', 'attestation']),
+    authContextId: id,
+    limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200))),
+  }),
+  'browser.authorization.baseline.get': v.strictObject({ id }),
+  'browser.authorization.baseline.logical.bind': v.strictObject({
+    id,
+    profileId: id,
+    comparisonKey,
+  }),
+  'browser.authorization.baseline.resource.get': v.strictObject({
+    id,
+    selector: authorizationSelector,
+  }),
+  'browser.authorization.baseline.compile': v.strictObject({
+    id,
+    selector: authorizationSelector,
+    replacement: authorizationResourceValue,
+    comparisonKey,
+  }),
+  'browser.authorization.baseline.packet.compile': v.strictObject({ id }),
+  'browser.authorization.baseline.transform.inspect': v.strictObject({
+    id,
+    profileId: id,
+  }),
+  'browser.authorization.baseline.transform.compile': v.strictObject({
+    id,
+    selector: authorizationSelector,
+    replacement: authorizationResourceValue,
+    comparisonKey,
+    profileId: id,
+    bindingFingerprint: sha256Fingerprint,
+  }),
   'browser.context': v.optional(v.strictObject({
     ...targetFields,
     includeDom: v.optional(v.boolean()),
@@ -122,6 +219,16 @@ const capabilityParams = {
   })),
   'browser.recording.clear': v.optional(v.strictObject(targetFields)),
   'browser.recording.stop': v.optional(v.strictObject(targetFields)),
+  'browser.recording.trace.list': v.optional(v.strictObject({
+    ...targetFields,
+    limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(100))),
+  })),
+  'browser.recording.evidence.inspect': v.strictObject({
+    ...targetFields,
+    traceId: id,
+    eventId: v.optional(id),
+    includeValues: v.optional(v.boolean()),
+  }),
   'browser.callable.create': v.union([
     v.strictObject({
       ...targetFields, source: v.literal('recording'), callHandleId: id,
@@ -131,6 +238,13 @@ const capabilityParams = {
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
       strategy: v.literal('selected-frame'),
       name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+      candidateId: v.optional(id),
+    }),
+    v.strictObject({
+      ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
+      strategy: v.literal('request-transaction'),
+      name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+      candidateId: id,
     }),
     v.strictObject({
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
@@ -142,6 +256,36 @@ const capabilityParams = {
   'browser.callable.list': v.optional(v.strictObject(targetFields)),
   'browser.callable.execute': v.strictObject({ ...targetFields, callableId: id, args: v.pipe(v.array(v.unknown()), v.maxLength(64)) }),
   'browser.callable.delete': v.strictObject({ ...targetFields, callableId: id }),
+  'browser.callable.inspect': v.strictObject({ ...targetFields, callableId: v.optional(id) }),
+  'browser.callable.replay': v.strictObject({
+    ...targetFields,
+    callableId: id,
+    args: v.pipe(v.array(v.unknown()), v.maxLength(64)),
+  }),
+  'browser.packet.compare': v.strictObject({
+    ...targetFields,
+    actual: browserTransformPacketSchema,
+    expected: browserTransformPacketSchema,
+    mode: v.optional(v.picklist(['structure', 'exact'])),
+  }),
+  'browser.profile.propose': v.strictObject({
+    ...targetFields,
+    candidateId: id,
+    callableId: id,
+    inputPaths: v.optional(v.pipe(v.array(valuePath), v.maxLength(64))),
+    name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+  }),
+  'browser.profile.validation.latest': v.optional(v.strictObject(targetFields)),
+  'browser.profile.validate': v.strictObject({
+    ...targetFields,
+    candidateId: id,
+    callableId: id,
+    inputPaths: v.optional(v.pipe(v.array(valuePath), v.maxLength(64))),
+    name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+    packet: browserTransformPacketSchema,
+    observed: v.optional(browserTransformPacketSchema),
+    comparisonMode: v.optional(v.picklist(['structure', 'exact'])),
+  }),
   'browser.deep_capture.start': v.strictObject({ ...targetFields, matcher: deepCaptureMatcher }),
   'browser.deep_capture.status': v.optional(v.strictObject(targetFields)),
   'browser.deep_capture.keepalive': v.optional(v.strictObject(targetFields)),
@@ -150,6 +294,20 @@ const capabilityParams = {
   'browser.transform.profile.list': v.optional(v.strictObject(targetFields)),
   'browser.transform.profile.save': browserTransformProfileInputSchema,
   'browser.transform.profile.delete': v.strictObject({ id }),
+  'browser.transform.recovery.get': v.strictObject({ id }),
+  'browser.transform.recovery.start': v.strictObject({ id }),
+  'browser.transform.recovery.capture': v.strictObject({
+    id,
+    ...targetFields,
+    callFrameId: id,
+    strategy: v.picklist(['selected-frame', 'request-transaction']),
+  }),
+  'browser.transform.recovery.validate': v.strictObject({
+    id,
+    packet: browserTransformPacketSchema,
+  }),
+  'browser.transform.recovery.confirm': v.strictObject({ id, validationId: id }),
+  'browser.transform.recovery.reset': v.strictObject({ id }),
   'browser.transform.execute': browserTransformExecuteSchema,
   'browser.invoke': v.strictObject({
     ...targetFields,
@@ -193,6 +351,15 @@ export function parseBridgeEnvelope(raw: unknown): BridgeEnvelope {
   }
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Bridge 消息必须是对象');
   const message = input as Record<string, unknown>;
+  const allowedKeys = new Set([
+    'id', 'type', 'method', 'params', 'result', 'error', 'client', 'version', 'protocolVersion',
+    'capabilities', 'capabilityCatalog', 'sessionId', 'taskId', 'grantId', 'installationId',
+    'engineInstanceId', 'engineIdentityId', 'challenge', 'signature', 'publicKey', 'connectionId',
+    'resumeSessionId', 'resumed', 'sequence', 'timestamp', 'replyTimestamp', 'transferId', 'index',
+    'total', 'data', 'originalBytes',
+  ]);
+  const unexpected = Object.keys(message).find((key) => !allowedKeys.has(key));
+  if (unexpected) throw new Error(`Bridge 消息包含未声明字段 $.${unexpected}`);
   if (typeof message.type !== 'string') throw new Error('Bridge 消息缺少 type');
 
   if (message.type === 'challenge') {
@@ -245,6 +412,8 @@ export function parseBridgeEnvelope(raw: unknown): BridgeEnvelope {
     if (message.error !== undefined) {
       if (!message.error || typeof message.error !== 'object') throw new Error('Bridge 响应错误对象无效');
       const responseError = message.error as Record<string, unknown>;
+      const unexpectedError = Object.keys(responseError).find((key) => !['code', 'message', 'data'].includes(key));
+      if (unexpectedError) throw new Error(`Bridge 响应错误包含未声明字段 $.error.${unexpectedError}`);
       if (typeof responseError.code !== 'string' || typeof responseError.message !== 'string') throw new Error('Bridge 响应错误格式无效');
     }
     return message as unknown as BridgeEnvelope;
@@ -270,6 +439,12 @@ export function parseBridgePairingEnvelope(raw: unknown): BridgePairingEnvelope 
   }
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Bridge 配对消息必须是对象');
   const message = input as Record<string, unknown>;
+  const pairingKeys = new Set([
+    'type', 'protocolVersion', 'requestId', 'installationId', 'client', 'version', 'nonce',
+    'serverNonce', 'publicKey', 'engineIdentityId', 'code', 'expiresAt', 'deviceId', 'message',
+  ]);
+  const unexpected = Object.keys(message).find((key) => !pairingKeys.has(key));
+  if (unexpected) throw new Error(`Bridge 配对消息包含未声明字段 $.${unexpected}`);
   const allowed = ['pair_pending', 'pair_approved', 'pair_rejected', 'pair_expired', 'pair_error'];
   if (typeof message.type !== 'string' || !allowed.includes(message.type)) throw new Error('Bridge 配对消息类型无效');
   if (message.message !== undefined && (typeof message.message !== 'string' || message.message.length > 1_024)) throw new Error('Bridge 配对消息文本无效');
@@ -280,6 +455,7 @@ export function parseBridgePairingEnvelope(raw: unknown): BridgePairingEnvelope 
     }
     if (!/^\d{6}$/.test(String(message.code))) throw new Error('Bridge 配对验证码无效');
     if (!Number.isSafeInteger(message.expiresAt) || Number(message.expiresAt) <= Date.now()) throw new Error('Bridge 配对申请已经过期');
+    if (Number(message.expiresAt) - Date.now() > 5 * 60_000) throw new Error('Bridge 配对申请有效期异常');
     parseBridgePublicKey(message.publicKey);
   }
   if (message.type === 'pair_approved') {

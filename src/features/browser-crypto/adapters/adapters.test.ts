@@ -8,6 +8,10 @@ import { smCryptoAdapter } from './sm-crypto';
 import { nodeForgeAdapter } from './node-forge';
 import { jsrsasignAdapter } from './jsrsasign';
 import { joseAdapter } from './jose';
+import { libsodiumAdapter } from './libsodium';
+import { tweetNaclAdapter } from './tweetnacl';
+import { nobleAdapter } from './noble';
+import { openPgpAdapter } from './openpgp';
 
 function byteLength(value: unknown): number | undefined {
   if (typeof value === 'string') return new TextEncoder().encode(value).byteLength;
@@ -50,6 +54,8 @@ function toolkit(): CryptoAdapterToolkit {
 describe('page crypto adapters', () => {
   it('keeps the UI catalog separate and safely falls back for unknown adapter IDs', () => {
     expect(cryptoAdapterLabel('webcrypto')).toBe('WebCrypto');
+    expect(cryptoAdapterLabel('libsodium')).toBe('libsodium.js');
+    expect(cryptoAdapterLabel('openpgp')).toBe('OpenPGP.js');
     expect(cryptoAdapterLabel('vendor-suite.v2')).toBe('vendor-suite.v2');
   });
 
@@ -104,6 +110,11 @@ describe('page crypto adapters', () => {
       mode: 'CBC', padding: 'Pkcs7', outputEncoding: 'base64',
     });
     expect(plan?.arguments[2].summary).toBe('mode=CBC padding=Pkcs7 ivBytes=16');
+    expect(plan?.inputEvidence?.({}).map((item) => item.path)).toEqual([
+      '$input',
+      '$input.key',
+      '$input.iv',
+    ]);
     expect(plan?.adaptInput?.(new Uint8Array([4, 5, 6]))).toEqual({ wordArray: 'base64:4,5,6' });
     expect(parsed).toEqual(['base64:4,5,6']);
   });
@@ -334,5 +345,144 @@ describe('page crypto adapters', () => {
     expect(final?.callableKind).toBeUndefined();
     expect(JSON.stringify(final?.crypto)).not.toContain('never-export');
     expect(operations.find((item) => item.operation === 'CompactVerify.verify')?.resultMode).toBe('promise');
+  });
+
+  it('describes libsodium async-ready one-shot operations and preserves the real AEAD input index', () => {
+    const sodium = {
+      ready: Promise.resolve(),
+      crypto_secretbox_easy: () => new Uint8Array([1]),
+      crypto_secretbox_open_easy: () => new Uint8Array([2]),
+      crypto_aead_xchacha20poly1305_ietf_encrypt: () => new Uint8Array([3]),
+      crypto_aead_xchacha20poly1305_ietf_decrypt: () => new Uint8Array([4]),
+      crypto_sign_detached: () => new Uint8Array([5]),
+      crypto_sign_verify_detached: () => true,
+    };
+    const operations = libsodiumAdapter.discover({ window: { sodium } as unknown as Window });
+    const secretbox = operations.find((item) => item.operation === 'secretbox.encrypt')?.describe(
+      sodium,
+      [new Uint8Array([1, 2]), new Uint8Array(24), new Uint8Array(32).fill(9)],
+      toolkit(),
+    );
+    const xchachaDecrypt = operations.find((item) => item.operation === 'aead.xchacha20poly1305.decrypt')?.describe(
+      sodium,
+      [null, new Uint8Array([8, 9]), new Uint8Array([1]), new Uint8Array(24), new Uint8Array(32).fill(7)],
+      toolkit(),
+    );
+
+    expect(secretbox?.crypto).toMatchObject({
+      adapterId: 'libsodium', family: 'symmetric', algorithm: 'XSalsa20-Poly1305',
+      state: { model: 'async-ready', phase: 'one-shot' },
+      key: { kind: 'secret', bits: 256, fingerprint: 'v2:opaque-fingerprint' },
+    });
+    expect(secretbox?.arguments.map((item) => item.role)).toEqual(['data', 'nonce', 'key']);
+    expect(xchachaDecrypt).toMatchObject({ inputIndex: 1, callableKind: 'decrypt' });
+    expect(xchachaDecrypt?.arguments.map((item) => item.role)).toEqual(['options', 'data', 'aad', 'nonce', 'key']);
+    expect(JSON.stringify(secretbox?.crypto)).not.toContain('9,9,9');
+  });
+
+  it('discovers TweetNaCl nested methods without flattening nonce or key semantics', () => {
+    const secretbox = Object.assign(
+      (_message: Uint8Array, _nonce: Uint8Array, _key: Uint8Array) => new Uint8Array([1]),
+      { open: () => new Uint8Array([2]) },
+    );
+    const detached = Object.assign(
+      (_message: Uint8Array, _key: Uint8Array) => new Uint8Array([3]),
+      { verify: () => true },
+    );
+    const sign = Object.assign(
+      (_message: Uint8Array, _key: Uint8Array) => new Uint8Array([4]),
+      { open: () => new Uint8Array([5]), detached },
+    );
+    const nacl = { secretbox, sign, hash: () => new Uint8Array(64) };
+    const operations = tweetNaclAdapter.discover({ window: { nacl } as unknown as Window });
+    const open = operations.find((item) => item.operation === 'secretbox.decrypt')?.describe(
+      secretbox,
+      [new Uint8Array([1]), new Uint8Array(24), new Uint8Array(32)],
+      toolkit(),
+    );
+    const verify = operations.find((item) => item.operation === 'ed25519.verify')?.describe(
+      detached,
+      [new Uint8Array([1]), new Uint8Array(64), new Uint8Array(32)],
+      toolkit(),
+    );
+
+    expect(open?.crypto).toMatchObject({ adapterId: 'tweetnacl', algorithm: 'XSalsa20-Poly1305' });
+    expect(open?.arguments[1]).toMatchObject({ role: 'nonce', summary: 'nonceBytes=24' });
+    expect(verify).toMatchObject({ inputIndex: 0, callableKind: 'verify' });
+    expect(verify?.arguments.map((item) => item.role)).toEqual(['data', 'signature', 'key']);
+  });
+
+  it('promotes explicit noble cipher factories to receiver-bound encrypt/decrypt callables', () => {
+    const cipher = {
+      encrypt: (value: Uint8Array) => value,
+      decrypt: (value: Uint8Array) => value,
+    };
+    const nobleCiphers = { gcm: () => cipher };
+    const nobleCurves = { ed25519: { sign: () => new Uint8Array(64), verify: () => true } };
+    const operations = nobleAdapter.discover({
+      window: { nobleCiphers, nobleCurves } as unknown as Window,
+    });
+    const factory = operations.find((item) => item.operation === 'AES-GCM.create');
+    const create = factory?.describe(
+      nobleCiphers,
+      [new Uint8Array(32), new Uint8Array(12), new Uint8Array([1, 2])],
+      toolkit(),
+    );
+    const encrypt = create?.discoverResult?.(cipher).find((item) => item.operation === 'AES-GCM.encrypt');
+    const encryptPlan = encrypt?.describe(cipher, [new Uint8Array([3, 4])], toolkit());
+    const verify = operations.find((item) => item.operation === 'ed25519.verify')?.describe(
+      nobleCurves.ed25519,
+      [new Uint8Array(64), new Uint8Array([5]), new Uint8Array(32)],
+      toolkit(),
+    );
+
+    expect(create?.crypto).toMatchObject({
+      adapterId: 'noble', algorithm: 'AES-GCM', mode: 'gcm',
+      state: { model: 'session', phase: 'create', correlationId: 'noble-cipher-1' },
+    });
+    expect(encryptPlan).toMatchObject({
+      inputIndex: 0, callableKind: 'encrypt',
+      crypto: { state: { model: 'receiver', correlationId: 'noble-cipher-1' } },
+    });
+    expect(verify).toMatchObject({ inputIndex: 1, callableKind: 'verify' });
+  });
+
+  it('uses OpenPGP message state as evidence while requiring a business closure for safe replay', () => {
+    const openpgp = {
+      createMessage: async () => ({}),
+      readMessage: async () => ({}),
+      encrypt: async () => 'armored',
+      decrypt: async () => ({ data: 'plain' }),
+      sign: async () => 'signature',
+      verify: async () => ({ signatures: [] }),
+    };
+    const operations = openPgpAdapter.discover({ window: { openpgp } as unknown as Window });
+    const message = {};
+    const create = operations.find((item) => item.operation === 'createMessage')?.describe(
+      openpgp,
+      [{ text: 'plain request' }],
+      toolkit(),
+    );
+    create?.discoverResult?.(message);
+    const encrypt = operations.find((item) => item.operation === 'OpenPGP.encrypt')?.describe(
+      openpgp,
+      [{ message, encryptionKeys: [{}], format: 'armored' }],
+      toolkit(),
+    );
+    const decrypt = operations.find((item) => item.operation === 'OpenPGP.decrypt')?.describe(
+      openpgp,
+      [{ message, decryptionKeys: [{}] }],
+      toolkit(),
+    );
+
+    expect(encrypt?.crypto).toMatchObject({
+      adapterId: 'openpgp', family: 'asymmetric', algorithm: 'OpenPGP public-key',
+      state: { model: 'async-ready', phase: 'final', correlationId: 'openpgp-message-1' },
+      key: { kind: 'public' },
+    });
+    expect(encrypt?.callableKind).toBeUndefined();
+    expect(encrypt?.arguments[0]).toMatchObject({ replaceable: false, retained: false });
+    expect(encrypt?.inputEvidence?.({})[0]).toMatchObject({ path: '$input.text' });
+    expect(decrypt?.outputEvidence?.({ data: 'plain' })[0]).toMatchObject({ path: '$output.data' });
   });
 });

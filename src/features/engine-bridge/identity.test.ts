@@ -11,12 +11,19 @@ describe('Bridge v3 identity transcript', () => {
     })).toBe('yak-browser-bridge-v3\nengine-challenge\nidentity-1\ninstance-1\nnonce-1\n123');
     const envelope: BridgeEnvelope = {
       type: 'auth', installationId: 'install-1', client: 'client-1', version: '1.0.0',
-      capabilities: ['z.capability', 'a.capability'], taskId: 'task-1', grantId: 'grant-1', resumeSessionId: 'session-1',
+      capabilities: ['z.capability', 'a.capability'],
+      capabilityCatalog: {
+        version: 1,
+        schemaDialect: 'http://json-schema.org/draft-07/schema#',
+        hash: 'schema-hash-1',
+        capabilities: [],
+      },
+      taskId: 'task-1', grantId: 'grant-1', resumeSessionId: 'session-1',
     };
     expect(clientAuthPayload({
       origin: 'chrome-extension://abc', engineIdentityId: 'identity-1', engineInstanceId: 'instance-1',
       challenge: 'nonce-1', envelope,
-    })).toBe('yak-browser-bridge-v3\nclient-auth\nchrome-extension://abc\nidentity-1\ninstance-1\nnonce-1\ninstall-1\nclient-1\n1.0.0\na.capability,z.capability\ntask-1\ngrant-1\nsession-1');
+    })).toBe('yak-browser-bridge-v3\nclient-auth\nchrome-extension://abc\nidentity-1\ninstance-1\nnonce-1\ninstall-1\nclient-1\n1.0.0\na.capability,z.capability\n1\nschema-hash-1\ntask-1\ngrant-1\nsession-1');
   });
 
   it('matches the shared pairing verification vector', async () => {

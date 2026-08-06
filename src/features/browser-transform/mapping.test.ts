@@ -72,6 +72,16 @@ describe('browser transform Pipeline v2', () => {
     expect(result.setHeaders).toEqual([{ name: 'X-Sign', value: 'sig:alice:cipher:plain' }]);
     expect(new URL(result.url).searchParams.get('actor')).toBe('alice');
     expect(result.nodeDurations).toHaveLength(direction.nodes.length);
+    expect(result.nodeTrace).toHaveLength(direction.nodes.length);
+    expect(result.nodeTrace.find((node) => node.nodeId === 'cipher')).toMatchObject({
+      kind: 'page.call', name: 'Encrypt', inputRefs: ['password'],
+      output: { type: 'string', byteLength: 12 },
+    });
+    expect(result.fieldChanges.map((change) => change.path)).toEqual([
+      'body.password', 'query.actor', 'header.x-sign',
+    ]);
+    expect(JSON.stringify({ nodeTrace: result.nodeTrace, fieldChanges: result.fieldChanges }))
+      .not.toContain('cipher:plain');
     expect(invoke).toHaveBeenNthCalledWith(2, 'sign', ['alice', 'cipher:plain']);
   });
 

@@ -137,7 +137,10 @@ export function clientAuthPayload(input: {
   return [
     'yak-browser-bridge-v3', 'client-auth', input.origin, input.engineIdentityId, input.engineInstanceId,
     input.challenge, input.envelope.installationId || '', input.envelope.client || '', input.envelope.version || '',
-    [...(input.envelope.capabilities || [])].sort().join(','), input.envelope.taskId || '', input.envelope.grantId || '',
+    [...(input.envelope.capabilities || [])].sort().join(','),
+    String(input.envelope.capabilityCatalog?.version || ''),
+    input.envelope.capabilityCatalog?.hash || '',
+    input.envelope.taskId || '', input.envelope.grantId || '',
     input.envelope.resumeSessionId || '',
   ].join('\n');
 }

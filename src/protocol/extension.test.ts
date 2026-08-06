@@ -29,6 +29,86 @@ describe('extension request schemas', () => {
       action: 'grant.create',
       payload: { targets: [{ tabId: 12, frameId: 0 }], scopes: ['browser.transform.unknown'], durationMinutes: 5 },
     })).toThrow('scopes');
+    expect(parseExtensionRequest({ action: 'grant.refresh' }).action).toBe('grant.refresh');
+    expect(() => parseExtensionRequest({
+      action: 'grant.refresh',
+      payload: { tabId: 12 },
+    })).toThrow();
+  });
+
+  it('validates internal isolation actions and target-bound Cookie operations', () => {
+    expect(parseExtensionRequest({
+      action: 'isolation.inspect',
+      payload: { tabIds: [12, 13] },
+    }).action).toBe('isolation.inspect');
+    expect(parseExtensionRequest({
+      action: 'isolation.proof.create',
+      payload: { leftTabId: 12, rightTabId: 13 },
+    }).action).toBe('isolation.proof.create');
+    expect(parseExtensionRequest({
+      action: 'isolation.incognito.open',
+      payload: { url: 'https://example.test/login' },
+    }).action).toBe('isolation.incognito.open');
+    expect(parseExtensionRequest({
+      action: 'isolation.container.open',
+      payload: { url: 'https://example.test/login', name: 'Yakit 身份 B' },
+    }).action).toBe('isolation.container.open');
+    expect(parseExtensionRequest({
+      action: 'isolation.container.list',
+    }).action).toBe('isolation.container.list');
+    expect(parseExtensionRequest({
+      action: 'isolation.container.remove',
+      payload: { cookieStoreId: 'firefox-container-7' },
+    }).action).toBe('isolation.container.remove');
+    expect(() => parseExtensionRequest({
+      action: 'isolation.container.remove',
+      payload: { cookieStoreId: 'firefox-default' },
+    })).toThrow();
+    expect(parseExtensionRequest({
+      action: 'cookie.list',
+      payload: { url: 'https://example.test', tabId: 12 },
+    }).action).toBe('cookie.list');
+    expect(() => parseExtensionRequest({
+      action: 'cookie.list',
+      payload: { url: 'https://example.test' },
+    })).toThrow('tabId');
+    expect(() => parseExtensionRequest({
+      action: 'isolation.inspect',
+      payload: { tabIds: [] },
+    })).toThrow();
+  });
+
+  it('validates browser authorization engine tasks and Yakit handoff', () => {
+    expect(parseExtensionRequest({
+      action: 'authorization.engine.task',
+      payload: {
+        schema: 'authorization.workspace.create',
+        payload: {
+          mode: 'horizontal',
+          left: { tabId: 12, frameId: 0, accountLabel: 'A' },
+          right: { tabId: 13, frameId: 0, accountLabel: 'B' },
+        },
+        timeoutMs: 60_000,
+      },
+    }).action).toBe('authorization.engine.task');
+    expect(() => parseExtensionRequest({
+      action: 'authorization.engine.task',
+      payload: { schema: 'authorization.unknown', payload: {} },
+    })).toThrow('schema');
+    expect(parseExtensionRequest({
+      action: 'authorization.yakit.open',
+      payload: { workspaceId: 'authorization-workspace-1' },
+    }).action).toBe('authorization.yakit.open');
+    expect(parseExtensionRequest({
+      action: 'network.capture.start',
+      payload: {
+        tabId: 12,
+        frameId: 0,
+        documentId: 'document-1',
+        captureHeaders: true,
+        captureBody: true,
+      },
+    }).action).toBe('network.capture.start');
   });
 
   it('validates the atomic current-site route reset action', () => {
@@ -65,13 +145,9 @@ describe('extension request schemas', () => {
         source: 'deep-capture',
         strategy: 'request-transaction',
         callFrameId: 'frame-1',
-        transaction: {
-          request: { method: 'POST', url: '/login', expectedDestinations: [] },
-          inputMode: 'auto',
-          boundaries: ['fetch'],
-        },
+        candidateId: '',
       },
-    })).toThrow('expectedDestinations');
+    })).toThrow();
     expect(parseExtensionRequest({
       action: 'callable.create',
       payload: {
@@ -80,15 +156,7 @@ describe('extension request schemas', () => {
         strategy: 'request-transaction',
         callFrameId: 'frame-1',
         name: 'Login request transaction',
-        transaction: {
-          request: {
-            method: 'POST',
-            url: 'encrypt/aesrsa.php',
-            expectedDestinations: ['body.encryptedData', 'body.encryptedKey', 'body.encryptedIv'],
-          },
-          inputMode: 'auto',
-          boundaries: ['fetch', 'xhr', 'beacon', 'form'],
-        },
+        candidateId: 'candidate-aesrsa',
       },
     }).action).toBe('callable.create');
     expect(() => parseExtensionRequest({
@@ -157,6 +225,7 @@ describe('extension request schemas', () => {
         strategy: 'selected-frame',
         callFrameId: 'frame-1',
         name: 'Login envelope',
+        candidateId: 'candidate-login',
       },
     }).action).toBe('callable.create');
     expect(parseExtensionRequest({
@@ -206,6 +275,38 @@ describe('extension request schemas', () => {
       maxConcurrency: 1,
     };
     expect(parseExtensionRequest({ action: 'transform.profile.save', payload: profile }).action).toBe('transform.profile.save');
+    expect(() => parseExtensionRequest({
+      action: 'transform.profile.save',
+      payload: { ...profile, requestTransaction: {} },
+    })).toThrow('requestTransaction');
+    expect(parseExtensionRequest({
+      action: 'analysis.profile.propose',
+      payload: {
+        tabId: 12,
+        candidateId: 'candidate-1',
+        callableId: 'callable-1',
+        inputPaths: ['body'],
+      },
+    }).action).toBe('analysis.profile.propose');
+    expect(parseExtensionRequest({
+      action: 'analysis.profile.validate',
+      payload: {
+        tabId: 12,
+        candidateId: 'candidate-1',
+        callableId: 'callable-1',
+        inputPaths: ['body'],
+        packet: {
+          method: 'POST',
+          url: 'https://example.test/login',
+          headers: [],
+          bodyBase64: 'e30=',
+        },
+      },
+    }).action).toBe('analysis.profile.validate');
+    expect(parseExtensionRequest({
+      action: 'analysis.profile.validation.latest',
+      payload: { tabId: 12, frameId: 0 },
+    }).action).toBe('analysis.profile.validation.latest');
     expect(parseExtensionRequest({
       action: 'transform.execute',
       payload: {
@@ -213,6 +314,42 @@ describe('extension request schemas', () => {
         packet: { method: 'POST', url: 'https://example.test/api/login', headers: [], bodyBase64: 'e30=' },
       },
     }).action).toBe('transform.execute');
+    expect(parseExtensionRequest({
+      action: 'transform.recovery.start',
+      payload: { id: 'profile-1' },
+    }).action).toBe('transform.recovery.start');
+    expect(parseExtensionRequest({
+      action: 'transform.recovery.capture',
+      payload: {
+        id: 'profile-1',
+        tabId: 12,
+        frameId: 0,
+        documentId: 'document-2',
+        callFrameId: 'frame-1',
+        strategy: 'request-transaction',
+      },
+    }).action).toBe('transform.recovery.capture');
+    expect(parseExtensionRequest({
+      action: 'transform.recovery.validate',
+      payload: {
+        id: 'profile-1',
+        packet: { method: 'POST', url: 'https://example.test/api/login', headers: [], bodyBase64: 'e30=' },
+      },
+    }).action).toBe('transform.recovery.validate');
+    expect(parseExtensionRequest({
+      action: 'transform.recovery.confirm',
+      payload: { id: 'profile-1', validationId: 'validation-1' },
+    }).action).toBe('transform.recovery.confirm');
+    expect(() => parseExtensionRequest({
+      action: 'transform.recovery.capture',
+      payload: {
+        id: 'profile-1',
+        tabId: 12,
+        frameId: 0,
+        callFrameId: 'frame-1',
+        strategy: 'expression',
+      },
+    })).toThrow();
     expect(() => parseExtensionRequest({
       action: 'transform.profile.save',
       payload: { ...profile, origin: 'https://example.test/login' },

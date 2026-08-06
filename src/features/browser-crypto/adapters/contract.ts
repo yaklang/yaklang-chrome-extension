@@ -70,5 +70,6 @@ export interface CryptoAdapterOperation {
 
 export interface PageCryptoAdapter {
   manifest: CryptoAdapterManifest;
+  ready?(scope: CryptoAdapterScope): PromiseLike<unknown> | undefined;
   discover(scope: CryptoAdapterScope): CryptoAdapterOperation[];
 }

@@ -54,7 +54,7 @@ function App() {
     setBridge(nextBridge);
     if (nextTab?.url?.startsWith('http')) {
       const [cookies, resolution] = await Promise.all([
-        request('cookie.list', { url: nextTab.url }).catch(() => []),
+        request('cookie.list', { url: nextTab.url, tabId: nextTab.id }).catch(() => []),
         request('ua.resolve', { url: nextTab.url }).catch(() => undefined),
       ]);
       setCookieCount(cookies.length);
