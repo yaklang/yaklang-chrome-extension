@@ -219,7 +219,9 @@ describe('browser recording storage, snapshot and retained-value budgets', () =>
     expect(snapshot.status.retainedCallBytes).toBe(4_096);
   });
 
-  it('drops the globally oldest events to keep each snapshot and all sessions bounded', async () => {
+  // The budget-trimming path needs ~1MiB of events per tab, which alone takes
+  // seconds on CI hardware; the data volume is the point of the test.
+  it('drops the globally oldest events to keep each snapshot and all sessions bounded', { timeout: 30_000 }, async () => {
     const service = await freshService();
     for (let tabId = 10; tabId < 15; tabId += 1) {
       fixture.pages.set(tabId, rawSnapshot(
