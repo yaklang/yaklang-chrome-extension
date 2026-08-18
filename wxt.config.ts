@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { defineConfig } from 'wxt';
+
+// package.json is the single source of truth for the version; release
+// packaging asserts the built manifest matches it.
+const { version } = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -12,7 +18,7 @@ export default defineConfig({
   manifest: ({ mode, browser }) => ({
     name: 'Yakit Browser Agent',
     description: 'Yakit 浏览器安全测试工具与 AI 上下文桥接',
-    version: '0.2.0',
+    version,
     action: {
       default_title: 'Yakit Browser Agent',
     },

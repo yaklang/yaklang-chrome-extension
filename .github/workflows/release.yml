@@ -2,9 +2,146 @@ name: Build and Release
 
 on: workflow_dispatch
 
+permissions:
+  contents: write
+
+# Serializes publishes so two runs can never interleave the
+# fetch-existing-manifest / upload-manifest sequence.
+concurrency:
+  group: oss-extension-release
+  cancel-in-progress: false
+
+env:
+  PUBLIC_BASE_URL: https://aliyun-oss.yaklang.com/chrome-extension
+  OSS_ENDPOINT: https://oss-accelerate.aliyuncs.com
+  OSS_BUCKET: yaklang
+  MANIFEST_MAX_VERSIONS: '10'
+
 jobs:
-  build-and-publish:
+  publish:
+    name: Build, package and publish to OSS
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Test, compile and build all variants
+        run: pnpm verify:production
+
+      - name: Read version
+        id: version
+        run: |
+          echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date +'%Y-%m-%d %H:%M:%S')" >> "$GITHUB_OUTPUT"
+
+      - name: Package release artifacts
+        run: node scripts/package-release.mjs --dist=dist --public-base-url=${PUBLIC_BASE_URL}
+
+      - name: Upload release artifacts to OSS (immutable)
+        run: |
+          node scripts/publish-oss.mjs release \
+            --release-entry=dist/release-entry.json \
+            --dist=dist \
+            --endpoint=${OSS_ENDPOINT} \
+            --bucket=${OSS_BUCKET}
+        env:
+          OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
+          OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
+
+      - name: Fetch existing manifest
+        run: |
+          set -euo pipefail
+          # Query parameter busts the CDN's 5-minute manifest cache.
+          url="${PUBLIC_BASE_URL}/manifest.json?mirror_build=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          code=$(curl -sS -o dist/existing-manifest.json -w '%{http_code}' --retry 4 --retry-all-errors "$url")
+          if [ "$code" = "200" ]; then
+            echo "Existing manifest fetched."
+          elif [ "$code" = "404" ]; then
+            rm -f dist/existing-manifest.json
+            echo "No existing manifest (first release)."
+          else
+            echo "Unexpected HTTP ${code} fetching ${url}" >&2
+            exit 1
+          fi
+
+      - name: Build bounded manifest
+        run: |
+          existing=""
+          if [ -f dist/existing-manifest.json ]; then
+            existing="--existing-manifest=dist/existing-manifest.json"
+          fi
+          node scripts/build-manifest.mjs \
+            --release-entry=dist/release-entry.json \
+            ${existing} \
+            --max-versions=${MANIFEST_MAX_VERSIONS} \
+            --output=dist/manifest.json \
+            --checksum-output=dist/manifest.json.sha256.txt
+
+      - name: Publish manifest to OSS
+        run: |
+          node scripts/publish-oss.mjs manifest \
+            --manifest=dist/manifest.json \
+            --manifest-checksum=dist/manifest.json.sha256.txt \
+            --endpoint=${OSS_ENDPOINT} \
+            --bucket=${OSS_BUCKET}
+        env:
+          OSS_KEY_ID: ${{ secrets.OSS_KEY_ID }}
+          OSS_KEY_SECRET: ${{ secrets.OSS_KEY_SECRET }}
+
+      - name: Upload release entry for verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-entry
+          path: dist/release-entry.json
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          body: |
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Build Time: ${{ steps.version.outputs.build_time }}
+            Manifest: ${{ env.PUBLIC_BASE_URL }}/manifest.json
+          files: |
+            dist/${{ steps.version.outputs.version }}/*
+            dist/manifest.json
+            dist/manifest.json.sha256.txt
+
+      - name: Write job summary
+        run: |
+          {
+            echo "## Release v${{ steps.version.outputs.version }}"
+            echo
+            echo "- Manifest: ${PUBLIC_BASE_URL}/manifest.json"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo
+            echo "| Variant | Size | SHA-256 |"
+            echo "| --- | --- | --- |"
+            jq -r '.artifacts[] | "| \(.variant) | \(.size) | \`\(.sha256)\` |"' dist/release-entry.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  verify:
+    name: Verify public release
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -12,72 +149,13 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
-          cache: 'yarn'
+          node-version: '22'
 
-      - name: Install dependencies
-        run: yarn install --frozen-lockfile
-
-      - name: Build project
-        run: yarn build
-
-      - name: Get version
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' build/manifest.json)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "build_time=$(date +'%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
-
-      - name: Zip build artifacts
-        run: |
-          cd build
-          zip -r ../extension.zip .
-
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download release entry
+        uses: actions/download-artifact@v4
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          release_name: Release v${{ steps.version.outputs.version }}
-          body: |
-            Branch: ${{ github.ref_name }}
-            Commit: ${{ github.sha }}
-            Build Time: ${{ steps.version.outputs.build_time }}
-          draft: false
-          prerelease: false
+          name: release-entry
+          path: dist
 
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./extension.zip
-          asset_name: yakit-chrome-extension-v${{ steps.version.outputs.version }}.zip
-          asset_content_type: application/zip 
-
-      - name: Upload Extension To OSS
-        uses: tvrcgo/upload-to-oss@master
-        with:
-          key-id: ${{ secrets.OSS_KEY_ID }}
-          key-secret: ${{ secrets.OSS_KEY_SECRET }}
-          region: oss-accelerate
-          bucket: yaklang
-          assets: |
-            extension.zip:/chrome-extension/yakit-chrome-extension-v${{ steps.version.outputs.version }}.zip
-
-      - name: Update OSS latest version file
-        run: echo ${{ steps.version.outputs.version }} > ./extension-version.txt
-      
-      - name: Upload Version File to OSS
-        uses: tvrcgo/upload-to-oss@master
-        with:
-          key-id: ${{ secrets.OSS_KEY_ID }}
-          key-secret: ${{ secrets.OSS_KEY_SECRET }}
-          region: oss-accelerate
-          bucket: yaklang
-          assets: |
-            ./extension-version.txt:/chrome-extension/latest-version.txt
-
+      - name: Verify from public endpoint
+        run: node scripts/verify-public.mjs --public-base-url=${PUBLIC_BASE_URL} --release-entry=dist/release-entry.json

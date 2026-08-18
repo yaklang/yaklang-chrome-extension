@@ -328,6 +328,31 @@ Native Host 的构建与注册方式见 [native-host/README.md](./native-host/RE
 
 Chrome Store 构建声明 Chrome 138+。用户需要在扩展详情页开启“允许用户脚本”，页面主世界能力才能正常工作；未开启时扩展会明确报告原因，不会静默降级为直接 Eval。
 
+### 发布与下载
+
+发布由 GitHub Actions 的 **Build and Release** workflow（手动触发）完成：执行 `verify:production` 全量校验后，将四个变体打包为不可变的版本化产物上传到 OSS，再发布机器可读的 manifest，并从公网侧回读验证。CI 在每次 push / PR 时运行同一套构建与审计。
+
+**下载入口**（不要硬编码版本号）：
+
+```
+https://aliyun-oss.yaklang.com/chrome-extension/manifest.json
+```
+
+manifest 的 `latest` 指向最新版本，`versions[0]` 为完整记录，最多保留 10 个历史版本。每个版本按 `variant`（`chrome-store` / `chrome-enterprise` / `firefox` / `firefox-amo`）匹配 artifact，字段包括 `url`、`filename`、`sha256`、`size` 与 `checksum_url`；manifest 自身的 SHA-256 在同目录的 `manifest.json.sha256.txt`。
+
+推荐的消费流程：
+
+1. 拉取 `manifest.json`（缓存 5 分钟），按需选择版本与变体；
+2. 下载 artifact（版本化 URL 永不变更，缓存一年）到临时文件；
+3. 校验 `size` 与 `sha256`（或对比 `checksum_url` 内容）后，解压并安装；
+4. 变体用途见上表“构建差异”。
+
+**发布契约**：
+
+- 版本化产物不可变：URL 形如 `…/chrome-extension/<version>/<variant>-<version>.zip`，重复发布同版本时内容一致则跳过、不一致则流水线报错拒绝覆盖；
+- `manifest.json` 可变、缓存 5 分钟，先发布 manifest 再发布其校验文件，消费方可用校验文件识别中间态；
+- 发布 job 结束前有独立的 verify job 从公网下载全部产物，复核 sha256、缓存头与 zip 内 `manifest.json` 版本。
+
 ## 权限与数据边界
 
 扩展声明 `tabs`、`scripting`、`cookies`、`proxy`、`webRequest`、`webNavigation`、`debugger` 等权限，是为了在用户主动选择的目标页面上提供对应安全测试能力。`nativeMessaging` 是可选权限，仅在用户选择 Native 模式时请求。

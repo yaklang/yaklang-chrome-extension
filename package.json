@@ -4,6 +4,7 @@
   "private": true,
   "version": "0.2.0",
   "type": "module",
+  "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "wxt",
     "dev:wsl": "node scripts/dev-wsl.mjs",
@@ -49,10 +50,13 @@
   },
   "devDependencies": {
     "@types/jsrsasign": "10.5.15",
+    "@types/node": "^22.0.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "@wxt-dev/module-react": "^1.2.2",
+    "adm-zip": "^0.5.16",
+    "ali-oss": "^6.21.0",
     "jose": "6.2.3",
     "jsencrypt": "3.5.4",
     "jsrsasign": "11.1.3",
