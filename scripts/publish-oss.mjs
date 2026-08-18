@@ -60,12 +60,14 @@ const client = new OSS({ accessKeyId, accessKeySecret, bucket, endpoint, secure:
 
 const sha256 = (buffer) => createHash('sha256').update(buffer).digest('hex');
 
+// head() resolves to { meta, res, status }: raw headers live at res.headers
+// and x-oss-meta-* values are pre-parsed into meta.
 async function headObject(key) {
   try {
-    const res = await client.head(key);
+    const result = await client.head(key);
     return {
-      size: Number(res.headers['content-length']),
-      sha256: res.headers['x-oss-meta-sha256'] ?? null,
+      size: Number(result.res.headers['content-length']),
+      sha256: result.meta?.sha256 ?? null,
     };
   } catch (err) {
     if (err && (err.status === 404 || err.code === 'NoSuchKey')) return null;
