@@ -67,12 +67,21 @@ const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const { version } = pkg;
 
 let commit = null;
+let commitTime = null;
 try {
   const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root });
   commit = stdout.trim();
+  const { stdout: iso } = await execFileAsync('git', ['show', '-s', '--format=%cI', 'HEAD'], { cwd: root });
+  commitTime = new Date(iso.trim());
 } catch {
   // Not fatal: local runs outside a git worktree still package fine.
 }
+// adm-zip stamps every entry with the file mtime, which is the checkout time
+// on CI — two builds of the same commit would differ byte-wise and trip the
+// immutable no-overwrite guard on re-runs. Pin all entries to the commit
+// date (SOURCE_DATE_EPOCH convention) so artifacts are reproducible.
+const sourceDateEpoch = Number(process.env.SOURCE_DATE_EPOCH)
+  || (commitTime && !Number.isNaN(commitTime.getTime()) ? commitTime.getTime() : 0);
 
 const versionDir = resolve(distDir, version);
 await mkdir(versionDir, { recursive: true });
@@ -94,6 +103,8 @@ for (const target of VARIANTS) {
   // zip root, which is what browsers expect from a sideloaded extension.
   const zip = new AdmZip();
   zip.addLocalFolder(outputDir);
+  const pinned = new Date(Math.floor(sourceDateEpoch / 2000) * 2000); // DOS time has 2s granularity
+  for (const entry of zip.getEntries()) entry.header.time = pinned;
   await zip.writeZipPromise(zipPath);
   const sha256 = await sha256File(zipPath);
   const size = (await stat(zipPath)).size;
