@@ -12,10 +12,10 @@
  */
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
+import { createReadStream, readdirSync } from 'node:fs';
 import { access } from 'node:fs/promises';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import AdmZip from 'adm-zip';
@@ -67,21 +67,33 @@ const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const { version } = pkg;
 
 let commit = null;
-let commitTime = null;
 try {
   const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: root });
   commit = stdout.trim();
-  const { stdout: iso } = await execFileAsync('git', ['show', '-s', '--format=%cI', 'HEAD'], { cwd: root });
-  commitTime = new Date(iso.trim());
 } catch {
   // Not fatal: local runs outside a git worktree still package fine.
 }
-// adm-zip stamps every entry with the file mtime, which is the checkout time
-// on CI — two builds of the same commit would differ byte-wise and trip the
-// immutable no-overwrite guard on re-runs. Pin all entries to the commit
-// date (SOURCE_DATE_EPOCH convention) so artifacts are reproducible.
-const sourceDateEpoch = Number(process.env.SOURCE_DATE_EPOCH)
-  || (commitTime && !Number.isNaN(commitTime.getTime()) ? commitTime.getTime() : 0);
+// Reproducibility must hold per VERSION, not per commit: a workflow that fails
+// late (e.g. at the summary step) gets fixed on a follow-up commit and re-run
+// for the same version, and the immutable no-overwrite guard then needs the
+// rebuilt zip to match byte-for-byte. So pin entry timestamps to a fixed
+// epoch (SOURCE_DATE_EPOCH convention) instead of anything commit-derived.
+const FIXED_EPOCH = Date.UTC(2025, 0, 1);
+const pinned = new Date(Math.floor((Number(process.env.SOURCE_DATE_EPOCH) || FIXED_EPOCH) / 2000) * 2000); // DOS time has 2s granularity
+
+// readdir order is not stable across machines, and adm-zip preserves it.
+// Walk sorted so every runner emits entries in the same order.
+function collectSorted(dir, base = '') {
+  const files = [];
+  const entries = readdirSync(dir, { withFileTypes: true });
+  entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    const rel = base ? `${base}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) files.push(...collectSorted(join(dir, entry.name), rel));
+    else files.push(rel);
+  }
+  return files;
+}
 
 const versionDir = resolve(distDir, version);
 await mkdir(versionDir, { recursive: true });
@@ -102,8 +114,11 @@ for (const target of VARIANTS) {
   // Entry paths are relative to the output dir so manifest.json sits at the
   // zip root, which is what browsers expect from a sideloaded extension.
   const zip = new AdmZip();
-  zip.addLocalFolder(outputDir);
-  const pinned = new Date(Math.floor(sourceDateEpoch / 2000) * 2000); // DOS time has 2s granularity
+  for (const rel of collectSorted(outputDir)) {
+    const slash = rel.lastIndexOf('/');
+    const dir = slash === -1 ? '' : rel.slice(0, slash);
+    zip.addLocalFile(join(outputDir, rel), dir, rel.slice(slash + 1));
+  }
   for (const entry of zip.getEntries()) entry.header.time = pinned;
   await zip.writeZipPromise(zipPath);
   const sha256 = await sha256File(zipPath);
