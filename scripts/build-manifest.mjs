@@ -86,10 +86,14 @@ const maxVersions = Number.parseInt(String(args['max-versions'] ?? '10'), 10);
 if (!Number.isInteger(maxVersions) || maxVersions < 1) throw new Error('--max-versions must be a positive integer');
 
 let versions = [];
+let existingUpdatedAt = null;
+let existingManifestBytes = null;
 if (args['existing-manifest']) {
   try {
-    const existing = JSON.parse(await readFile(resolve(root, String(args['existing-manifest'])), 'utf8'));
+    existingManifestBytes = await readFile(resolve(root, String(args['existing-manifest'])));
+    const existing = JSON.parse(existingManifestBytes.toString('utf8'));
     versions = Array.isArray(existing.versions) ? existing.versions : [];
+    existingUpdatedAt = typeof existing.updated_at === 'string' ? existing.updated_at : null;
   } catch (err) {
     if (err?.code !== 'ENOENT') throw err;
     console.log('existing manifest not found; starting a fresh history');
@@ -110,11 +114,18 @@ if (idx >= 0 && artifactFingerprint(versions[idx].artifacts) === artifactFingerp
 }
 versions = versions.slice(0, maxVersions);
 
-const manifest = { latest: versions[0].version, updated_at: new Date().toISOString(), versions };
+// Preserve the previous updated_at when nothing actually changed: a no-op
+// re-publish would otherwise produce new manifest bytes (and a new checksum)
+// for identical content, racing the CDN's cache window.
+const candidate = { latest: versions[0].version, updated_at: '__now__', versions };
+const rebuildWith = (updatedAt) => JSON.stringify({ ...candidate, updated_at: updatedAt }, null, 2);
+const previousBytes = existingManifestBytes ? existingManifestBytes.toString('utf8').trimEnd() : null;
+const unchanged = existingUpdatedAt !== null && previousBytes === rebuildWith(existingUpdatedAt);
+const manifest = { ...candidate, updated_at: unchanged ? existingUpdatedAt : new Date().toISOString() };
 validate(manifest);
 
 const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 await writeFile(resolve(root, String(args.output)), bytes);
 const sha256 = createHash('sha256').update(bytes).digest('hex');
 await writeFile(resolve(root, String(args['checksum-output'])), `${sha256}  manifest.json\n`);
-console.log(`manifest written: ${args.output} (latest=${manifest.latest}, ${versions.length} version(s) retained)`);
+console.log(`manifest written: ${args.output} (latest=${manifest.latest}, ${versions.length} version(s) retained${unchanged ? ', content unchanged' : ''})`);
