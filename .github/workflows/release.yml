@@ -134,7 +134,7 @@ jobs:
             echo
             echo "| Variant | Size | SHA-256 |"
             echo "| --- | --- | --- |"
-            jq -r '.artifacts[] | "| \(.variant) | \(.size) | \`\(.sha256)\` |"' dist/release-entry.json
+            jq -r '.artifacts[] | "| \(.variant) | \(.size) | `\(.sha256)` |"' dist/release-entry.json
           } >> "$GITHUB_STEP_SUMMARY"
 
   verify:
