@@ -79,7 +79,12 @@ for (const artifact of entry.artifacts) {
 const manifestRes = await fetchOk(`${baseUrl}/manifest.json`);
 const manifestBytes = Buffer.from(await manifestRes.arrayBuffer());
 const manifestCache = manifestRes.headers.get('cache-control') ?? '';
-assert(manifestCache.includes('max-age=300'), `manifest.json: unexpected cache-control "${manifestCache}"`);
+// The CDN in front of aliyun-oss.yaklang.com rewrites JSON cache-control to
+// max-age=60 (the browser mirror gets the same treatment), so assert the
+// effective freshness window is short instead of matching our upload value.
+const manifestMaxAge = Number(/max-age=(\d+)/.exec(manifestCache)?.[1] ?? 0);
+assert(manifestMaxAge > 0 && manifestMaxAge <= 300,
+  `manifest.json: unexpected cache-control "${manifestCache}"`);
 const manifest = JSON.parse(manifestBytes.toString('utf8'));
 assert(manifest.latest === entry.version, `manifest.latest ${manifest.latest} != ${entry.version}`);
 const versionEntry = manifest.versions.find((v) => v.version === entry.version);
