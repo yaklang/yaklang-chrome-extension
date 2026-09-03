@@ -266,7 +266,6 @@ export function AuthorizationTestingWorkspace({
     && Boolean(bridge.capabilities?.includes('yakit.browser_authorization.task'));
   const instanceDiscoveryReady = bridge.state === 'connected'
     && Boolean(bridge.capabilities?.includes('yakit.browser_authorization.instances'));
-  const currentBrowserInstance = browserInstances.find((instance) => instance.current);
   const targetBrowserInstance = browserInstances.find((instance) => instance.deviceId === targetDeviceId);
 
   const refreshInspection = useCallback(async () => {
@@ -280,7 +279,7 @@ export function AuthorizationTestingWorkspace({
     if (!instanceDiscoveryReady) {
       setBrowserInstances([]);
       setTargetDeviceId('');
-      return;
+      return [];
     }
     const result = await request('authorization.yakit.instances');
     setBrowserInstances(result.instances);
@@ -289,6 +288,7 @@ export function AuthorizationTestingWorkspace({
         ? current
         : result.instances.find((instance) => !instance.current)?.deviceId || ''
     ));
+    return result.instances;
   }, [instanceDiscoveryReady]);
 
   useEffect(() => {
@@ -478,17 +478,24 @@ export function AuthorizationTestingWorkspace({
   }, 'A/B 身份已验证，双方请求捕获已开始');
 
   const openCrossBrowserWorkspace = () => run(async () => {
-    if (!activeTab) throw new Error('请先选择需要测试的页面');
-    if (!targetBrowserInstance) throw new Error('请选择另一个在线的 YTray 浏览器实例');
+    const sourceTab = leftTab || activeTab || eligibleTabs[0];
+    if (!sourceTab) throw new Error('当前浏览器没有可用于测试的 HTTP(S) 页面');
+    if (!instanceDiscoveryReady) throw new Error('当前 Yak 版本不支持读取在线实例，请更新引擎并重新连接插件');
     if (!bridge.capabilities?.includes('yakit.browser_authorization.open')) {
       throw new Error('当前 Yak 引擎不支持打开跨浏览器工作区');
     }
+    const instances = await refreshBrowserInstances();
+    const target = instances.find((instance) => (
+      !instance.current && instance.deviceId === targetDeviceId
+    )) || instances.find((instance) => !instance.current);
+    if (!target) throw new Error('没有检测到另一个在线的 YTray 浏览器实例，请确认其插件已连接同一 Yak 引擎');
+    setTargetDeviceId(target.deviceId);
     await request('authorization.yakit.open', {
-      tabId: activeTab.id,
+      tabId: sourceTab.id,
       mode,
-      targetDeviceId: targetBrowserInstance.deviceId,
+      targetDeviceId: target.deviceId,
     });
-  }, `已将浏览器 ${currentBrowserInstance?.badge || '当前'} 与 ${targetBrowserInstance?.badge || '对照'} 带入 Yakit`);
+  }, '已将两个浏览器实例带入 Yakit');
 
   const refreshWorkspaceDocuments = async (): Promise<BrowserAuthorizationWorkspace> => {
     if (!workspace || !leftTab || !rightTab) throw new Error('请先建立 A/B 工作区');
@@ -798,10 +805,12 @@ export function AuthorizationTestingWorkspace({
       </div>
       <Button
         variant="ghost"
-        disabled={busy || !activeTab || !targetBrowserInstance || !bridge.capabilities?.includes('yakit.browser_authorization.open')}
+        disabled={busy}
         onClick={() => void openCrossBrowserWorkspace()}
       >
-        <ExternalLink size={15} />用 {targetBrowserInstance?.badge || '—'} 在 Yakit 测试
+        <ExternalLink size={15} />{targetBrowserInstance
+          ? `用 ${targetBrowserInstance.badge} 在 Yakit 测试`
+          : '选择实例并在 Yakit 测试'}
       </Button>
     </section>}
 
