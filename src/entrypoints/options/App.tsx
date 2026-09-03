@@ -19,8 +19,6 @@ import { ProxyProfilesView } from '@/features/proxy/ui/ProxyProfilesView';
 import { RuleSourcesView } from '@/features/proxy/ui/RuleSourcesView';
 import { RecordingWorkspace } from '@/features/browser-recording/RecordingWorkspace';
 import { AuthorizationTestingWorkspace } from '@/features/authorization-testing/ui/AuthorizationTestingWorkspace';
-import { gatewayShareActive, gatewayShareGrantInput } from '@/features/grants/gateway-share';
-import { CAPABILITY_LABELS, CONTROL_CAPABILITY_SCOPES, READ_CAPABILITY_SCOPES, isControlScopeSet } from '@/protocol/capabilities';
 import { AGENT_RUNTIME_STORAGE_KEY, AUDIT_STORAGE_KEY, isStateStorageChange } from '@/protocol/storage';
 import type {
   ActiveTabInfo, AgentRuntime, AuditEvent, BridgePairingStatus, BridgeStatus, BrowserCookie, BrowserRequestAnalysisBundle, CookieInput, CookieTransferFormat, EnterprisePolicyStatus, ExtensionState, HumanHandoff,
@@ -227,7 +225,7 @@ function App() {
             <span className="topbar-tab__favicon">{tab?.favIconUrl ? <img src={tab.favIconUrl} alt="" /> : <Radio size={13} />}</span>
             <select className="target-tab-select" aria-label="目标标签页" value={tab?.id || ''} onChange={(event) => void selectTab(Number(event.target.value))}><option value="" disabled>选择目标标签页</option>{tabs.map((item) => <option value={item.id} key={item.id}>{item.title}</option>)}</select>
           </div>}
-          <div className="topbar-actions"><span className={`permission-state ${state.activeGrant ? 'enabled' : ''}`}><ShieldCheck size={14} />{state.activeGrant ? `${isControlScopeSet(state.activeGrant.scopes) ? '控制' : '只读'}会话` : '未共享'}</span><Button size="icon" variant="ghost" title="刷新状态" onClick={() => void load()}><RefreshCw size={17} /></Button></div>
+          <div className="topbar-actions"><span className={`permission-state ${bridge.state === 'connected' ? 'enabled' : ''}`}><ShieldCheck size={14} />{bridge.state === 'connected' ? '实例已连接' : '实例离线'}</span><Button size="icon" variant="ghost" title="刷新状态" onClick={() => void load()}><RefreshCw size={17} /></Button></div>
         </header>
 
         {handoff && <HandoffBanner handoff={handoff} setState={setState} run={run} busy={busy} />}
@@ -240,7 +238,7 @@ function App() {
           {section === 'sources' && <RuleSourcesView state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'cookies' && <CookieEditor key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'user-agent' && <UserAgents state={state} setState={setState} tab={tab} run={run} busy={busy} />}
-          {section === 'network' && <NetworkActivity key={tab?.id || 0} state={state} setState={setState} tab={tab} bridge={bridge} run={run} busy={busy} />}
+          {section === 'network' && <NetworkActivity key={tab?.id || 0} tab={tab} bridge={bridge} run={run} busy={busy} />}
           {section === 'context' && <ContextTool key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'engine' && <EngineSettings state={state} setState={setState} bridge={bridge} setBridge={setBridge} tabs={tabs} run={run} busy={busy} />}
           {section === 'activity' && <ActivityLog run={run} busy={busy} />}
@@ -313,7 +311,7 @@ function ActivityLog({ run, busy }: { run: (task: () => Promise<void>, success?:
   return <div className="section-view activity-view">
     <div className="page-heading"><div><h1>Agent 操作时间线</h1><p>实时动作保存在浏览器 session；长期审计只保存脱敏摘要，不记录参数、页面内容、Cookie 或执行结果。</p></div><div className="activity-heading-actions"><span className={`agent-runtime-state ${runtime.state}`}><Activity size={15} />{runtimeLabel}</span><Button variant="ghost" disabled={busy} onClick={() => void downloadDiagnostics()}><Download size={15} />导出诊断</Button></div></div>
     <section className="agent-runtime-band">
-      <div className="agent-runtime-summary"><div><span>当前任务</span><strong>{runtime.taskId || '未共享'}</strong><small>{runtime.grantId ? `Grant ${runtime.grantId.slice(0, 8)}` : '没有活动授权'}</small></div><div><span>最近更新</span><strong>{new Date(runtime.updatedAt).toLocaleTimeString()}</strong><small>{runtime.actions.length} 条 session 动作</small></div><div className="agent-runtime-controls">{runtime.state === 'running' || runtime.state === 'waiting_for_human' ? <Button disabled={busy} onClick={() => void run(async () => setRuntime(await request('agent.pause')), 'Agent 已暂停')}><Square size={15} />暂停</Button> : runtime.state === 'paused' ? <Button variant="primary" disabled={busy} onClick={() => void run(async () => setRuntime(await request('agent.resume')), 'Agent 已恢复')}><Play size={15} />恢复</Button> : null}{runtime.grantId && !['revoked', 'expired'].includes(runtime.state) && <Button variant="danger" disabled={busy} onClick={() => void run(async () => { await request('grant.revoke'); setRuntime(await request('agent.runtime.get')); }, '共享会话已撤销')}><X size={15} />撤销</Button>}<Button variant="ghost" disabled={busy || runtime.actions.length === 0} onClick={() => void run(async () => setRuntime(await request('agent.actions.clear')), 'Session 时间线已清空')}><Trash2 size={15} />清空</Button></div></div>
+      <div className="agent-runtime-summary"><div><span>浏览器实例</span><strong>{runtime.taskId ? '已接入 Agent' : '等待调用'}</strong><small>{runtime.grantId ? '配对级访问' : '尚无能力调用'}</small></div><div><span>最近更新</span><strong>{new Date(runtime.updatedAt).toLocaleTimeString()}</strong><small>{runtime.actions.length} 条 session 动作</small></div><div className="agent-runtime-controls">{runtime.state === 'running' || runtime.state === 'waiting_for_human' ? <Button disabled={busy} onClick={() => void run(async () => setRuntime(await request('agent.pause')), 'Agent 已暂停')}><Square size={15} />暂停</Button> : runtime.state === 'paused' ? <Button variant="primary" disabled={busy} onClick={() => void run(async () => setRuntime(await request('agent.resume')), 'Agent 已恢复')}><Play size={15} />恢复</Button> : null}<Button variant="ghost" disabled={busy || runtime.actions.length === 0} onClick={() => void run(async () => setRuntime(await request('agent.actions.clear')), 'Session 时间线已清空')}><Trash2 size={15} />清空</Button></div></div>
       {runtime.actions.length === 0 ? <div className="agent-actions-empty">当前 session 尚无 Agent 能力调用。</div> : <div className="agent-action-list" role="list">{[...runtime.actions].reverse().slice(0, 50).map((action) => <div key={action.id} className="agent-action-row" role="listitem"><span className={`action-state ${action.state}`} /> <time>{new Date(action.startedAt).toLocaleTimeString()}</time><code title={action.method}>{action.method}</code><span>{action.targetTabId ? `Tab ${action.targetTabId}` : '扩展本机'}</span><strong className={action.state}>{action.state}</strong><span>{action.durationMs === undefined ? '进行中' : `${action.durationMs} ms`}</span></div>)}</div>}
     </section>
     <div className="activity-subheading"><div><h2>持久化脱敏审计</h2><p>最近 500 条授权、Bridge、接管与能力结果。</p></div><Button variant="ghost" disabled={busy || events.length === 0} onClick={() => void run(async () => { await request('audit.clear'); setEvents([]); }, '操作记录已清空')}><Trash2 size={15} />清空审计</Button></div>
@@ -362,12 +360,12 @@ function Overview({ state, bridge, tab, navigate, run, busy }: { state: Extensio
     <div className="page-heading"><div><h1>运行概览</h1><p>{tab?.title || '选择一个 HTTP(S) 标签页，建立浏览器现场。'}</p></div><span className={`large-status ${bridge.state}`}><Radio size={16} />{bridge.state === 'connected' ? `Yak ${bridge.engineVersion || '引擎'} 在线` : 'Yak 引擎离线'}</span></div>
     <div className="task-command-bar">
       <div className="task-site-identity"><KeyRound size={18} /><span><strong>{loginContext?.authentication.status === 'authenticated' ? '检测到登录环境' : loginContext?.authentication.status === 'unauthenticated' ? '未检测到登录态' : '登录环境待采集'}</strong><small>{site ? `${site.protocol.replace(':', '').toUpperCase()} · ${site.origin}` : '当前页面不可访问'}</small></span></div>
-      <div className="task-quick-actions"><Button disabled={busy || !tab} onClick={() => void captureLoginEnvironment()}><Braces size={15} />采集登录环境</Button><Button disabled={busy || !tab || network?.active} onClick={() => void startCapture()}><Activity size={15} />{network?.active ? '正在捕获' : '抓取请求'}</Button><Button variant="primary" onClick={() => navigate('engine')}><Bot size={15} />共享给 Agent</Button></div>
+      <div className="task-quick-actions"><Button disabled={busy || !tab} onClick={() => void captureLoginEnvironment()}><Braces size={15} />采集登录环境</Button><Button disabled={busy || !tab || network?.active} onClick={() => void startCapture()}><Activity size={15} />{network?.active ? '正在捕获' : '抓取请求'}</Button><Button variant="primary" onClick={() => navigate('engine')}><Bot size={15} />管理 Agent 连接</Button></div>
     </div>
     <div className="task-status-grid">
       <section><span>浏览器现场</span><strong>{loginContext ? `${loginContext.document?.forms.length || 0} 表单 / ${loginContext.document?.interactive.length || 0} 节点` : '尚未采集'}</strong><small>{loginContext?.authentication.evidence[0] || 'Cookie、Storage 与认证信号仅在用户点击后读取'}</small><button onClick={() => navigate('context')}>打开上下文<ChevronRight size={15} /></button></section>
       <section><span>代理与流量</span><strong>{activeProxy}</strong><small>{network?.active ? `${network.count} 条请求，${network.droppedCount} 条丢弃` : `${state.proxyRules.filter((rule) => rule.enabled).length} 条手动规则 · ${state.proxyRuleSources.filter((source) => source.enabled).length} 个订阅源`}</small><button onClick={() => navigate(network?.active ? 'network' : 'rules')}>查看流量策略<ChevronRight size={15} /></button></section>
-      <section><span>Agent 会话</span><strong>{state.activeGrant ? `${isControlScopeSet(state.activeGrant.scopes) ? '控制' : '只读'} · ${runtime.state}` : '未共享'}</strong><small>{state.activeGrant ? `${state.activeGrant.targets.length} 个 frame · ${new Date(state.activeGrant.expiresAt).toLocaleTimeString()} 到期` : '创建 task-bound grant 后才允许远程读取'}</small><button onClick={() => navigate('activity')}>查看动作时间线<ChevronRight size={15} /></button></section>
+      <section><span>Agent 连接</span><strong>{bridge.state === 'connected' ? `实例在线 · ${runtime.state}` : '实例离线'}</strong><small>{bridge.state === 'connected' ? '当前浏览器内的 HTTP(S) 页面可直接被引用' : '配对并连接 Yakit 后即可使用，无需逐页授权'}</small><button onClick={() => navigate('activity')}>查看动作时间线<ChevronRight size={15} /></button></section>
       <section className={state.handoff?.state === 'waiting_for_user' ? 'needs-attention' : ''}><span>需要用户处理</span><strong>{state.handoff?.state === 'waiting_for_user' ? HANDOFF_REASON_LABELS[state.handoff.reason] : runtime.state === 'paused' ? 'Agent 已暂停' : '没有待办步骤'}</strong><small>{state.handoff?.state === 'waiting_for_user' ? state.handoff.message : latestAction ? `最近 ${latestAction.method} · ${latestAction.state}` : '二维码、MFA 与 CAPTCHA 会在这里出现'}</small><button onClick={() => navigate('activity')}>会话控制<ChevronRight size={15} /></button></section>
     </div>
     <div className="task-workflow-list">
@@ -518,15 +516,11 @@ function networkLabel(record: NetworkRequestRecord): { host: string; path: strin
 }
 
 function NetworkActivity({
-  state,
-  setState,
   tab,
   bridge,
   run,
   busy,
 }: {
-  state: ExtensionState;
-  setState: (state: ExtensionState) => void;
   tab?: ActiveTabInfo;
   bridge: BridgeStatus;
   run: (task: () => Promise<void>, success?: string) => Promise<void>;
@@ -543,11 +537,11 @@ function NetworkActivity({
   const [captureHeaders, setCaptureHeaders] = useState(false);
   const [captureBody, setCaptureBody] = useState(false);
   const [query, setQuery] = useState('');
-  const transformShared = gatewayShareActive(state.activeGrant, tab);
+  const transformShared = bridge.state === 'connected';
 
   const shareTransform = async () => {
-    if (!tab) throw new Error('请先选择需要共享的页面');
-    setState(await request('grant.create', gatewayShareGrantInput(state, tab)));
+    if (!tab) throw new Error('请先选择需要使用的页面');
+    if (bridge.state !== 'connected') await request('bridge.connect');
   };
 
   const load = useCallback(async () => {
@@ -666,8 +660,6 @@ function NetworkActivity({
       busy={busy}
       run={run}
       gatewayShared={transformShared}
-      gatewayShareExpiresAt={transformShared ? state.activeGrant?.expiresAt : undefined}
-      gatewayBridgeConnected={bridge.state === 'connected'}
       onShareGateway={shareTransform}
     />
   </div>;
@@ -799,15 +791,7 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
   const [draft, setDraft] = useState(state.bridge);
   const [pairing, setPairing] = useState<BridgePairingStatus>({ state: 'idle', message: state.bridge.pairedEngine ? '当前浏览器已配对' : '尚未配对' });
   const [panelDraft, setPanelDraft] = useState(state.floatingPanel);
-  const [framesByTab, setFramesByTab] = useState<Record<number, PageFrameSummary[]>>({});
-  const [selectedTargets, setSelectedTargets] = useState<string[]>(state.activeGrant?.targets.map((target) => `${target.tabId}:${target.frameId}`) || []);
-  const [grantLevel, setGrantLevel] = useState<'read' | 'control'>(state.activeGrant && isControlScopeSet(state.activeGrant.scopes) ? 'control' : 'read');
-  const [allowProgramEval, setAllowProgramEval] = useState(Boolean(state.activeGrant?.scopes.includes('browser.page.eval.program')));
   const [policy, setPolicy] = useState<EnterprisePolicyStatus>({ managed: false, policy: {}, warnings: [] });
-  const [durationMinutes, setDurationMinutes] = useState(30);
-  const selectedGrantScopes = grantLevel === 'control'
-    ? [...CONTROL_CAPABILITY_SCOPES, ...(allowProgramEval ? ['browser.page.eval.program' as const] : [])]
-    : READ_CAPABILITY_SCOPES;
   useEffect(() => {
     void request('policy.status').then(setPolicy).catch(() => undefined);
     void request('bridge.pair.status').then(setPairing).catch(() => undefined);
@@ -818,23 +802,7 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
     browser.runtime.onMessage.addListener(listener);
     return () => browser.runtime.onMessage.removeListener(listener);
   }, []);
-  useEffect(() => {
-    let active = true;
-    void Promise.all(tabs.map(async (item) => [item.id, await request('frame.list', { tabId: item.id }).catch(() => [])] as const))
-      .then((inventories) => {
-        if (active) setFramesByTab(Object.fromEntries(inventories));
-      });
-    return () => { active = false; };
-  }, [tabs]);
   useEffect(() => setDraft(state.bridge), [state.bridge]);
-  const toggleTarget = (key: string, checked: boolean) => setSelectedTargets((current) => checked
-    ? [...new Set([...current, key])]
-    : current.filter((item) => item !== key));
-  const toggleTab = (tabId: number, checked: boolean) => {
-    const mainKey = `${tabId}:0`;
-    if (checked) toggleTarget(mainKey, true);
-    else setSelectedTargets((current) => current.filter((key) => !key.startsWith(`${tabId}:`)));
-  };
   const save = () => run(async () => {
     if (draft.transport === 'native') {
       // Permission requests must be the first browser call made from the click gesture.
@@ -879,8 +847,9 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
         <label className="toggle-row"><span><strong>全屏自动收起</strong><small>进入全屏、演示或视频场景时关闭展开内容</small></span><Switch checked={panelDraft.autoCollapseFullscreen} onCheckedChange={(autoCollapseFullscreen) => setPanelDraft({ ...panelDraft, autoCollapseFullscreen })} /></label>
         <div className="editor-actions"><Button disabled={busy} onClick={() => void savePanel()}><Save size={16} />保存面板策略</Button></div>
       </section>
-      <div className="grant-editor"><h2>浏览器共享会话</h2><p>只把明确勾选的 frame 和能力授权给当前 Agent；子 frame、刷新和跨来源导航不会静默继承授权。</p><div className="tab-picker">{tabs.map((tabItem) => { const frames = framesByTab[tabItem.id] || []; const mainSelected = selectedTargets.includes(`${tabItem.id}:0`); return <div className="tab-picker-group" key={tabItem.id}><label><input type="checkbox" checked={mainSelected} onChange={(event) => toggleTab(tabItem.id, event.target.checked)} /><span><strong>{tabItem.title}</strong><small>{tabItem.url}</small></span></label>{mainSelected && frames.filter((frame) => !frame.isTop).map((frame) => <label className="frame-target" key={frame.frameId}><input type="checkbox" disabled={!frame.accessible || !frame.origin} checked={selectedTargets.includes(`${tabItem.id}:${frame.frameId}`)} onChange={(event) => toggleTarget(`${tabItem.id}:${frame.frameId}`, event.target.checked)} /><span><strong>{frame.title || frame.name || `Frame ${frame.frameId}`}</strong><small>#{frame.frameId} · {frame.sameOrigin ? '同源' : '跨源'} · {frame.origin || frame.url}</small></span></label>)}</div>; })}</div><div className="grant-options"><Field label="权限预设"><select value={grantLevel} onChange={(event) => setGrantLevel(event.target.value as 'read' | 'control')}><option value="read">只读：页面、Storage、Cookie</option><option value="control">控制：页面操作、网络敏感字段、深度捕获、代理</option></select></Field><Field label="有效期"><select value={durationMinutes} onChange={(event) => setDurationMinutes(Number(event.target.value))}><option value="15">15 分钟</option><option value="30">30 分钟</option><option value="60">1 小时</option><option value="240">4 小时</option></select></Field></div>{grantLevel === 'control' && <label className="toggle-row grant-risk-toggle"><span><strong>允许程序 Eval</strong><small>独立高风险 scope，可执行多条语句并产生页面副作用</small></span><Switch disabled={policy.policy.allowProgramEval === false} checked={allowProgramEval && policy.policy.allowProgramEval !== false} onCheckedChange={setAllowProgramEval} /></label>}<div className="grant-scope-list">{selectedGrantScopes.filter((scope) => policy.policy.allowProgramEval !== false || scope !== 'browser.page.eval.program').map((scope) => <span key={scope}>{CAPABILITY_LABELS[scope]}</span>)}</div><div className="editor-actions"><button className="primary-button" disabled={busy || selectedTargets.length === 0} onClick={() => void run(async () => setState(await request('grant.create', { targets: selectedTargets.map((key) => { const [tabId, frameId] = key.split(':').map(Number); return { tabId, frameId }; }), scopes: selectedGrantScopes.filter((scope) => policy.policy.allowProgramEval !== false || scope !== 'browser.page.eval.program'), durationMinutes })), '共享会话已创建')}><ShieldCheck size={16} />创建会话</button>{state.activeGrant && <button className="danger-button" onClick={() => void run(async () => setState(await request('grant.revoke')), '共享会话已撤销')}><X size={16} />立即撤销</button>}</div>{state.activeGrant && <div className="grant-status"><strong>{isControlScopeSet(state.activeGrant.scopes) ? '控制会话' : '只读会话'}</strong><span>{state.activeGrant.targets.length} 个 frame · {state.activeGrant.scopes.length} 项能力 · {new Date(state.activeGrant.expiresAt).toLocaleString()} 到期</span></div>}</div></div>
-      <div className="protocol-panel"><h2>Bridge 方法</h2><div><code>browser.tabs / frames</code><span>列出授权标签页与完整 frame inventory</span></div><div><code>browser.context</code><span>生成结构化快照、存储 inventory、认证信号与上下文 diff</span></div><div><code>browser.node.*</code><span>检查或操作快照内的文档绑定节点引用</span></div><div><code>browser.cookies</code><span>读取指定标签页的浏览器 Cookie</span></div><div><code>browser.network.*</code><span>控制有界网络捕获、读取请求时间线并导出重放包</span></div><div><code>browser.takeover</code><span>将页面切到前台，交给用户扫码或二次验证</span></div><div><code>browser.invoke</code><span>以控制权限调用页面已有全局函数</span></div><div><code>browser.eval</code><span>以控制权限在页面主世界执行代码，支持 Promise 和超时</span></div><div><code>proxy.list / switch</code><span>读取并切换扩展代理配置</span></div></div>
+      <div className="grant-editor"><h2>浏览器实例访问</h2><p>配对成功后，Yakit 可直接引用此浏览器中的全部 HTTP(S) 页面；刷新、跳转和新标签页会自动跟随，不再逐页授权。</p><div className="grant-status"><strong>{bridge.state === 'connected' ? '实例已连接' : state.bridge.pairedEngine ? '实例已配对，当前离线' : '实例尚未配对'}</strong><span>{tabs.length} 个可访问页面 · 浏览器内部页始终排除 · 无痕窗口沿用浏览器自己的独立访问开关</span></div><div className="grant-scope-list"><span>人工：逐次确认 · 协同 AI：按风险判断 · YOLO：自动执行</span><span>{policy.policy.allowProgramEval === false ? '程序 Eval 已被企业策略禁用' : '程序 Eval 在 YOLO 下无需手动批准，仍受浏览器与企业策略限制'}</span>{policy.policy.grantAllowedOrigins?.length ? <span>企业来源白名单：{policy.policy.grantAllowedOrigins.length} 项</span> : null}</div></div>
+    </div>
+      <div className="protocol-panel"><h2>Bridge 方法</h2><div><code>browser.tabs / tab.open / frames</code><span>列出当前实例的 HTTP(S) 标签页、打开网页并读取完整 frame inventory</span></div><div><code>browser.context</code><span>生成结构化快照、存储 inventory、认证信号与上下文 diff</span></div><div><code>browser.node.*</code><span>检查或操作快照内的文档绑定节点引用</span></div><div><code>browser.cookies</code><span>读取指定标签页的浏览器 Cookie</span></div><div><code>browser.network.*</code><span>控制有界网络捕获、读取请求时间线并导出重放包</span></div><div><code>browser.takeover</code><span>将页面切到前台，交给用户扫码或二次验证</span></div><div><code>browser.invoke</code><span>调用页面已有全局函数</span></div><div><code>browser.eval</code><span>在页面主世界执行代码，支持 Promise 和超时</span></div><div><code>proxy.list / switch</code><span>读取并切换扩展代理配置</span></div></div>
     </div>
   </div>;
 }

@@ -20,7 +20,10 @@ function exactMethods(id: CapabilityDomainId, methods: readonly string[]): Capab
 
 export const NAVIGATION_CAPABILITY_DOMAIN = exactMethods('navigation-isolation', [
   'browser.tabs',
+  'browser.tab.open',
+  'browser.thumbnail',
   'browser.frames',
+  'browser.instance.close',
   'browser.isolation.inspect',
   'browser.isolation.proof',
   'browser.isolation.incognito.open',

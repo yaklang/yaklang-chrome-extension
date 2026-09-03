@@ -6,7 +6,7 @@ import {
 } from '@/protocol/capabilities';
 import { parseCapabilityParams } from '@/protocol/bridge';
 import { ExtensionError } from '@/shared/errors';
-import { activeGrant, type CapabilityEngineRequest } from './capability-context';
+import { browserInstanceAccess, type CapabilityEngineRequest } from './capability-context';
 import { dispatchCapability } from './capability-router';
 
 export { CONTROL_CAPABILITY_SCOPES, READ_CAPABILITY_SCOPES } from '@/protocol/capabilities';
@@ -17,9 +17,18 @@ export async function routeCapability(
   requestEngine?: CapabilityEngineRequest,
 ): Promise<unknown> {
   if (method === 'system.ping') {
+    const userAgent = globalThis.navigator?.userAgent || '';
+    const browserName = /Firefox\//i.test(userAgent)
+      ? 'Firefox'
+      : /Edg\//i.test(userAgent)
+        ? 'Edge'
+        : /Chrom(?:e|ium)\//i.test(userAgent)
+          ? 'Chrome'
+          : undefined;
     return {
       now: Date.now(),
       extensionVersion: browser.runtime.getManifest().version,
+      browserName,
     };
   }
   if (import.meta.env.FIREFOX
@@ -35,6 +44,6 @@ export async function routeCapability(
     ? 'browser.page.eval.program'
     : capabilityBaseScope(method);
   if (!required) throw new Error(`不支持的 Bridge 方法: ${method}`);
-  const grant = await activeGrant(required);
+  const grant = await browserInstanceAccess(required);
   return dispatchCapability({ method, input, grant, requestEngine });
 }

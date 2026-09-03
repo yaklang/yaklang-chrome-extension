@@ -167,12 +167,19 @@ const userAgentProfileInput = v.strictObject({
   userAgent: userAgentValue,
 });
 
+const managedInstance = v.strictObject({
+  manager: v.picklist(['ytray', 'yakit']),
+  instanceId: v.pipe(v.string(), v.regex(/^[A-Za-z0-9-]{1,160}$/)),
+  badge: v.pipe(v.string(), v.regex(/^[A-Z]{1,2}$/)),
+});
+
 const bridgeConfig = v.strictObject({
   transport: v.picklist(['native', 'websocket']),
   nativeHost: v.pipe(v.string(), v.trim(), v.maxLength(253)),
   endpoint: v.pipe(v.string(), v.trim(), v.maxLength(2_048)),
   autoConnect: v.boolean(),
   installationId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160)),
+  managedInstance: v.optional(managedInstance),
   pairedEngine: v.optional(v.strictObject({
     engineIdentityId: id,
     deviceId: id,
@@ -226,6 +233,7 @@ const contextOptions = {
 
 const capabilityScopes: readonly CapabilityScope[] = [
   'browser.tabs.read',
+  'browser.tabs.write',
   'browser.isolation.read',
   'browser.isolation.manage',
   'browser.dom.read',
@@ -233,6 +241,7 @@ const capabilityScopes: readonly CapabilityScope[] = [
   'browser.storage.read',
   'browser.cookies.read',
   'browser.tab.activate',
+  'browser.instance.close',
   'browser.page.invoke',
   'browser.page.eval.expression',
   'browser.page.eval.program',
@@ -462,6 +471,7 @@ const payloadSchemas = {
   'metrics.get': noPayload,
   'metrics.reset': noPayload,
   'bridge.config.save': bridgeConfig,
+  'bridge.managed-instance.bind': managedInstance,
   'bridge.pair': noPayload,
   'bridge.pair.cancel': noPayload,
   'bridge.pair.status': noPayload,

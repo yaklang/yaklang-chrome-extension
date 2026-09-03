@@ -3,6 +3,7 @@ import type { HandoffReason } from '@/types/models';
 import type { CapabilityDomainHandler } from '../capability-context';
 import { allowedTarget } from '../capability-context';
 import { activateTab } from '@/platform/browser/targets';
+import { getTab } from '@/platform/browser/targets';
 import { getState, updateState } from '@/platform/storage/state';
 import { setAgentRuntimeState } from '@/features/agent-runtime/service';
 import { ExtensionError } from '@/shared/errors';
@@ -16,15 +17,23 @@ export const handoffCapabilityHandler: CapabilityDomainHandler = {
       return handoff?.taskId === grant.taskId ? handoff : { state: 'idle' };
     }
     const resolvedTarget = await allowedTarget(grant, input);
-    const grantTarget = grant.targets.find((target) => (
-      target.tabId === resolvedTarget.tabId && target.frameId === resolvedTarget.frameId
-    ));
-    if (!grantTarget) throw new Error('目标标签页不在本次共享会话中');
+    const [tab, frame] = await Promise.all([
+      getTab(resolvedTarget.tabId),
+      browser.webNavigation.getFrame(resolvedTarget),
+    ]);
+    if (!frame?.url || !/^https?:/i.test(frame.url)) {
+      throw new ExtensionError('target_unavailable', '目标 frame 不是可接管的 HTTP(S) 页面');
+    }
+    const grantTarget = {
+      ...resolvedTarget,
+      isolationContextId: tab.isolationContextId || `browser-profile:tab-${tab.id}`,
+      cookieStoreId: tab.cookieStoreId,
+      origin: new URL(frame.url).origin,
+      grantedUrl: frame.url,
+      title: tab.title,
+    };
     const now = Date.now();
     const state = await updateState((current) => {
-      if (current.activeGrant?.id !== grant.id || current.activeGrant.expiresAt <= Date.now()) {
-        throw new ExtensionError('grant_expired', '浏览器共享会话已经变化，请重新发起请求');
-      }
       if (current.handoff?.state === 'waiting_for_user') {
         throw new ExtensionError('handoff_in_progress', '已有人工接管请求正在等待处理');
       }

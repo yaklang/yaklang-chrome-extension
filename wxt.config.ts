@@ -5,6 +5,7 @@ import { defineConfig } from 'wxt';
 // package.json is the single source of truth for the version; release
 // packaging asserts the built manifest matches it.
 const { version } = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
+const CHROMIUM_EXTENSION_KEY = 'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1bj9d0jEOY87aT9nk4Ov7svZVnrFPD0dJsS39exzqMIJGMkGmqQ7J4TfFLlAV3Ckm9uszkMyw1oKKM/5ejd662B2uTcolHcSzmEVKLTGLvwUylWE6YJWcb3b5G88bzkcQepnNdz3gg3JvMhwPBNMk4qeSAHtX7u6S5zjoX4AyvQg5/qs29zViUTZoPcSEprJidaMilKwGxsJ5VpgtUXCE7JoKgadm/CK4iwJF5yCmKrkCi6xFwrt/qfrLAd6qXae7d5PDztxNyU+KSHX6FUHFfvJx9cmeIjIIJiZ35RHV78oT2beATSrU70uxg6in2JMy0z9SnpoV4euJ4Xyh6f/cwIDAQAB';
 
 // See https://wxt.dev/api/config.html
 export default defineConfig({
@@ -29,7 +30,7 @@ export default defineConfig({
     storage: {
       managed_schema: 'managed-storage-schema.json',
     },
-    ...(browser !== 'firefox' ? { incognito: 'spanning' as const } : {}),
+    ...(browser !== 'firefox' ? { key: CHROMIUM_EXTENSION_KEY, incognito: 'spanning' as const } : {}),
     permissions: [
       'proxy',
       'storage',

@@ -196,6 +196,11 @@ export interface BridgeConfig {
   endpoint: string;
   autoConnect: boolean;
   installationId: string;
+  managedInstance?: {
+    manager: 'ytray' | 'yakit';
+    instanceId: string;
+    badge: string;
+  };
   pairedEngine?: BridgePairedEngine;
 }
 
@@ -226,6 +231,7 @@ export interface BridgePairingStatus {
 
 export type CapabilityScope =
   | 'browser.tabs.read'
+  | 'browser.tabs.write'
   | 'browser.isolation.read'
   | 'browser.isolation.manage'
   | 'browser.dom.read'
@@ -233,6 +239,7 @@ export type CapabilityScope =
   | 'browser.storage.read'
   | 'browser.cookies.read'
   | 'browser.tab.activate'
+  | 'browser.instance.close'
   | 'browser.page.invoke'
   | 'browser.page.eval.expression'
   | 'browser.page.eval.program'
@@ -406,7 +413,7 @@ export interface NetworkRequestRecord {
 }
 
 export interface NetworkCaptureStatus {
-  active: boolean;
+  active?: boolean;
   target: BrowserTarget;
   startedAt?: number;
   count: number;
@@ -1483,6 +1490,7 @@ export interface ExtensionState {
 export interface ActiveTabInfo {
   id: number;
   windowId: number;
+  active?: boolean;
   title: string;
   url: string;
   incognito: boolean;

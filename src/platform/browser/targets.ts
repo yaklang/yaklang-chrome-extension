@@ -41,7 +41,7 @@ export async function resolveDocumentTarget(input: BrowserTarget | number): Prom
   }
   if (!probe) throw new ExtensionError('target_unavailable', '无法定位目标页面文档');
   if (requested.documentId && probe.documentId && requested.documentId !== probe.documentId) {
-    throw new ExtensionError('stale_document', '目标页面已经刷新或导航，请重新授权');
+    throw new ExtensionError('stale_document', '目标页面已经刷新或导航，请重新获取页面上下文');
   }
   return { tabId: requested.tabId, frameId: probe.frameId, documentId: probe.documentId || requested.documentId };
 }
@@ -64,6 +64,19 @@ export const getActiveTab = () => getTab();
 
 export async function activateTab(tabId?: number): Promise<void> {
   const tab = tabId ? await browser.tabs.get(tabId) : await browser.tabs.get((await getActiveTab()).id);
-  await browser.windows.update(tab.windowId, { focused: true });
   await browser.tabs.update(tab.id, { active: true });
+  const window = await browser.windows.get(tab.windowId);
+  if (window.state === 'minimized') await browser.windows.update(tab.windowId, { state: 'normal' });
+  await browser.windows.update(tab.windowId, { focused: true });
+}
+
+export async function scheduleBrowserInstanceClose(): Promise<{ closing: boolean; windowCount: number }> {
+  const windowIds = (await browser.windows.getAll())
+    .map((window) => window.id)
+    .filter((id): id is number => typeof id === 'number');
+  if (!windowIds.length) return { closing: false, windowCount: 0 };
+  globalThis.setTimeout(() => {
+    void Promise.all(windowIds.map((id) => browser.windows.remove(id).catch(() => undefined)));
+  }, 250);
+  return { closing: true, windowCount: windowIds.length };
 }

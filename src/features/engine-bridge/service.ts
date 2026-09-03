@@ -9,7 +9,7 @@ import {
 } from '@/protocol/bridge';
 import { getBridgeRuntimeSession, getState, setBridgeRuntimeSession, updateState } from '@/platform/storage/state';
 import { routeCapability } from '@/features/grants/service';
-import { currentActiveGrant } from '@/features/grants/lifecycle';
+import { browserInstanceAccess } from '@/features/grants/capability-context';
 import { errorCode, ExtensionError, isDeniedErrorCode } from '@/shared/errors';
 import { appendAuditEvent } from '@/features/diagnostics/audit';
 import { beginAgentAction, finishAgentAction } from '@/features/agent-runtime/service';
@@ -301,6 +301,7 @@ export class EngineBridge {
       capabilities: [...BRIDGE_CAPABILITIES],
       capabilityCatalog,
       installationId: config.installationId,
+      managedInstance: state.bridge.managedInstance,
       taskId: state.activeGrant?.taskId,
       grantId: state.activeGrant?.id,
       resumeSessionId: previousSession?.sessionId,
@@ -522,18 +523,13 @@ export class EngineBridge {
       : undefined;
 
     try {
-      const grant = await currentActiveGrant();
-      taskId = grant?.taskId;
-      targetTabId ??= grant?.targets[0]?.tabId;
-      if (grant) {
-        const grantTarget = grant.targets.find((target) => target.tabId === targetTabId);
-        actionId = (await beginAgentAction(grant, {
-          requestId: message.id,
-          method: message.method,
-          targetTabId,
-          isolationContextId: grantTarget?.isolationContextId,
-        })).id;
-      }
+      const grant = await browserInstanceAccess('browser.tabs.read');
+      taskId = grant.taskId;
+      actionId = (await beginAgentAction(grant, {
+        requestId: message.id,
+        method: message.method,
+        targetTabId,
+      })).id;
       const operation = routeCapability(message.method, message.params, (method, params) => this.requestEngine(method, params));
       const result = await Promise.race([operation, cancelled]);
       const durationMs = performance.now() - startedAt;
@@ -802,6 +798,7 @@ export class EngineBridge {
         socket.send(JSON.stringify({
           type: 'pair_request', protocolVersion: BRIDGE_PROTOCOL_VERSION,
           installationId: config.installationId,
+          managedInstance: config.managedInstance,
           client: 'yakit-browser-extension', version: browser.runtime.getManifest().version,
           nonce: clientNonce, publicKey: identity.publicKey,
         } satisfies BridgePairingEnvelope));
@@ -872,6 +869,7 @@ export class EngineBridge {
         engineIdentityId: message.engineIdentityId!, requestId: message.requestId!,
         origin: browser.runtime.getURL('').replace(/\/$/, ''), installationId: context.config.installationId,
         clientNonce: context.clientNonce, serverNonce: message.serverNonce!, publicKey: context.publicKey,
+        managedInstance: context.config.managedInstance,
       });
       if (code !== message.code) {
         this.failPairing(new Error('Yak 配对验证码校验失败'));

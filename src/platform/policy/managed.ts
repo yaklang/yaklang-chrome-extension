@@ -79,12 +79,20 @@ export function assertGrantPolicy(
   policy: EnterprisePolicy,
   input: { durationMinutes: number; origins: string[]; programEval: boolean },
 ): number {
+  if (input.programEval) assertBrowserAccessPolicy(policy, { programEval: true });
+  for (const origin of input.origins) assertBrowserAccessPolicy(policy, { origin });
+  return Math.min(input.durationMinutes, policy.maxGrantMinutes || input.durationMinutes);
+}
+
+export function assertBrowserAccessPolicy(
+  policy: EnterprisePolicy,
+  input: { origin?: string; programEval?: boolean },
+): void {
   if (input.programEval && policy.allowProgramEval === false) {
     throw new ExtensionError('policy_denied', '企业策略禁止 browser.page.eval.program');
   }
-  if (policy.grantAllowedOrigins?.length) {
-    const denied = input.origins.find((origin) => !policy.grantAllowedOrigins!.includes(origin));
-    if (denied) throw new ExtensionError('policy_denied', `企业策略不允许授权 origin: ${denied}`);
+  if (input.origin && policy.grantAllowedOrigins?.length
+    && !policy.grantAllowedOrigins.includes(input.origin)) {
+    throw new ExtensionError('policy_denied', `企业策略不允许访问 origin: ${input.origin}`);
   }
-  return Math.min(input.durationMinutes, policy.maxGrantMinutes || input.durationMinutes);
 }

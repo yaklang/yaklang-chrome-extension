@@ -1,11 +1,11 @@
 import { browser, type Browser } from 'wxt/browser';
 import {
   clearNetworkRequests, exportNetworkRequest, listNetworkRequests, networkCaptureStatus,
-  rebindNetworkCapturesForGrant, startNetworkCapture, stopNetworkCapture,
+  rebindNetworkCapturesForGrant, startNetworkCapture, stopNetworkCapture, stopNetworkCapturesForGrant,
 } from '@/features/network-capture/service';
 import { capturedRequestEnginePayload } from '@/features/network-capture/workflows';
-import { initializeBrowserRecordingService } from '@/features/browser-recording/service';
-import { initializeDeepCaptureService } from '@/features/deep-capture/service';
+import { initializeBrowserRecordingService, stopBrowserRecordingsForGrant } from '@/features/browser-recording/service';
+import { initializeDeepCaptureService, stopDeepCapturesForGrant } from '@/features/deep-capture/service';
 import { initializeBrowserTransformService } from '@/features/browser-transform/service';
 import { initializeFloatingPanelLifecycle } from '@/features/floating-panel/lifecycle';
 import type { ExtensionRequest, ExtensionResponse } from '@/types/messages';
@@ -36,6 +36,9 @@ import {
 import {
   applyPolicyToBridge, applyPolicyToState, assertGrantPolicy, getEnterprisePolicy,
 } from '@/platform/policy/managed';
+import {
+  browserInstanceAccess, PAIRED_BROWSER_INSTANCE_ACCESS_ID,
+} from '@/features/grants/capability-context';
 import { createDiagnosticsBundle } from '@/features/diagnostics/export';
 import { getRuntimeMetrics, recordServiceWorkerStart, resetRuntimeMetrics } from '@/features/diagnostics/metrics';
 import {
@@ -66,6 +69,16 @@ function originOf(url: string): string {
   const parsed = new URL(url);
   if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('只能授权 HTTP(S) 标签页');
   return parsed.origin;
+}
+
+async function syncManagedInstanceBadge(managedInstance?: { badge: string }): Promise<void> {
+  const badge = managedInstance?.badge || '';
+  await browser.action.setBadgeText({ text: badge });
+  if (badge) {
+    const color = badge === 'A' ? '#F26215' : badge === 'B' ? '#2563EB' : badge === 'C' ? '#16A34A' : '#7C3AED';
+    await browser.action.setBadgeBackgroundColor({ color });
+  }
+  await browser.action.setTitle({ title: badge ? `Yakit Browser Agent · 实例 ${badge}` : 'Yakit Browser Agent' });
 }
 
 async function createGrantTargets(inputs: Array<{ tabId: number; frameId: number }>): Promise<BridgeGrantTarget[]> {
@@ -105,6 +118,12 @@ const domainHandlers: readonly BackgroundRequestHandler[] = [
   handleRecordingRequest,
   handleTransformRequest,
 ];
+
+const stopPairedBrowserTasks = () => Promise.all([
+  stopNetworkCapturesForGrant(PAIRED_BROWSER_INSTANCE_ACCESS_ID),
+  stopBrowserRecordingsForGrant(PAIRED_BROWSER_INSTANCE_ACCESS_ID),
+  stopDeepCapturesForGrant(PAIRED_BROWSER_INSTANCE_ACCESS_ID),
+]);
 
 async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.MessageSender): Promise<ExtensionResponse> {
   const domainResponse = await dispatchBackgroundHandlers(request, sender, domainHandlers);
@@ -290,7 +309,10 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
         };
       });
       const handoff = state.handoff!;
-      await setAgentRuntimeState(input.outcome === 'completed' ? 'running' : 'paused', state.activeGrant);
+      await setAgentRuntimeState(
+        input.outcome === 'completed' ? 'running' : 'paused',
+        await browserInstanceAccess('browser.tabs.read'),
+      );
       await browser.action.setBadgeText({ text: '', tabId: handoff.target.tabId });
       engineBridge.emitEvent('browser.handoff.changed', handoff);
       void appendAuditEvent({
@@ -388,14 +410,15 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     }
     case 'agent.runtime.get': return ok(await getAgentRuntime());
     case 'agent.pause': {
-      const grant = await requireActiveGrant();
+      const grant = await browserInstanceAccess('browser.tabs.read');
       engineBridge.cancelActiveRequests();
+      await stopPairedBrowserTasks();
       const runtime = await setAgentRuntimeState('paused', grant);
       void appendAuditEvent({ category: 'grant', action: 'agent.pause', outcome: 'success', taskId: grant.taskId });
       return ok(runtime);
     }
     case 'agent.resume': {
-      const grant = await requireActiveGrant();
+      const grant = await browserInstanceAccess('browser.tabs.read');
       const runtime = await setAgentRuntimeState('running', grant);
       void appendAuditEvent({ category: 'grant', action: 'agent.resume', outcome: 'success', taskId: grant.taskId });
       return ok(runtime);
@@ -408,9 +431,28 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     case 'bridge.config.save': {
       const config = applyPolicyToBridge(request.payload, (await getEnterprisePolicy()).policy);
       const state = await updateState((current) => ({ ...current, bridge: config }));
+      await syncManagedInstanceBadge(state.bridge.managedInstance);
       if (config.autoConnect && config.pairedEngine) await engineBridge.connect(config);
       else engineBridge.disconnect();
       return ok(state);
+    }
+    case 'bridge.managed-instance.bind': {
+      const senderURL = sender.url ? new URL(sender.url) : undefined;
+      const bootstrapURL = new URL(browser.runtime.getURL('/ytray-bootstrap.html'));
+      if (senderURL?.origin !== bootstrapURL.origin || senderURL.pathname !== bootstrapURL.pathname) {
+        throw new ExtensionError('forbidden', '浏览器实例身份只能由受管启动页设置');
+      }
+      const state = await updateState((current) => ({
+        ...current,
+        bridge: { ...current.bridge, managedInstance: request.payload },
+      }));
+      await syncManagedInstanceBadge(state.bridge.managedInstance);
+      if (state.bridge.autoConnect && state.bridge.pairedEngine) {
+        engineBridge.disconnect();
+        await stopPairedBrowserTasks();
+        await engineBridge.connect(state.bridge);
+      }
+      return ok(engineBridge.getStatus());
     }
     case 'bridge.pair': {
       const status = await engineBridge.startPairing();
@@ -421,6 +463,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     case 'bridge.pair.status': return ok(engineBridge.getPairingStatus());
     case 'bridge.unpair': {
       await engineBridge.unpair();
+      await stopPairedBrowserTasks();
       void appendAuditEvent({ category: 'bridge', action: 'bridge.unpair', outcome: 'success' });
       return ok(await getState());
     }
@@ -431,6 +474,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     }
     case 'bridge.disconnect': {
       engineBridge.disconnect();
+      await stopPairedBrowserTasks();
       void appendAuditEvent({ category: 'bridge', action: 'bridge.disconnect', outcome: 'success' });
       return ok(engineBridge.getStatus());
     }
@@ -443,10 +487,11 @@ let backgroundStarted = false;
 
 async function restoreBackgroundState(): Promise<void> {
   const storedState = await restoreGrantLifecycle();
-  const state = applyPolicyToState(storedState, (await getEnterprisePolicy()).policy);
+  const policy = (await getEnterprisePolicy()).policy;
+  const state = applyPolicyToState(storedState, policy);
   if (JSON.stringify(state.bridge) !== JSON.stringify(storedState.bridge)
     || JSON.stringify(state.floatingPanel) !== JSON.stringify(storedState.floatingPanel)) {
-    await updateState(() => state);
+    await updateState((current) => applyPolicyToState(current, policy));
   }
   try {
     await reconcileUserAgentRuntime();
@@ -460,8 +505,10 @@ async function restoreBackgroundState(): Promise<void> {
       summary: (error instanceof Error ? error.message : String(error)).slice(0, 512),
     });
   }
-  if (state.bridge.autoConnect && state.bridge.pairedEngine) {
-    await engineBridge.connect(state.bridge).catch(console.error);
+  const currentState = await getState();
+  await syncManagedInstanceBadge(currentState.bridge.managedInstance);
+  if (currentState.bridge.autoConnect && currentState.bridge.pairedEngine) {
+    await engineBridge.connect(currentState.bridge).catch(console.error);
   }
 }
 
@@ -470,7 +517,6 @@ export function runBackground(): void {
   backgroundStarted = true;
 
   configureGrantLifecycleHooks({
-    cancelActiveRequests: () => engineBridge.cancelActiveRequests(),
     emitHandoffChanged: (handoff) => engineBridge.emitEvent('browser.handoff.changed', handoff),
   });
   registerGrantLifecycleListeners();

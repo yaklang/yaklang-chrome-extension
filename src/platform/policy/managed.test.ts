@@ -3,7 +3,7 @@ import { vi, describe, expect, it } from 'vitest';
 vi.mock('wxt/browser', () => ({ browser: { storage: {} } }));
 
 import type { BridgeConfig } from '@/types/models';
-import { applyPolicyToBridge, assertGrantPolicy } from './managed';
+import { applyPolicyToBridge, assertBrowserAccessPolicy, assertGrantPolicy } from './managed';
 
 const bridge: BridgeConfig = {
   transport: 'websocket', endpoint: 'ws://127.0.0.1:64333/extension', nativeHost: 'default.host',
@@ -20,5 +20,16 @@ describe('managed policy enforcement', () => {
     expect(assertGrantPolicy({ maxGrantMinutes: 30 }, { durationMinutes: 120, origins: ['https://a.test'], programEval: false })).toBe(30);
     expect(() => assertGrantPolicy({ allowProgramEval: false }, { durationMinutes: 5, origins: [], programEval: true })).toThrow('禁止');
     expect(() => assertGrantPolicy({ grantAllowedOrigins: ['https://a.test'] }, { durationMinutes: 5, origins: ['https://b.test'], programEval: false })).toThrow('不允许');
+  });
+
+  it('keeps enterprise restrictions on paired instance access', () => {
+    expect(() => assertBrowserAccessPolicy(
+      { grantAllowedOrigins: ['https://a.test'] },
+      { origin: 'https://a.test' },
+    )).not.toThrow();
+    expect(() => assertBrowserAccessPolicy(
+      { grantAllowedOrigins: ['https://a.test'] },
+      { origin: 'https://b.test' },
+    )).toThrow('不允许');
   });
 });

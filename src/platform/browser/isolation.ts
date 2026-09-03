@@ -14,6 +14,7 @@ export interface IsolationCookieStore {
 export interface IsolationTabDescriptor {
   id: number;
   windowId: number;
+  active?: boolean;
   title: string;
   url: string;
   incognito: boolean;
@@ -173,6 +174,7 @@ export function activeTabInfo(
   return {
     id: tab.id,
     windowId: tab.windowId,
+    active: Boolean(tab.active),
     title: tab.title || '未命名页面',
     url: tab.url,
     incognito: tab.incognito,
@@ -189,6 +191,7 @@ export function browserTabDescriptor(tab: Browser.tabs.Tab): IsolationTabDescrip
   return {
     id: tab.id,
     windowId: tab.windowId,
+    active: tab.active,
     title: tab.title || '未命名页面',
     url: tab.url,
     incognito: tab.incognito,

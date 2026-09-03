@@ -57,6 +57,12 @@ describe('Bridge v3 protocol', () => {
     expect(() => parseBridgeEnvelope('x'.repeat(BRIDGE_MAX_MESSAGE_BYTES + 1))).toThrow('16 MiB');
   });
 
+  it('opens only HTTP(S) pages in the attached browser instance', () => {
+    expect(parseCapabilityParams('browser.tab.open', { url: 'https://www.baidu.com/' }))
+      .toEqual({ url: 'https://www.baidu.com/' });
+    expect(() => parseCapabilityParams('browser.tab.open', { url: 'chrome://settings' })).toThrow('HTTP(S)');
+  });
+
   it('accepts exact Worker boundary handles for remote deep capture', () => {
     expect(parseCapabilityParams('browser.deep_capture.start', {
       matcher: {

@@ -243,6 +243,10 @@ export interface ExtensionRequestMap {
   'metrics.get': { input: undefined; output: RuntimeMetrics };
   'metrics.reset': { input: undefined; output: RuntimeMetrics };
   'bridge.config.save': { input: BridgeConfig; output: ExtensionState };
+  'bridge.managed-instance.bind': {
+    input: NonNullable<BridgeConfig['managedInstance']>;
+    output: BridgeStatus;
+  };
   'bridge.pair': { input: undefined; output: BridgePairingStatus };
   'bridge.pair.cancel': { input: undefined; output: BridgePairingStatus };
   'bridge.pair.status': { input: undefined; output: BridgePairingStatus };
@@ -333,6 +337,7 @@ export interface BridgeEnvelope {
   taskId?: string;
   grantId?: string;
   installationId?: string;
+  managedInstance?: BridgeConfig['managedInstance'];
   engineInstanceId?: string;
   engineIdentityId?: string;
   challenge?: string;

@@ -67,6 +67,24 @@ describe('split state storage', () => {
     expect(state.floatingPanel.side).toBe('left');
   });
 
+  it('keeps only validated manager-owned browser instance identity', async () => {
+    await setState({
+      ...structuredClone(DEFAULT_STATE),
+      bridge: {
+        ...structuredClone(DEFAULT_STATE.bridge),
+        managedInstance: { manager: 'ytray', instanceId: 'instance-1', badge: 'C' },
+      },
+    });
+    expect((await getState()).bridge.managedInstance).toEqual({
+      manager: 'ytray', instanceId: 'instance-1', badge: 'C',
+    });
+
+    stores.local[BRIDGE_SETTINGS_STORAGE_KEY] = {
+      bridge: { ...structuredClone(DEFAULT_STATE.bridge), managedInstance: { manager: 'web', instanceId: '../bad', badge: '3' } },
+    };
+    expect((await getState()).bridge.managedInstance).toBeUndefined();
+  });
+
   it('drops a session grant that is not bound to an isolation context', async () => {
     const now = Date.now();
     stores.session[ACTIVE_SESSION_STORAGE_KEY] = {

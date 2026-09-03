@@ -1,4 +1,5 @@
 import { access, readFile, stat } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
@@ -11,6 +12,7 @@ const TOTAL_PACKAGE_BUDGET = Math.floor(1.25 * MIB);
 const BRIDGE_BACKGROUND_BUDGET = 204 * 1024;
 const BRIDGE_BACKGROUND_GZIP_BUDGET = 60 * 1024;
 const ENTERPRISE_BACKGROUND_GZIP_BUDGET = 61 * 1024;
+const CHROMIUM_EXTENSION_ID = 'mcnaombmlombekhbonfndagbcfhmoail';
 // Recorder, callable registry and Pipeline runtime are installed only for an
 // explicitly selected document. Keep their budget separate from the always-on
 // Service Worker so moving work out of startup code remains measurable.
@@ -102,6 +104,12 @@ for (const target of targets) {
   const directEvalExists = await exists(join(output, 'page-main-world.js'));
   const resources = (manifest.web_accessible_resources || []).flatMap((entry) => typeof entry === 'string' ? [entry] : entry.resources || []);
   const dynamicResourceGroup = (manifest.web_accessible_resources || []).find((entry) => typeof entry !== 'string' && entry.resources?.includes('floating.html'));
+
+  if (!isFirefox) {
+    assert(typeof manifest.key === 'string', `${target.name} 缺少固定扩展公钥`);
+    const extensionId = createHash('sha256').update(Buffer.from(manifest.key, 'base64')).digest('hex').slice(0, 32).replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + Number.parseInt(digit, 16)));
+    assert(extensionId === CHROMIUM_EXTENSION_ID, `${target.name} 扩展 ID 漂移：${extensionId}`);
+  }
 
   if (contentBytes > target.contentBudget) sizeAdvisories.push(`content script ${contentBytes}B > ${target.contentBudget}B reference`);
   if (backgroundBytes > target.backgroundBudget) sizeAdvisories.push(`background ${backgroundBytes}B > ${target.backgroundBudget}B reference`);

@@ -11,8 +11,6 @@ const fixture = vi.hoisted(() => ({
   stopNetwork: vi.fn(async (_grantId: string) => undefined),
   stopRecording: vi.fn(async (_grantId: string) => undefined),
   stopDeepCapture: vi.fn(async (_grantId: string) => undefined),
-  startRuntime: vi.fn(async (_grant: BridgeGrant) => ({ state: 'running' })),
-  endRuntime: vi.fn(async (_state: 'revoked' | 'expired', _grant: BridgeGrant) => ({ state: 'revoked' })),
   appendAudit: vi.fn(async () => undefined),
   clearBadge: vi.fn(async () => undefined),
 }));
@@ -49,10 +47,6 @@ vi.mock('@/features/browser-recording/service', () => ({
 }));
 vi.mock('@/features/deep-capture/service', () => ({
   stopDeepCapturesForGrant: fixture.stopDeepCapture,
-}));
-vi.mock('@/features/agent-runtime/service', () => ({
-  startAgentRuntime: fixture.startRuntime,
-  endAgentRuntimeForGrant: fixture.endRuntime,
 }));
 vi.mock('@/features/diagnostics/audit', () => ({
   appendAuditEvent: fixture.appendAudit,
@@ -124,19 +118,15 @@ describe('grant lifecycle manager', () => {
 
   it('consumes an expired stored grant and releases all grant-owned resources', async () => {
     const expired = grant('expired-restore', NOW - 1);
-    const cancelActiveRequests = vi.fn();
     await setState({ ...structuredClone(DEFAULT_STATE), activeGrant: expired });
-    configureGrantLifecycleHooks({ cancelActiveRequests });
 
     const state = await restoreGrantLifecycle();
 
     expect(state.activeGrant).toBeUndefined();
     expect((await getState()).activeGrant).toBeUndefined();
-    expect(cancelActiveRequests).toHaveBeenCalledOnce();
     expect(fixture.stopNetwork).toHaveBeenCalledWith(expired.id);
     expect(fixture.stopRecording).toHaveBeenCalledWith(expired.id);
     expect(fixture.stopDeepCapture).toHaveBeenCalledWith(expired.id);
-    expect(fixture.endRuntime).toHaveBeenCalledWith('expired', expired);
     expect(fixture.alarms.has(ACTIVE_GRANT_EXPIRY_ALARM)).toBe(false);
   });
 
@@ -152,7 +142,6 @@ describe('grant lifecycle manager', () => {
     expect(fixture.stopNetwork.mock.calls.map(([id]) => id)).toEqual([old.id, first.id]);
     expect(fixture.stopRecording.mock.calls.map(([id]) => id)).toEqual([old.id, first.id]);
     expect(fixture.stopDeepCapture.mock.calls.map(([id]) => id)).toEqual([old.id, first.id]);
-    expect(fixture.startRuntime.mock.calls.map(([item]) => item.id)).toEqual([first.id, second.id]);
     expect(fixture.alarms.get(ACTIVE_GRANT_EXPIRY_ALARM)).toEqual({ when: second.expiresAt });
   });
 
@@ -168,15 +157,16 @@ describe('grant lifecycle manager', () => {
     expect(fixture.stopNetwork).toHaveBeenCalledTimes(1);
     expect(fixture.stopRecording).toHaveBeenCalledTimes(1);
     expect(fixture.stopDeepCapture).toHaveBeenCalledTimes(1);
-    expect(fixture.endRuntime).toHaveBeenCalledTimes(1);
   });
 
   it('cancels a waiting handoff and publishes the resolved state on replacement', async () => {
     const waiting = handoff('handoff-waiting');
+    const previous = grant('handoff-old');
+    previous.taskId = waiting.taskId;
     const emitHandoffChanged = vi.fn();
     await setState({
       ...structuredClone(DEFAULT_STATE),
-      activeGrant: grant('handoff-old'),
+      activeGrant: previous,
       handoff: waiting,
     });
     configureGrantLifecycleHooks({ emitHandoffChanged });
@@ -186,6 +176,21 @@ describe('grant lifecycle manager', () => {
     expect(state.handoff).toMatchObject({ id: waiting.id, state: 'cancelled', resolvedAt: NOW });
     expect(fixture.clearBadge).toHaveBeenCalledWith({ text: '', tabId: waiting.target.tabId });
     expect(emitHandoffChanged).toHaveBeenCalledWith(state.handoff);
+  });
+
+  it('does not cancel a paired-instance handoff when an authorization-test grant ends', async () => {
+    const waiting = handoff('paired-handoff');
+    waiting.taskId = 'paired-browser-instance';
+    await setState({
+      ...structuredClone(DEFAULT_STATE),
+      activeGrant: grant('authorization-test'),
+      handoff: waiting,
+    });
+
+    const { state } = await revokeActiveGrant();
+
+    expect(state.handoff).toEqual(waiting);
+    expect(fixture.clearBadge).not.toHaveBeenCalled();
   });
 
   it('rejects an update that reaches the queue after expiry and performs cleanup first', async () => {
@@ -218,7 +223,6 @@ describe('grant lifecycle manager', () => {
 
     expect((await getState()).activeGrant).toBeUndefined();
     expect(fixture.stopNetwork).toHaveBeenCalledWith(active.id);
-    expect(fixture.endRuntime).toHaveBeenCalledWith('expired', active);
   });
 
   it('reschedules an early alarm without revoking a still-live grant', async () => {
@@ -247,20 +251,14 @@ describe('grant lifecycle manager', () => {
     expect((await getState()).activeGrant?.id).toBe(old.id);
     expect(fixture.alarms.get(ACTIVE_GRANT_EXPIRY_ALARM)).toEqual({ when: old.expiresAt });
     expect(fixture.stopNetwork).not.toHaveBeenCalled();
-    expect(fixture.startRuntime).not.toHaveBeenCalled();
   });
 
-  it('fails closed when Agent Runtime activation fails after the grant commit', async () => {
-    const active = grant('runtime-failure');
-    fixture.startRuntime.mockRejectedValueOnce(new Error('session storage unavailable'));
+  it('does not couple an authorization-test grant to Agent runtime state', async () => {
+    const active = grant('authorization-only');
 
-    await expect(replaceActiveGrant(active)).rejects.toMatchObject({ code: 'grant_activation_failed' });
-
-    expect((await getState()).activeGrant).toBeUndefined();
-    expect(fixture.stopNetwork).toHaveBeenCalledWith(active.id);
-    expect(fixture.stopRecording).toHaveBeenCalledWith(active.id);
-    expect(fixture.stopDeepCapture).toHaveBeenCalledWith(active.id);
-    expect(fixture.alarms.has(ACTIVE_GRANT_EXPIRY_ALARM)).toBe(false);
+    await expect(replaceActiveGrant(active)).resolves.toMatchObject({
+      state: { activeGrant: { id: active.id } },
+    });
   });
 
   it('clears authorization state even when one resource cleanup reports a failure', async () => {

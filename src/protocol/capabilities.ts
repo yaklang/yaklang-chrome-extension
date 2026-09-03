@@ -33,11 +33,19 @@ const CAPABILITY_METADATA = {
     scopes: [], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.tabs': {
-    domain: 'page', access: 'read', summary: '列出当前 grant 明确共享的标签页',
+    domain: 'page', access: 'read', summary: '列出当前浏览器实例中的全部 HTTP(S) 标签页；配对实例无需逐页授权',
     scopes: ['browser.tabs.read'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
+  'browser.tab.open': {
+    domain: 'page', access: 'write', summary: '在当前浏览器实例中新建并前台打开 HTTP(S) 页面',
+    scopes: ['browser.tabs.write'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
+  },
+  'browser.thumbnail': {
+    domain: 'page', access: 'read', summary: '读取当前可见标签页的低清预览图，供 Yakit 实例列表展示',
+    scopes: ['browser.tabs.read'], targetMode: 'tab', defaultTimeoutMs: READ_TIMEOUT_MS,
+  },
   'browser.isolation.inspect': {
-    domain: 'isolation', access: 'read', summary: '读取共享标签页的 Cookie Store 与身份隔离上下文',
+    domain: 'isolation', access: 'read', summary: '读取浏览器实例内标签页的 Cookie Store 与身份隔离上下文',
     scopes: ['browser.isolation.read'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.isolation.proof': {
@@ -67,7 +75,7 @@ const CAPABILITY_METADATA = {
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.authorization.context.get': {
-    domain: 'authorization', access: 'sensitive-read', summary: '实时复核并读取当前共享会话中的短时认证上下文句柄',
+    domain: 'authorization', access: 'sensitive-read', summary: '实时复核并读取当前浏览器实例中的短时认证上下文句柄',
     scopes: ['browser.isolation.read', 'browser.cookies.read', 'browser.storage.read'],
     targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
@@ -127,7 +135,7 @@ const CAPABILITY_METADATA = {
     targetMode: 'none', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.frames': {
-    domain: 'page', access: 'read', summary: '列出共享标签页中的 Frame',
+    domain: 'page', access: 'read', summary: '列出浏览器实例指定标签页中的 Frame',
     scopes: ['browser.tabs.read'], targetMode: 'tab', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.context': {
@@ -155,6 +163,10 @@ const CAPABILITY_METADATA = {
     domain: 'page', access: 'write', summary: '将目标标签页切换到前台',
     scopes: ['browser.tab.activate'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
+  'browser.instance.close': {
+    domain: 'page', access: 'dangerous', summary: '关闭当前浏览器实例的全部窗口',
+    scopes: ['browser.instance.close'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
+  },
   'browser.handoff.request': {
     domain: 'handoff', access: 'write', summary: '请求用户完成扫码、MFA、验证码或设备确认',
     scopes: ['browser.human.takeover'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -174,7 +186,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.network.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.network.list': {
-    domain: 'network', access: 'read', summary: '列出已捕获请求，敏感字段继续受 grant 约束',
+    domain: 'network', access: 'read', summary: '列出已捕获请求，敏感字段仍由 Agent 操作审核策略保护',
     scopes: ['browser.network.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.network.clear': {
@@ -385,9 +397,11 @@ export const READ_CAPABILITY_SCOPES: CapabilityScope[] = [
 
 export const CONTROL_CAPABILITY_SCOPES: CapabilityScope[] = [
   ...READ_CAPABILITY_SCOPES,
+  'browser.tabs.write',
   'browser.dom.write',
   'browser.isolation.manage',
   'browser.tab.activate',
+  'browser.instance.close',
   ...(!(import.meta.env.FIREFOX && import.meta.env.MODE === 'store')
     ? ['browser.page.invoke' as const, 'browser.page.eval.expression' as const]
     : []),
@@ -410,6 +424,7 @@ export const CONTROL_CAPABILITY_SCOPES: CapabilityScope[] = [
 
 export const CAPABILITY_LABELS: Record<CapabilityScope, string> = {
   'browser.tabs.read': '标签页列表',
+  'browser.tabs.write': '打开网页',
   'browser.isolation.read': '读取身份隔离状态',
   'browser.isolation.manage': '创建隔离身份页面',
   'browser.dom.read': '页面 DOM',
@@ -417,6 +432,7 @@ export const CAPABILITY_LABELS: Record<CapabilityScope, string> = {
   'browser.storage.read': '页面 Storage',
   'browser.cookies.read': 'Cookie',
   'browser.tab.activate': '切到前台',
+  'browser.instance.close': '关闭浏览器实例',
   'browser.page.invoke': '调用页面函数',
   'browser.page.eval.expression': '执行页面表达式',
   'browser.page.eval.program': '执行页面程序',

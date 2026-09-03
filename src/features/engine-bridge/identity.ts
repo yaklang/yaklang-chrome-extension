@@ -134,7 +134,7 @@ export function clientAuthPayload(input: {
   challenge: string;
   envelope: BridgeEnvelope;
 }): string {
-  return [
+  const fields = [
     'yak-browser-bridge-v3', 'client-auth', input.origin, input.engineIdentityId, input.engineInstanceId,
     input.challenge, input.envelope.installationId || '', input.envelope.client || '', input.envelope.version || '',
     [...(input.envelope.capabilities || [])].sort().join(','),
@@ -142,7 +142,15 @@ export function clientAuthPayload(input: {
     input.envelope.capabilityCatalog?.hash || '',
     input.envelope.taskId || '', input.envelope.grantId || '',
     input.envelope.resumeSessionId || '',
-  ].join('\n');
+  ];
+  if (input.envelope.managedInstance) {
+    fields.push(
+      input.envelope.managedInstance.manager,
+      input.envelope.managedInstance.instanceId,
+      input.envelope.managedInstance.badge,
+    );
+  }
+  return fields.join('\n');
 }
 
 export async function pairingVerificationCode(input: {
@@ -153,11 +161,16 @@ export async function pairingVerificationCode(input: {
   clientNonce: string;
   serverNonce: string;
   publicKey: BridgePublicKey;
+  managedInstance?: BridgeEnvelope['managedInstance'];
 }): Promise<string> {
-  const payload = [
+  const fields = [
     'yak-browser-pairing-v1', input.engineIdentityId, input.requestId, input.origin, input.installationId,
     input.clientNonce, input.serverNonce, input.publicKey.kty, input.publicKey.crv, input.publicKey.x, input.publicKey.y,
-  ].join('\n');
+  ];
+  if (input.managedInstance) {
+    fields.push(input.managedInstance.manager, input.managedInstance.instanceId, input.managedInstance.badge);
+  }
+  const payload = fields.join('\n');
   const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(payload)));
   let value = 0n;
   for (const byte of hash.subarray(0, 8)) value = (value << 8n) | BigInt(byte);

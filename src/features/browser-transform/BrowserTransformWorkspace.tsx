@@ -45,8 +45,6 @@ interface BrowserTransformWorkspaceProps {
   busy: boolean;
   run: RunTask;
   gatewayShared: boolean;
-  gatewayShareExpiresAt?: number;
-  gatewayBridgeConnected: boolean;
   onShareGateway: () => Promise<void>;
   onOpenCapture: () => void;
   onOpenRecovery: (profileId: string) => void;
@@ -247,8 +245,6 @@ export function BrowserTransformWorkspace({
   busy,
   run,
   gatewayShared,
-  gatewayShareExpiresAt,
-  gatewayBridgeConnected,
   onShareGateway,
   onOpenCapture,
   onOpenRecovery,
@@ -926,11 +922,9 @@ export function BrowserTransformWorkspace({
       replayPersistenceLabel={replayPersistenceLabel(replayPersistence)}
       replayPersistenceTitle={replayPersistenceTitle}
       gatewayShared={gatewayShared}
-      gatewayShareExpiresAt={gatewayShareExpiresAt}
-      gatewayBridgeConnected={gatewayBridgeConnected}
       onShareGateway={() => run(
         onShareGateway,
-        gatewayShared ? '共享会话已刷新' : '当前页面已共享给 Yakit',
+        gatewayShared ? '浏览器实例已连接' : '正在连接 Yakit',
       )}
       onClear={clearReplay}
       canExecute={Boolean(draft?.id && !dirty && !busy && !replayLoading && bindingReady)}

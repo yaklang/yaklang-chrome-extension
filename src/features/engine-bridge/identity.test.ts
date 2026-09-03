@@ -34,6 +34,29 @@ describe('Bridge v3 identity transcript', () => {
     })).resolves.toBe('113961');
   });
 
+  it('binds a managed browser identity into the signed transcript', () => {
+    const envelope: BridgeEnvelope = {
+      type: 'auth', installationId: 'install-1', client: 'client-1', version: '1.0.0',
+      capabilities: [],
+      managedInstance: { manager: 'ytray', instanceId: 'instance-1', badge: 'B' },
+    };
+    expect(clientAuthPayload({
+      origin: 'chrome-extension://abc', engineIdentityId: 'identity-1', engineInstanceId: 'engine-1',
+      challenge: 'nonce-1', envelope,
+    })).toMatch(/\nytray\ninstance-1\nB$/);
+  });
+
+  it('binds a managed browser identity into the pairing code', async () => {
+    const input = {
+      engineIdentityId: 'engine-id', requestId: 'request-1', origin: 'chrome-extension://abc', installationId: 'install-1',
+      clientNonce: 'client-nonce-value', serverNonce: 'server-nonce-value',
+      publicKey: { kty: 'EC' as const, crv: 'P-256' as const, x: 'x-coordinate', y: 'y-coordinate' },
+    };
+    await expect(pairingVerificationCode({
+      ...input, managedInstance: { manager: 'ytray', instanceId: 'instance-1', badge: 'B' },
+    })).resolves.toBe('005427');
+  });
+
   it('signs and verifies ECDSA P-256 payloads', async () => {
     const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
     const publicJWK = await crypto.subtle.exportKey('jwk', pair.publicKey);

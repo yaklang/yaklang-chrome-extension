@@ -48,12 +48,7 @@ export const pageCapabilityHandler: CapabilityDomainHandler = {
         tabId: target.tabId,
         frameId: target.frameId,
       });
-      const grantTarget = grant.targets.find((item) => (
-        item.tabId === target.tabId && item.frameId === target.frameId
-      ));
-      const url = frame?.url && /^https?:/i.test(frame.url)
-        ? frame.url
-        : `${grantTarget?.origin || ''}/`;
+      const url = frame?.url || '';
       if (!/^https?:/i.test(url)) {
         throw new ExtensionError(
           'target_unavailable',

@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, FlaskConical, Play, Share2, ShieldCheck, Trash2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FlaskConical, Play, ShieldCheck, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import type {
   ActiveTabInfo,
@@ -28,8 +28,6 @@ export function TransformReplayPanel({
   replayPersistenceLabel,
   replayPersistenceTitle,
   gatewayShared,
-  gatewayShareExpiresAt,
-  gatewayBridgeConnected,
   onShareGateway,
   onClear,
   canExecute,
@@ -56,8 +54,6 @@ export function TransformReplayPanel({
   replayPersistenceLabel: string;
   replayPersistenceTitle: string;
   gatewayShared: boolean;
-  gatewayShareExpiresAt?: number;
-  gatewayBridgeConnected: boolean;
   onShareGateway: () => Promise<void>;
   onClear: () => Promise<void>;
   canExecute: boolean;
@@ -87,21 +83,19 @@ export function TransformReplayPanel({
       </div>
     </header>
     {draft?.id && <section className={`transform-gateway-share ${gatewayShared ? 'is-active' : ''}`}>
-      <span className="transform-gateway-share__mark">{gatewayShared ? <ShieldCheck size={15} /> : <Share2 size={15} />}</span>
+      <span className="transform-gateway-share__mark"><ShieldCheck size={15} /></span>
       <div>
-        <strong>{gatewayShared ? '当前页面已共享给 Yakit' : '在 Yakit 中使用这个网关'}</strong>
-        <small>{gatewayShared && gatewayShareExpiresAt
-          ? `控制会话 · ${new Date(gatewayShareExpiresAt).toLocaleTimeString()} 到期`
-          : gatewayBridgeConnected
-            ? '创建 30 分钟控制会话，并保留已共享页面'
-            : '可先创建会话；引擎重连后即可使用'}</small>
+        <strong>{gatewayShared ? '当前浏览器实例已接入 Yakit' : '连接 Yakit 后使用这个网关'}</strong>
+        <small>{gatewayShared
+          ? '页面刷新、跳转后仍可使用，无需续接授权'
+          : '连接后由 Agent 操作审核策略统一控制'}</small>
       </div>
-      <Button
+      {!gatewayShared && <Button
         size="sm"
-        variant={gatewayShared ? 'ghost' : 'primary'}
+        variant="primary"
         disabled={busy || !tab}
         onClick={() => void onShareGateway()}
-      >{gatewayShared ? '刷新' : '一键共享'}</Button>
+      >连接</Button>}
     </section>}
     <label><span>请求</span><div><input disabled={replayLoading} aria-label="回放 HTTP 方法" value={method} onChange={(event) => onMethodChange(event.target.value)} /><input disabled={replayLoading} aria-label="回放请求 URL" value={url} onChange={(event) => onUrlChange(event.target.value)} placeholder="https://example.test/api" /></div></label>
     <label><span>Headers · JSON</span><textarea disabled={replayLoading} rows={4} value={headers} onChange={(event) => onHeadersChange(event.target.value)} /></label>

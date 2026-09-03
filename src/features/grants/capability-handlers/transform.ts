@@ -3,6 +3,7 @@ import type {
   BrowserTransformPacket,
   BrowserTransformProfileInput,
 } from '@/types/models';
+import { browser } from 'wxt/browser';
 import type { CapabilityDomainHandler } from '../capability-context';
 import { allowedTarget, requireScope } from '../capability-context';
 import {
@@ -124,11 +125,9 @@ export const transformCapabilityHandler: CapabilityDomainHandler = {
     if (method === 'browser.transform.profile.save') {
       const profileInput = input as unknown as BrowserTransformProfileInput;
       const target = await allowedTarget(grant, profileInput.target);
-      const grantedTarget = grant.targets.find((item) => (
-        item.tabId === target.tabId && item.frameId === target.frameId
-      ));
-      if (!grantedTarget || profileInput.origin !== grantedTarget.origin) {
-        throw new ExtensionError('target_denied', '转换配置来源不在本次共享会话中');
+      const frame = await browser.webNavigation.getFrame(target);
+      if (!frame?.url || profileInput.origin !== new URL(frame.url).origin) {
+        throw new ExtensionError('target_denied', '转换配置来源与当前页面不一致');
       }
       return saveBrowserTransformProfile({ ...profileInput, target });
     }

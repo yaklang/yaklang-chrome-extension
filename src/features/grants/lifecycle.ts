@@ -2,9 +2,6 @@ import { browser } from 'wxt/browser';
 import { stopNetworkCapturesForGrant } from '@/features/network-capture/service';
 import { stopBrowserRecordingsForGrant } from '@/features/browser-recording/service';
 import { stopDeepCapturesForGrant } from '@/features/deep-capture/service';
-import {
-  endAgentRuntimeForGrant, startAgentRuntime,
-} from '@/features/agent-runtime/service';
 import { appendAuditEvent } from '@/features/diagnostics/audit';
 import { getState, updateState } from '@/platform/storage/state';
 import type {
@@ -14,10 +11,9 @@ import { ExtensionError } from '@/shared/errors';
 
 export const ACTIVE_GRANT_EXPIRY_ALARM = 'yakit.active-grant.expiry';
 
-type GrantEndReason = 'revoked' | 'expired' | 'replaced' | 'scheduler_failure' | 'activation_failure';
+type GrantEndReason = 'revoked' | 'expired' | 'replaced' | 'scheduler_failure';
 
 interface GrantLifecycleHooks {
-  cancelActiveRequests?: () => void;
   emitHandoffChanged?: (handoff: HumanHandoff) => void;
 }
 
@@ -80,23 +76,6 @@ function cancelledHandoff(current: HumanHandoff | undefined, now: number): Human
     : current;
 }
 
-function cancelActiveRequestsBestEffort(grant: BridgeGrant): void {
-  try {
-    hooks.cancelActiveRequests?.();
-  } catch (error) {
-    console.error('Grant request cancellation failed', error);
-    void appendAuditEvent({
-      category: 'grant',
-      action: 'grant.requests.cancel',
-      outcome: 'error',
-      taskId: grant.taskId,
-      targetTabId: grant.targets[0]?.tabId,
-      errorCode: 'grant_request_cancel_failed',
-      summary: (error instanceof Error ? error.message : String(error)).slice(0, 512),
-    });
-  }
-}
-
 async function publishCancelledHandoff(
   previous: HumanHandoff | undefined,
   current: HumanHandoff | undefined,
@@ -124,12 +103,10 @@ async function publishCancelledHandoff(
 function cleanupGrantResources(grant: BridgeGrant, reason: GrantEndReason): Promise<void> {
   const existing = cleanupTasks.get(grant.id);
   if (existing) return existing;
-  const runtimeState = reason === 'expired' ? 'expired' as const : 'revoked' as const;
   const task = Promise.allSettled([
     stopNetworkCapturesForGrant(grant.id),
     stopBrowserRecordingsForGrant(grant.id),
     stopDeepCapturesForGrant(grant.id),
-    endAgentRuntimeForGrant(runtimeState, grant),
   ]).then((results) => {
     const failures = results.filter((result) => result.status === 'rejected');
     if (failures.length === 0) return;
@@ -159,11 +136,11 @@ async function endActiveGrantInQueue(
     if (!grant || (expectedGrantId && grant.id !== expectedGrantId)) return current;
     if (reason === 'expired' && grant.expiresAt > now) return current;
     previousGrant = grant;
-    previousHandoff = current.handoff;
+    previousHandoff = current.handoff?.taskId === grant.taskId ? current.handoff : undefined;
     return {
       ...current,
       activeGrant: undefined,
-      handoff: cancelledHandoff(current.handoff, now),
+      handoff: cancelledHandoff(previousHandoff, now) || current.handoff,
     };
   });
 
@@ -173,7 +150,6 @@ async function endActiveGrantInQueue(
     return { state };
   }
 
-  cancelActiveRequestsBestEffort(previousGrant);
   await clearExpiryAlarmBestEffort(previousGrant);
   await cleanupGrantResources(previousGrant, reason);
   await publishCancelledHandoff(previousHandoff, state.handoff, reason);
@@ -187,7 +163,7 @@ async function endActiveGrantInQueue(
       ? '已由新共享会话替换'
       : reason === 'scheduler_failure'
         ? '无法建立可靠的到期调度，已安全撤销'
-        : reason === 'activation_failure' ? 'Agent Runtime 初始化失败，已安全撤销' : undefined,
+        : undefined,
   });
   return { state, previousGrant, previousHandoff };
 }
@@ -258,11 +234,14 @@ export function replaceActiveGrant(grant: BridgeGrant): Promise<GrantTransition>
     try {
       state = await updateState((current) => {
         previousGrant = current.activeGrant;
-        previousHandoff = current.handoff;
+        previousHandoff = current.activeGrant
+          && current.handoff?.taskId === current.activeGrant.taskId
+          ? current.handoff
+          : undefined;
         return {
           ...current,
           activeGrant: grant,
-          handoff: cancelledHandoff(current.handoff, now),
+          handoff: cancelledHandoff(previousHandoff, now) || current.handoff,
         };
       });
     } catch (error) {
@@ -271,17 +250,7 @@ export function replaceActiveGrant(grant: BridgeGrant): Promise<GrantTransition>
     }
 
     if (previousGrant && previousGrant.id !== grant.id) {
-      cancelActiveRequestsBestEffort(previousGrant);
       await cleanupGrantResources(previousGrant, 'replaced');
-    }
-    try {
-      await startAgentRuntime(grant);
-    } catch (error) {
-      await endActiveGrantInQueue('activation_failure', grant.id);
-      throw new ExtensionError(
-        'grant_activation_failed',
-        `无法初始化浏览器共享会话: ${error instanceof Error ? error.message : String(error)}`,
-      );
     }
     await publishCancelledHandoff(previousHandoff, state.handoff, 'replaced');
     return { state, previousGrant, previousHandoff };

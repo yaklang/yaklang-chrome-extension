@@ -5,10 +5,8 @@ import {
 } from 'lucide-react';
 import { browser } from 'wxt/browser';
 import { Button } from '@/components/ui/button';
-import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { HANDOFF_REASON_LABELS, waitingHandoff } from '@/features/handoff/presentation';
-import { READ_CAPABILITY_SCOPES, isControlScopeSet } from '@/protocol/capabilities';
 import { AGENT_RUNTIME_STORAGE_KEY, isStateStorageChange } from '@/protocol/storage';
 import type { ActiveTabInfo, AgentRuntime, BridgeStatus, ExtensionState, PageContext } from '@/types/models';
 import { errorMessage, request } from '@/platform/messaging/runtime';
@@ -31,9 +29,6 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, hostCha
   const [runtime, setRuntime] = useState<AgentRuntime>({ state: 'idle', updatedAt: Date.now(), actions: [] });
   const bodyRef = useRef<HTMLDivElement>(null);
 
-  const grantActive = Boolean(
-    state.activeGrant && state.activeGrant.expiresAt > Date.now() && tab && state.activeGrant.targets.some((target) => target.tabId === tab.id),
-  );
   const pendingHandoff = waitingHandoff(state.handoff);
   const handoff = pendingHandoff?.target.tabId === tab?.id ? pendingHandoff : undefined;
 
@@ -177,9 +172,9 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, hostCha
                   <Button variant="ghost" disabled={busy} onClick={() => void run(async () => setState(await request('handoff.resolve', { id: handoff.id, outcome: 'cancelled' })))}><X size={14} />取消</Button>
                 </div>
               </div> : <>
-                {grantActive && <div className={`floating-agent-task ${runtime.state}`}><span><strong>{runtime.state === 'paused' ? 'Agent 已暂停' : runtime.state === 'running' ? 'Agent 正在操作' : '共享会话活动'}</strong><small title={state.activeGrant?.taskId}>{state.activeGrant?.taskId} · {state.activeGrant && isControlScopeSet(state.activeGrant.scopes) ? '控制权限' : '只读权限'}</small></span>{runtime.state === 'paused' ? <Button size="icon" variant="ghost" title="恢复 Agent" onClick={() => void run(async () => setRuntime(await request('agent.resume')))}><Play size={14} /></Button> : <Button size="icon" variant="ghost" title="暂停 Agent" onClick={() => void run(async () => setRuntime(await request('agent.pause')))}><Pause size={14} /></Button>}</div>}
-                <label className="floating-share-row"><span><strong>共享当前主 frame</strong><small>30 分钟只读授权，可随时撤销</small></span><Switch checked={grantActive} disabled={!tab || busy} onCheckedChange={(checked) => void run(async () => setState(checked ? await request('grant.create', { targets: [{ tabId: tab!.id, frameId: 0 }], scopes: READ_CAPABILITY_SCOPES, durationMinutes: 30 }) : await request('grant.revoke')))} /></label>
-                <Button variant="secondary" onClick={() => openWorkspace('engine')}>管理控制授权<Settings size={14} /></Button>
+                {bridge.state === 'connected' && <div className={`floating-agent-task ${runtime.state}`}><span><strong>{runtime.state === 'paused' ? 'Agent 已暂停' : runtime.state === 'running' ? 'Agent 正在操作' : '浏览器实例已接入'}</strong><small>当前浏览器的 HTTP(S) 页面均可引用</small></span>{runtime.state === 'paused' ? <Button size="icon" variant="ghost" title="恢复 Agent" onClick={() => void run(async () => setRuntime(await request('agent.resume')))}><Play size={14} /></Button> : <Button size="icon" variant="ghost" title="暂停 Agent" onClick={() => void run(async () => setRuntime(await request('agent.pause')))}><Pause size={14} /></Button>}</div>}
+                <div className="floating-share-row"><span><strong>实例级页面访问</strong><small>刷新、跳转和新标签页自动跟随，无需逐页授权</small></span><ShieldCheck size={16} /></div>
+                <Button variant="secondary" onClick={() => openWorkspace('engine')}>管理 Agent 连接<Settings size={14} /></Button>
                 <Button variant="ghost" disabled={!tab?.url} onClick={() => void hideCurrentSite()}><EyeOff size={14} />在此站点隐藏</Button>
               </>}
             </TabsContent>

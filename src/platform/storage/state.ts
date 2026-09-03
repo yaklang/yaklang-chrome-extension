@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import type {
-  BridgeGrant, BridgeGrantTarget, BridgeRuntimeSession, CapabilityScope, ExtensionState,
+  BridgeConfig, BridgeGrant, BridgeGrantTarget, BridgeRuntimeSession, CapabilityScope, ExtensionState,
   ProxyConditionType, ProxyProfile,
 } from '@/types/models';
 import {
@@ -15,7 +15,7 @@ interface StorageArea {
 }
 
 let mutationQueue: Promise<void> = Promise.resolve();
-const sessionStorage = (browser.storage as unknown as { session?: StorageArea }).session;
+const sessionStorage = (browser.storage as unknown as { session?: StorageArea } | undefined)?.session;
 
 export const DEFAULT_STATE: ExtensionState = {
   version: 7,
@@ -94,6 +94,19 @@ function normalizeActiveGrant(input: unknown): BridgeGrant | undefined {
     targets: targets as BridgeGrantTarget[],
     scopes: [...new Set(value.scopes)] as CapabilityScope[],
   };
+}
+
+function normalizeManagedInstance(input: unknown): BridgeConfig['managedInstance'] {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const value = input as Partial<NonNullable<BridgeConfig['managedInstance']>>;
+  if (
+    !['ytray', 'yakit'].includes(value.manager || '')
+    || typeof value.instanceId !== 'string'
+    || !/^[A-Za-z0-9-]{1,160}$/.test(value.instanceId)
+    || typeof value.badge !== 'string'
+    || !/^[A-Z]{1,2}$/.test(value.badge)
+  ) return undefined;
+  return value as NonNullable<BridgeConfig['managedInstance']>;
 }
 
 function normalizeState(value: Partial<ExtensionState>): ExtensionState {
@@ -175,7 +188,11 @@ function normalizeState(value: Partial<ExtensionState>): ExtensionState {
       : 'direct',
     customUserAgentProfiles: userAgentState.customUserAgentProfiles,
     userAgentAssignments: userAgentState.userAgentAssignments,
-    bridge: { ...DEFAULT_STATE.bridge, ...value.bridge },
+    bridge: {
+      ...DEFAULT_STATE.bridge,
+      ...value.bridge,
+      managedInstance: normalizeManagedInstance(value.bridge?.managedInstance),
+    },
     floatingPanel: {
       ...DEFAULT_STATE.floatingPanel, ...value.floatingPanel,
       siteOrigins: [...new Set(value.floatingPanel?.siteOrigins || [])].slice(0, 500),

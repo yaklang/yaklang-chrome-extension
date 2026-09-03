@@ -29,8 +29,6 @@ interface RecordingWorkspaceProps {
   busy: boolean;
   run: RunTask;
   gatewayShared: boolean;
-  gatewayShareExpiresAt?: number;
-  gatewayBridgeConnected: boolean;
   onShareGateway: () => Promise<void>;
 }
 
@@ -183,8 +181,6 @@ export function RecordingWorkspace({
   busy,
   run,
   gatewayShared,
-  gatewayShareExpiresAt,
-  gatewayBridgeConnected,
   onShareGateway,
 }: RecordingWorkspaceProps) {
   const [workspaceMode, setWorkspaceMode] = useState<'gateway' | 'recording' | 'deep'>('recording');
@@ -634,8 +630,6 @@ export function RecordingWorkspace({
         busy={busy}
         run={run}
         gatewayShared={gatewayShared}
-        gatewayShareExpiresAt={gatewayShareExpiresAt}
-        gatewayBridgeConnected={gatewayBridgeConnected}
         onShareGateway={onShareGateway}
         onOpenCapture={() => { setRecoveryProfileId(''); setWorkspaceMode(DEEP_CAPTURE_AVAILABLE ? 'deep' : 'recording'); }}
         onOpenRecovery={DEEP_CAPTURE_AVAILABLE ? openRecovery : () => setWorkspaceMode('recording')}

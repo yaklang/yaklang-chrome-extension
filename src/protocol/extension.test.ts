@@ -120,6 +120,17 @@ describe('extension request schemas', () => {
     })).toThrow('HTTP(S)');
   });
 
+  it('validates manager-owned browser instance binding', () => {
+    expect(parseExtensionRequest({
+      action: 'bridge.managed-instance.bind',
+      payload: { manager: 'ytray', instanceId: '13367db6-232a-40d1-ad84-81ee5d97634f', badge: 'B' },
+    }).action).toBe('bridge.managed-instance.bind');
+    expect(() => parseExtensionRequest({
+      action: 'bridge.managed-instance.bind',
+      payload: { manager: 'web', instanceId: '../shared', badge: '3' },
+    })).toThrow();
+  });
+
   it('validates recording bounds and recorded page callables', () => {
     expect(parseExtensionRequest({
       action: 'recording.start',

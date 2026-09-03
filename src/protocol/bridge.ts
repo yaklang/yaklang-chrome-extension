@@ -19,6 +19,7 @@ export interface BridgePairingEnvelope {
   protocolVersion?: number;
   requestId?: string;
   installationId?: string;
+  managedInstance?: BridgeEnvelope['managedInstance'];
   client?: string;
   version?: string;
   nonce?: string;
@@ -99,6 +100,8 @@ const authorizationResourceValue = v.strictObject({
 export const capabilityParams = {
   'system.ping': v.optional(v.strictObject({})),
   'browser.tabs': v.optional(v.strictObject({})),
+  'browser.tab.open': v.strictObject({ url: httpUrl }),
+  'browser.thumbnail': v.optional(v.strictObject({ tabId: optionalTabId })),
   'browser.frames': v.optional(v.strictObject({ tabId: optionalTabId })),
   'browser.isolation.inspect': v.optional(v.strictObject({
     tabIds: v.optional(v.pipe(v.array(tabId), v.minLength(1), v.maxLength(256))),
@@ -183,6 +186,7 @@ export const capabilityParams = {
   }), v.check((input) => input.action !== 'setValue' || typeof input.value === 'string', 'setValue 操作必须提供 value')),
   'browser.cookies': v.optional(v.strictObject(targetFields)),
   'browser.takeover': v.optional(v.strictObject(targetFields)),
+  'browser.instance.close': v.optional(v.strictObject({})),
   'browser.handoff.request': v.strictObject({
     ...targetFields,
     reason: v.picklist(['qr_code', 'mfa', 'captcha', 'device_confirmation', 'other']),
@@ -354,6 +358,7 @@ export function parseBridgeEnvelope(raw: unknown): BridgeEnvelope {
   const allowedKeys = new Set([
     'id', 'type', 'method', 'params', 'result', 'error', 'client', 'version', 'protocolVersion',
     'capabilities', 'capabilityCatalog', 'sessionId', 'taskId', 'grantId', 'installationId',
+    'managedInstance',
     'engineInstanceId', 'engineIdentityId', 'challenge', 'signature', 'publicKey', 'connectionId',
     'resumeSessionId', 'resumed', 'sequence', 'timestamp', 'replyTimestamp', 'transferId', 'index',
     'total', 'data', 'originalBytes',
@@ -361,6 +366,16 @@ export function parseBridgeEnvelope(raw: unknown): BridgeEnvelope {
   const unexpected = Object.keys(message).find((key) => !allowedKeys.has(key));
   if (unexpected) throw new Error(`Bridge 消息包含未声明字段 $.${unexpected}`);
   if (typeof message.type !== 'string') throw new Error('Bridge 消息缺少 type');
+  if (message.managedInstance !== undefined) {
+    const managed = message.managedInstance as Record<string, unknown>;
+    if (!managed || typeof managed !== 'object' || Array.isArray(managed)
+      || !['ytray', 'yakit'].includes(String(managed.manager || ''))
+      || typeof managed.instanceId !== 'string' || !/^[A-Za-z0-9-]{1,160}$/.test(managed.instanceId)
+      || typeof managed.badge !== 'string' || !/^[A-Z]{1,2}$/.test(managed.badge)
+      || Object.keys(managed).some((key) => !['manager', 'instanceId', 'badge'].includes(key))) {
+      throw new Error('Bridge 浏览器实例身份无效');
+    }
+  }
 
   if (message.type === 'challenge') {
     if (message.protocolVersion !== BRIDGE_PROTOCOL_VERSION) throw new Error(`Bridge 协议版本不兼容: ${String(message.protocolVersion)}`);
