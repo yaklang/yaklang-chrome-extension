@@ -66,7 +66,7 @@ jobs:
           set -euo pipefail
           # Query parameter busts the CDN's 5-minute manifest cache.
           url="${PUBLIC_BASE_URL}/manifest.json?mirror_build=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          code=$(curl -sS -o dist/existing-manifest.json -w '%{http_code}' --retry 4 --retry-all-errors "$url")
+          code=$(curl --compressed -sS -o dist/existing-manifest.json -w '%{http_code}' --retry 4 --retry-all-errors "$url")
           if [ "$code" = "200" ]; then
             echo "Existing manifest fetched."
           elif [ "$code" = "404" ]; then
