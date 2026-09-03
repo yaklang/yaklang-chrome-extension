@@ -445,6 +445,14 @@ export function AuthorizationTestingWorkspace({
     }
   }, 'A/B 身份已验证，双方请求捕获已开始');
 
+  const openCrossBrowserWorkspace = () => run(async () => {
+    if (!activeTab) throw new Error('请先选择需要测试的页面');
+    if (!bridge.capabilities?.includes('yakit.browser_authorization.open')) {
+      throw new Error('当前 Yak 引擎不支持打开跨浏览器工作区');
+    }
+    await request('authorization.yakit.open', { tabId: activeTab.id, mode });
+  }, '已在 Yakit 打开跨浏览器越权测试，并带入当前页面');
+
   const refreshWorkspaceDocuments = async (): Promise<BrowserAuthorizationWorkspace> => {
     if (!workspace || !leftTab || !rightTab) throw new Error('请先建立 A/B 工作区');
     const nextState = await request('grant.refresh');
@@ -721,6 +729,21 @@ export function AuthorizationTestingWorkspace({
         {position < 3 && <ArrowRight size={14} />}
       </div>)}
     </div>
+
+    {!workspace && <section className="authorization-cross-browser">
+      <span><UserRoundPlus size={18} /></span>
+      <div>
+        <strong>使用 YTray 的多个浏览器实例</strong>
+        <small>把当前页面作为资源身份带入 Yakit，再选择在线的浏览器 A、B 或 C 作为独立对照账号。</small>
+      </div>
+      <Button
+        variant="ghost"
+        disabled={busy || !activeTab || !bridge.capabilities?.includes('yakit.browser_authorization.open')}
+        onClick={() => void openCrossBrowserWorkspace()}
+      >
+        <ExternalLink size={15} />在 Yakit 选择实例
+      </Button>
+    </section>}
 
     {!workspace ? <section className="authorization-identity-stage">
       <div className="authorization-mode">

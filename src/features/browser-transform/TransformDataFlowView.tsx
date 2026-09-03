@@ -1,8 +1,9 @@
-import type { ComponentType } from 'react';
+import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
   ArrowDownToLine,
   Braces,
   CheckCircle2,
+  ChevronDown,
   Code2,
   FileInput,
   KeyRound,
@@ -19,6 +20,12 @@ import type {
   BrowserTransformProfile,
   BrowserTransformValueSummary,
 } from '@/types/models';
+
+interface FlowStageItem {
+  id: string;
+  stage: BrowserTransformExplanationStage;
+  members: BrowserTransformExplanationStage[];
+}
 
 const OWNER_LABELS: Record<BrowserTransformExplanationOwner, string> = {
   webfuzzer: 'Web Fuzzer',
@@ -69,6 +76,44 @@ function operationLabel(operation: BrowserTransformExplanationStage['operations'
   return details.join(' · ');
 }
 
+function displayStages(
+  stages: BrowserTransformExplanationStage[],
+  direction: BrowserTransformDirectionName,
+): FlowStageItem[] {
+  const items: FlowStageItem[] = [];
+  for (const stage of stages) {
+    const assembly = stage.owner === 'extension' && (stage.kind === 'builtin' || stage.kind === 'output');
+    const previous = items[items.length - 1];
+    if (assembly && previous?.members.every((item) => (
+      item.owner === 'extension' && (item.kind === 'builtin' || item.kind === 'output')
+    ))) {
+      previous.members.push(stage);
+      continue;
+    }
+    items.push({ id: stage.id, stage, members: [stage] });
+  }
+  return items.map((item) => {
+    if (item.members.length === 1) return item;
+    const first = item.members[0];
+    const last = item.members[item.members.length - 1];
+    return {
+      ...item,
+      id: `${first.id}:assembly`,
+      stage: {
+        ...first,
+        id: `${first.id}:assembly`,
+        title: direction === 'request' ? '浏览器扩展组装线上请求' : '浏览器扩展还原逻辑响应',
+        summary: `${item.members.length} 个受限步骤，将中间结果写入最终报文`,
+        nodeIds: item.members.flatMap((member) => member.nodeIds),
+        inputPaths: first.inputPaths,
+        outputPaths: last.outputPaths,
+        operations: item.members.flatMap((member) => member.operations),
+        evidence: item.members.flatMap((member) => member.evidence),
+      },
+    };
+  });
+}
+
 export function TransformDataFlowView({
   profile,
   direction,
@@ -85,6 +130,13 @@ export function TransformDataFlowView({
   const explained = profile.explanation?.directions.find((item) => item.direction === direction);
   const currentExecution = execution?.direction === direction ? execution : undefined;
   const availableDirections = profile.explanation?.directions.map((item) => item.direction) || [];
+  const stages = useMemo(() => displayStages(explained?.stages || [], direction), [direction, explained?.stages]);
+  const defaultOpenStageId = stages.find((item) => item.members.some((member) => member.kind === 'page-call'))?.id || '';
+  const [openStageId, setOpenStageId] = useState('');
+
+  useEffect(() => {
+    setOpenStageId(defaultOpenStageId);
+  }, [defaultOpenStageId, direction, profile.id]);
 
   if (!explained) return <div className="transform-flow-empty">
     <Code2 size={22} />
@@ -97,7 +149,9 @@ export function TransformDataFlowView({
       <div>
         <span className="transform-data-flow__eyebrow">明文网关 · {direction === 'request' ? '请求方向' : '响应方向'}</span>
         <strong>{direction === 'request' ? '明文如何成为线上请求' : '线上响应如何还原为明文'}</strong>
-        <p>{explained.summary}</p>
+        <p>{stages.length === explained.stages.length
+          ? explained.summary
+          : `${explained.stages.length} 个处理步骤已收拢为 ${stages.length} 个主要阶段`}</p>
       </div>
       {availableDirections.length > 1 && <div className="transform-flow-directions" role="tablist" aria-label="数据流方向">
         {availableDirections.map((item) => <button
@@ -119,17 +173,24 @@ export function TransformDataFlowView({
     </div>
 
     <div className="transform-flow-timeline">
-      {explained.stages.map((stage, index) => {
+      {stages.map((item, index) => {
+        const { stage } = item;
         const Icon = STAGE_ICONS[stage.kind];
         const traces = currentExecution?.nodeTrace.filter((trace) => stage.nodeIds.includes(trace.nodeId)) || [];
         const stageDuration = traces.reduce((total, trace) => total + trace.durationMs, 0);
         const hasDetails = Boolean(stage.inputPaths.length || stage.outputPaths.length || stage.operations.length
           || stage.evidence.length || stage.network || stage.source || traces.length);
-        return <details className={`transform-flow-stage is-${stage.owner}`} key={stage.id} open={stage.kind === 'page-call'}>
-          <summary>
+        return <details className={`transform-flow-stage is-${stage.owner}`} key={item.id} open={openStageId === item.id}>
+          <summary
+            aria-expanded={openStageId === item.id}
+            onClick={(event) => {
+              event.preventDefault();
+              if (hasDetails) setOpenStageId((current) => current === item.id ? '' : item.id);
+            }}
+          >
             <span className="transform-flow-stage__rail">
               <i><Icon size={15} /></i>
-              {index < explained.stages.length - 1 && <b />}
+              {index < stages.length - 1 && <b />}
             </span>
             <span className="transform-flow-stage__main">
               <span className="transform-flow-stage__meta"><em>{OWNER_LABELS[stage.owner]}</em><i className={`is-${stage.proof}`}>{proofLabel(stage)}</i></span>
@@ -137,16 +198,25 @@ export function TransformDataFlowView({
               <small>{stage.summary}</small>
             </span>
             <span className="transform-flow-stage__status">
-              {traces.length ? <><CheckCircle2 size={14} /><time>{stageDuration.toFixed(1)} ms</time></> : hasDetails ? <span>详情</span> : null}
+              {traces.length ? <><CheckCircle2 size={14} /><time>{stageDuration.toFixed(1)} ms</time></> : null}
+              {hasDetails && <ChevronDown className="transform-flow-stage__chevron" size={14} />}
             </span>
           </summary>
           {hasDetails && <div className="transform-flow-stage__details">
+            {item.members.length > 1 && <div className="transform-flow-steps">
+              <span>阶段内操作</span>
+              <ol>{item.members.map((member, memberIndex) => <li key={member.id}>
+                <i>{memberIndex + 1}</i>
+                <span><strong>{member.title}</strong><small>{member.operations.map(operationLabel).join(' · ') || member.summary}</small></span>
+                <code>{[member.inputPaths.join('、'), member.outputPaths.join('、')].filter(Boolean).join(' → ')}</code>
+              </li>)}</ol>
+            </div>}
             {stage.network && <dl className="transform-flow-network">
               <div><dt>网络边界</dt><dd><code>{stage.network.method}</code> {stage.network.route}</dd></div>
               {stage.network.statusCode && <div><dt>录制响应</dt><dd>{stage.network.statusCode}</dd></div>}
             </dl>}
-            {stage.operations.length > 0 && <div className="transform-flow-facts"><span>处理</span><ul>{stage.operations.map((operation, operationIndex) => <li key={`${operation.operation}:${operationIndex}`}><strong>{operationLabel(operation)}</strong>{operation.destination && <code>→ {operation.destination}</code>}</li>)}</ul></div>}
-            {(stage.inputPaths.length > 0 || stage.outputPaths.length > 0) && <div className="transform-flow-paths">
+            {item.members.length === 1 && stage.operations.length > 0 && <div className="transform-flow-facts"><span>处理逻辑</span><ul>{stage.operations.map((operation, operationIndex) => <li key={`${operation.operation}:${operationIndex}`}><strong>{operationLabel(operation)}</strong>{operation.destination && <code>→ {operation.destination}</code>}</li>)}</ul></div>}
+            {item.members.length === 1 && (stage.inputPaths.length > 0 || stage.outputPaths.length > 0) && <div className="transform-flow-paths">
               {stage.inputPaths.length > 0 && <div><span>输入</span><p>{stage.inputPaths.map((path) => <code key={path}>{path}</code>)}</p></div>}
               {stage.outputPaths.length > 0 && <div><span>输出</span><p>{stage.outputPaths.map((path) => <code key={path}>{path}</code>)}</p></div>}
             </div>}

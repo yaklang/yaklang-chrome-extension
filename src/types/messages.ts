@@ -97,8 +97,8 @@ export interface ExtensionRequestMap {
     output: unknown;
   };
   'authorization.yakit.open': {
-    input: { workspaceId: string };
-    output: { workspaceId: string; opened: boolean };
+    input: { workspaceId: string } | { tabId: number; mode?: 'horizontal' | 'vertical' };
+    output: { workspaceId?: string; tabId?: number; opened: boolean };
   };
   'proxy.save': { input: ProxyProfile; output: ExtensionState };
   'proxy.delete': { input: { id: string }; output: ExtensionState };

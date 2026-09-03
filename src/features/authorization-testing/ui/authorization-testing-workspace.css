@@ -116,6 +116,44 @@
   color: var(--success);
 }
 
+.authorization-cross-browser {
+  min-height: 64px;
+  padding: 10px 14px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  border: 1px solid color-mix(in srgb, var(--authorization-accent) 24%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--authorization-accent) 5%, var(--surface));
+}
+
+.authorization-cross-browser > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--authorization-accent) 12%, var(--surface));
+  color: var(--authorization-accent);
+}
+
+.authorization-cross-browser strong,
+.authorization-cross-browser small {
+  display: block;
+}
+
+.authorization-cross-browser strong {
+  font-size: var(--text-sm);
+}
+
+.authorization-cross-browser small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.45;
+}
+
 .authorization-identity-stage,
 .authorization-baseline-stage,
 .authorization-plan-stage {
@@ -1458,6 +1496,15 @@
 }
 
 @media (max-width: 820px) {
+  .authorization-cross-browser {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .authorization-cross-browser > .ui-button {
+    grid-column: 2;
+    justify-self: start;
+  }
+
   .authorization-heading,
   .authorization-prepare-bar,
   .authorization-section-heading {

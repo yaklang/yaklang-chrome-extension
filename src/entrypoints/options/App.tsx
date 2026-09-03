@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { browser, type Browser } from 'wxt/browser';
 import {
   Activity, AlertTriangle, Bot, Braces, Check, ChevronRight, CircleGauge, CloudDownload, Cookie, Copy,
-  Database, Download, Eye, Fingerprint, History, KeyRound, MousePointer2, Network, Play, Power, Radio,
-  RefreshCw, Route, Save, Search, Send, Server, ShieldCheck, Square, Trash2, Upload, UserRoundCog, Wrench, X,
+  Database, Download, Eye, FileKey2, Fingerprint, History, KeyRound, MousePointer2, Network, Play, Power, Radio,
+  RefreshCw, Route, Save, Search, Send, Server, ShieldCheck, Square, Trash2, Upload, UserRoundCog, X,
 } from 'lucide-react';
 import { ProductBrand, YakitMark } from '@/components/brand/Brand';
 import { Button } from '@/components/ui/button';
@@ -30,37 +30,43 @@ import { errorMessage, request } from '@/platform/messaging/runtime';
 import { APPEARANCE_STORAGE_KEY, getAppearance, setThemePreference, type ThemePreference } from '@/platform/storage/appearance';
 import './App.css';
 
-type Section = 'overview' | 'authorization' | 'proxies' | 'rules' | 'sources' | 'cookies' | 'user-agent' | 'network' | 'context' | 'engine' | 'activity';
+type Section = 'overview' | 'authorization' | 'network' | 'gateway' | 'proxies' | 'rules' | 'sources' | 'cookies' | 'user-agent' | 'context' | 'engine' | 'activity';
 const FIREFOX_AMO_BUILD = import.meta.env.FIREFOX && import.meta.env.MODE === 'store';
 
-const NAVIGATION: Array<{ label: string; icon?: ReactNode; items: Array<{ id: Section; label: string; icon: ReactNode }> }> = [
+const NAVIGATION: Array<{ label?: string; items: Array<{ id: Section; label: string; icon: ReactNode }> }> = [
   {
-    label: '工作区',
+    items: [{ id: 'overview', label: '概览', icon: <CircleGauge size={17} /> }],
+  },
+  {
+    label: '安全测试',
+    items: [{ id: 'authorization', label: '越权测试', icon: <Fingerprint size={17} /> }],
+  },
+  {
+    label: '请求与改写',
     items: [
-      { id: 'overview', label: '运行概览', icon: <CircleGauge size={17} /> },
-      { id: 'authorization', label: '授权测试', icon: <Fingerprint size={17} /> },
+      { id: 'network', label: '请求捕获', icon: <Activity size={17} /> },
+      { id: 'gateway', label: '明文网关', icon: <FileKey2 size={17} /> },
     ],
   },
   {
-    label: '网络与流量',
+    label: '代理',
     items: [
-      { id: 'proxies', label: '代理出口', icon: <Network size={17} /> },
-      { id: 'rules', label: '自动切换', icon: <Route size={17} /> },
+      { id: 'proxies', label: '代理设置', icon: <Network size={17} /> },
+      { id: 'rules', label: '分流规则', icon: <Route size={17} /> },
       { id: 'sources', label: '规则订阅', icon: <CloudDownload size={17} /> },
-      { id: 'network', label: '网络活动', icon: <Activity size={17} /> },
     ],
   },
   {
-    label: '常用工具', icon: <Wrench size={13} />,
+    label: '浏览器工具',
     items: [
-      { id: 'cookies', label: 'Cookie Editor', icon: <Cookie size={17} /> },
-      { id: 'user-agent', label: 'UA 快速切换', icon: <UserRoundCog size={17} /> },
+      { id: 'context', label: '页面上下文', icon: <KeyRound size={17} /> },
+      { id: 'cookies', label: 'Cookie 管理', icon: <Cookie size={17} /> },
+      { id: 'user-agent', label: 'User-Agent', icon: <UserRoundCog size={17} /> },
     ],
   },
   {
-    label: 'Agent 与系统',
+    label: '系统',
     items: [
-      { id: 'context', label: '登录态工作区', icon: <KeyRound size={17} /> },
       { id: 'engine', label: '引擎连接', icon: <Server size={17} /> },
       { id: 'activity', label: '操作记录', icon: <History size={17} /> },
     ],
@@ -204,7 +210,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="sidebar-brand"><ProductBrand /></div>
-        <nav>{NAVIGATION.map((group) => <div className="sidebar-group" key={group.label}><span className="sidebar-group__label">{group.icon}{group.label}</span>{group.items.map((item) => <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => navigate(item.id)}>{item.icon}<span>{item.label}</span><ChevronRight size={14} /></button>)}</div>)}</nav>
+        <nav>{NAVIGATION.map((group, index) => <div className={`sidebar-group ${index === 0 ? 'is-primary' : ''}`} key={group.label || 'overview'}>{group.label && <span className="sidebar-group__label">{group.label}</span>}{group.items.map((item) => <button key={item.id} className={section === item.id ? 'active' : ''} onClick={() => navigate(item.id)}>{item.icon}<span>{item.label}</span><ChevronRight size={14} /></button>)}</div>)}</nav>
         <div className="sidebar-theme">
           <span>外观</span>
           <select aria-label="界面主题" value={theme} onChange={(event) => { const next = event.target.value as ThemePreference; setTheme(next); void setThemePreference(next); }}>
@@ -239,6 +245,7 @@ function App() {
           {section === 'cookies' && <CookieEditor key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'user-agent' && <UserAgents state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'network' && <NetworkActivity key={tab?.id || 0} tab={tab} bridge={bridge} run={run} busy={busy} />}
+          {section === 'gateway' && <GatewayWorkspace key={tab?.id || 0} tab={tab} bridge={bridge} run={run} busy={busy} />}
           {section === 'context' && <ContextTool key={tab?.id || 0} tab={tab} run={run} busy={busy} />}
           {section === 'engine' && <EngineSettings state={state} setState={setState} bridge={bridge} setBridge={setBridge} tabs={tabs} run={run} busy={busy} />}
           {section === 'activity' && <ActivityLog run={run} busy={busy} />}
@@ -537,13 +544,6 @@ function NetworkActivity({
   const [captureHeaders, setCaptureHeaders] = useState(false);
   const [captureBody, setCaptureBody] = useState(false);
   const [query, setQuery] = useState('');
-  const transformShared = bridge.state === 'connected';
-
-  const shareTransform = async () => {
-    if (!tab) throw new Error('请先选择需要使用的页面');
-    if (bridge.state !== 'connected') await request('bridge.connect');
-  };
-
   const load = useCallback(async () => {
     if (!tab) return;
     try {
@@ -655,12 +655,33 @@ function NetworkActivity({
       </aside>
     </div>}
 
+  </div>;
+}
+
+function GatewayWorkspace({
+  tab,
+  bridge,
+  run,
+  busy,
+}: {
+  tab?: ActiveTabInfo;
+  bridge: BridgeStatus;
+  run: (task: () => Promise<void>, success?: string) => Promise<void>;
+  busy: boolean;
+}) {
+  const shareTransform = async () => {
+    if (!tab) throw new Error('请先选择需要使用的页面');
+    if (bridge.state !== 'connected') await request('bridge.connect');
+  };
+
+  return <div className="section-view gateway-view">
     <RecordingWorkspace
       tab={tab}
       busy={busy}
       run={run}
-      gatewayShared={transformShared}
+      gatewayShared={bridge.state === 'connected'}
       onShareGateway={shareTransform}
+      initialMode="gateway"
     />
   </div>;
 }

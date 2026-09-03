@@ -167,7 +167,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     case 'authorization.yakit.open':
       return ok(await engineBridge.requestEngine(
         'yakit.browser_authorization.open',
-        { workspaceId: request.payload.workspaceId },
+        request.payload,
       ));
     case 'context.capture': {
       const { tabId, frameId, documentId, ...options } = request.payload;

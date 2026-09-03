@@ -30,6 +30,7 @@ interface RecordingWorkspaceProps {
   run: RunTask;
   gatewayShared: boolean;
   onShareGateway: () => Promise<void>;
+  initialMode?: 'gateway' | 'recording' | 'deep';
 }
 
 const KIND_LABELS: Record<BrowserRecordingEvent['kind'], string> = {
@@ -182,8 +183,9 @@ export function RecordingWorkspace({
   run,
   gatewayShared,
   onShareGateway,
+  initialMode = 'recording',
 }: RecordingWorkspaceProps) {
-  const [workspaceMode, setWorkspaceMode] = useState<'gateway' | 'recording' | 'deep'>('recording');
+  const [workspaceMode, setWorkspaceMode] = useState<'gateway' | 'recording' | 'deep'>(initialMode);
   const [autoArmRequest, setAutoArmRequest] = useState(0);
   const [autoRecoveryRequest, setAutoRecoveryRequest] = useState(0);
   const [recoveryProfileId, setRecoveryProfileId] = useState('');

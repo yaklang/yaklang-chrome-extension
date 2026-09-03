@@ -100,6 +100,10 @@ describe('extension request schemas', () => {
       payload: { workspaceId: 'authorization-workspace-1' },
     }).action).toBe('authorization.yakit.open');
     expect(parseExtensionRequest({
+      action: 'authorization.yakit.open',
+      payload: { tabId: 12, mode: 'horizontal' },
+    }).payload).toEqual({ tabId: 12, mode: 'horizontal' });
+    expect(parseExtensionRequest({
       action: 'network.capture.start',
       payload: {
         tabId: 12,
