@@ -64,6 +64,7 @@ import { handleCookieRequest } from './handlers/cookies';
 import { handleUserAgentRequest } from './handlers/user-agent';
 import { handleRecordingRequest } from './handlers/recording';
 import { handleTransformRequest } from './handlers/transform';
+import { resolveHandoff } from '@/features/handoff/service';
 
 function originOf(url: string): string {
   const parsed = new URL(url);
@@ -299,21 +300,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     }
     case 'handoff.resolve': {
       const input = request.payload;
-      const state = await updateState((current) => {
-        if (!current.handoff || current.handoff.id !== input.id || current.handoff.state !== 'waiting_for_user') {
-          throw new ExtensionError('handoff_not_waiting', '人工接管请求不存在或已经结束');
-        }
-        return {
-          ...current,
-          handoff: { ...current.handoff, state: input.outcome, resolvedAt: Date.now() },
-        };
-      });
-      const handoff = state.handoff!;
-      await setAgentRuntimeState(
-        input.outcome === 'completed' ? 'running' : 'paused',
-        await browserInstanceAccess('browser.tabs.read'),
-      );
-      await browser.action.setBadgeText({ text: '', tabId: handoff.target.tabId });
+      const { state, handoff } = await resolveHandoff(input.id, input.outcome);
       engineBridge.emitEvent('browser.handoff.changed', handoff);
       void appendAuditEvent({
         category: 'handoff', action: `handoff.${input.outcome}`, outcome: input.outcome === 'completed' ? 'success' : 'cancelled',

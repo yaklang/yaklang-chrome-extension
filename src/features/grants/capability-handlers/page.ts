@@ -14,6 +14,7 @@ import { listCookies } from '@/features/cookies/service';
 import { resolveTabCookieStoreId } from '@/platform/browser/isolation';
 import { ExtensionError } from '@/shared/errors';
 import { PAGE_CAPABILITY_DOMAIN } from '../capability-domains';
+import { getState } from '@/platform/storage/state';
 
 export const pageCapabilityHandler: CapabilityDomainHandler = {
   ...PAGE_CAPABILITY_DOMAIN,
@@ -63,7 +64,12 @@ export const pageCapabilityHandler: CapabilityDomainHandler = {
       await browser.action.setBadgeBackgroundColor({ color: '#f28c28' });
       await browser.action.setBadgeText({ text: '接管', tabId: target.tabId });
       globalThis.setTimeout(
-        () => void browser.action.setBadgeText({ text: '', tabId: target.tabId }),
+        () => void getState()
+          .then((state) => browser.action.setBadgeText({
+            text: state.bridge.managedInstance?.badge || '',
+            tabId: target.tabId,
+          }))
+          .catch(() => undefined),
         10_000,
       );
       return { activated: true, target };

@@ -87,7 +87,24 @@ vi.mock('@/platform/storage/state', () => ({
 
 vi.mock('@/protocol/capabilities', () => ({
   BRIDGE_CAPABILITIES: [],
+  capabilityVisibleToAgent: vi.fn((method: string) => ![
+    'browser.thumbnail',
+    'browser.handoff.presentation.get',
+    'browser.handoff.focus',
+    'browser.handoff.resolve',
+  ].includes(method)),
   getBridgeCapabilityCatalog: vi.fn(async () => ({ version: 1, capabilities: [] })),
+}));
+
+vi.mock('@/features/grants/capability-context', () => ({
+  browserInstanceAccess: vi.fn(async () => ({
+    id: 'paired-browser-instance',
+    taskId: 'paired-browser-instance',
+    targets: [],
+    scopes: ['browser.tabs.read'],
+    createdAt: 0,
+    expiresAt: Number.MAX_SAFE_INTEGER,
+  })),
 }));
 
 vi.mock('@/features/grants/service', () => ({
@@ -129,6 +146,7 @@ import {
   BRIDGE_HEARTBEAT_TIMEOUT_MS,
   EngineBridge,
 } from './service';
+import { beginAgentAction } from '@/features/agent-runtime/service';
 import {
   BRIDGE_CHUNK_TIMEOUT_MS,
   BRIDGE_PROTOCOL_VERSION,
@@ -212,6 +230,26 @@ describe('Engine Bridge transport lifecycle', () => {
 
     expect(bridge.getStatus()).toMatchObject({ state: 'error', message: expect.stringContaining('发送失败') });
     expect(socket.readyState).toBe(FakeWebSocket.CLOSED);
+  });
+
+  it('routes local UI capabilities without entering the paused Agent action gate', async () => {
+    const bridge = new EngineBridge();
+    const socket = await connect(bridge);
+
+    socket.receive({
+      type: 'request',
+      id: 'local-ui-1',
+      method: 'browser.handoff.presentation.get',
+      params: { handoffId: 'handoff-1' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(socket.sent.map((item) => JSON.parse(item)).find((item) => item.id === 'local-ui-1')).toMatchObject({
+      type: 'response',
+      id: 'local-ui-1',
+      result: { ok: true },
+    });
+    expect(beginAgentAction).not.toHaveBeenCalled();
   });
 
   it('closes a half-open connection and rejects pending calls after missed heartbeats', async () => {

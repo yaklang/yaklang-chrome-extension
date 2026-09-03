@@ -193,6 +193,16 @@ export const capabilityParams = {
     message: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(500)), ''),
   }),
   'browser.handoff.status': v.optional(v.strictObject({})),
+  'browser.handoff.presentation.get': v.strictObject({
+    handoffId: id,
+  }),
+  'browser.handoff.focus': v.strictObject({
+    handoffId: id,
+  }),
+  'browser.handoff.resolve': v.strictObject({
+    handoffId: id,
+    outcome: v.picklist(['completed', 'cancelled']),
+  }),
   'browser.network.start': v.optional(v.strictObject({
     ...targetFields,
     captureHeaders: v.optional(v.boolean()),

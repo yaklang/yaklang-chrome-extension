@@ -306,6 +306,8 @@ export interface BridgeCapabilityDescriptor {
   method: string;
   domain: BridgeCapabilityDomain;
   access: BridgeCapabilityAccess;
+  /** False keeps local presentation/control methods out of the Agent tool catalog. */
+  agentVisible?: boolean;
   summary: string;
   scopes: CapabilityScope[];
   conditionalScopes?: BridgeCapabilityScopeCondition[];

@@ -2,16 +2,29 @@ import { browser } from 'wxt/browser';
 import type { HandoffReason } from '@/types/models';
 import type { CapabilityDomainHandler } from '../capability-context';
 import { allowedTarget } from '../capability-context';
-import { activateTab } from '@/platform/browser/targets';
 import { getTab } from '@/platform/browser/targets';
 import { getState, updateState } from '@/platform/storage/state';
 import { setAgentRuntimeState } from '@/features/agent-runtime/service';
 import { ExtensionError } from '@/shared/errors';
 import { HANDOFF_CAPABILITY_DOMAIN } from '../capability-domains';
+import { focusHandoff, getHandoffPresentation, resolveHandoff } from '@/features/handoff/service';
 
 export const handoffCapabilityHandler: CapabilityDomainHandler = {
   ...HANDOFF_CAPABILITY_DOMAIN,
   async handle({ method, input, grant }) {
+    if (method === 'browser.handoff.presentation.get') {
+      return getHandoffPresentation(String(input.handoffId || ''), grant);
+    }
+    if (method === 'browser.handoff.focus') {
+      return focusHandoff(String(input.handoffId || ''), grant);
+    }
+    if (method === 'browser.handoff.resolve') {
+      return resolveHandoff(
+        String(input.handoffId || ''),
+        input.outcome === 'cancelled' ? 'cancelled' : 'completed',
+        grant,
+      );
+    }
     if (method === 'browser.handoff.status') {
       const handoff = (await getState()).handoff;
       return handoff?.taskId === grant.taskId ? handoff : { state: 'idle' };
@@ -50,7 +63,6 @@ export const handoffCapabilityHandler: CapabilityDomainHandler = {
         },
       };
     });
-    await activateTab(resolvedTarget.tabId);
     await browser.action.setBadgeBackgroundColor({ color: '#ee7815' });
     await browser.action.setBadgeText({ text: '待确认', tabId: resolvedTarget.tabId });
     await setAgentRuntimeState('waiting_for_human', grant);

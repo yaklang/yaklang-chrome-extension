@@ -1,7 +1,11 @@
 import { browser } from 'wxt/browser';
 import type { BridgeEnvelope } from '@/types/messages';
 import type { BridgeConfig, BridgePairingStatus, BridgePublicKey, BridgeStatus } from '@/types/models';
-import { BRIDGE_CAPABILITIES, getBridgeCapabilityCatalog } from '@/protocol/capabilities';
+import {
+  BRIDGE_CAPABILITIES,
+  capabilityVisibleToAgent,
+  getBridgeCapabilityCatalog,
+} from '@/protocol/capabilities';
 import {
   BRIDGE_CHUNK_BYTES, BRIDGE_CHUNK_THRESHOLD_BYTES, BRIDGE_CHUNK_TIMEOUT_MS,
   BRIDGE_MAX_CHUNK_TRANSFERS, BRIDGE_MAX_MESSAGE_BYTES, BRIDGE_PROTOCOL_VERSION, parseBridgeEnvelope,
@@ -525,11 +529,13 @@ export class EngineBridge {
     try {
       const grant = await browserInstanceAccess('browser.tabs.read');
       taskId = grant.taskId;
-      actionId = (await beginAgentAction(grant, {
-        requestId: message.id,
-        method: message.method,
-        targetTabId,
-      })).id;
+      if (capabilityVisibleToAgent(message.method)) {
+        actionId = (await beginAgentAction(grant, {
+          requestId: message.id,
+          method: message.method,
+          targetTabId,
+        })).id;
+      }
       const operation = routeCapability(message.method, message.params, (method, params) => this.requestEngine(method, params));
       const result = await Promise.race([operation, cancelled]);
       const durationMs = performance.now() - startedAt;

@@ -3,6 +3,7 @@ import {
   BRIDGE_CAPABILITIES,
   canonicalCapabilityCatalogPayload,
   capabilityBaseScope,
+  capabilityVisibleToAgent,
   getBridgeCapabilityCatalog,
 } from './capabilities';
 
@@ -34,6 +35,23 @@ describe('versioned Bridge capability catalog', () => {
     expect(JSON.stringify(evalCapability?.paramsSchema)).toContain('"mode"');
     expect(JSON.stringify(evalCapability?.paramsSchema)).toContain('"program"');
     expect(capabilityBaseScope('browser.profile.validate')).toBe('browser.transform.execute');
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.thumbnail')).toMatchObject({
+      agentVisible: false,
+    });
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.handoff.presentation.get')).toMatchObject({
+      agentVisible: false,
+    });
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.handoff.focus')).toMatchObject({
+      agentVisible: false,
+    });
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.handoff.resolve')).toMatchObject({
+      agentVisible: false,
+    });
+    expect(capabilityVisibleToAgent('browser.handoff.presentation.get')).toBe(false);
+    expect(capabilityVisibleToAgent('browser.handoff.focus')).toBe(false);
+    expect(capabilityVisibleToAgent('browser.handoff.resolve')).toBe(false);
+    expect(capabilityVisibleToAgent('browser.thumbnail')).toBe(false);
+    expect(capabilityVisibleToAgent('browser.context')).toBe(true);
     expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.recovery.capture')).toMatchObject({
       access: 'dangerous',
       scopes: ['browser.transform.manage', 'browser.debugger.control', 'browser.callable.execute'],

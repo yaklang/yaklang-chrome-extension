@@ -20,6 +20,7 @@ export type BridgeCapabilityMethod = keyof typeof capabilityParams;
 interface CapabilityMetadata {
   domain: BridgeCapabilityDomain;
   access: BridgeCapabilityAccess;
+  agentVisible?: boolean;
   summary: string;
   scopes: CapabilityScope[];
   conditionalScopes?: BridgeCapabilityScopeCondition[];
@@ -42,7 +43,7 @@ const CAPABILITY_METADATA = {
   },
   'browser.thumbnail': {
     domain: 'page', access: 'read', summary: '读取当前可见标签页的低清预览图，供 Yakit 实例列表展示',
-    scopes: ['browser.tabs.read'], targetMode: 'tab', defaultTimeoutMs: READ_TIMEOUT_MS,
+    scopes: ['browser.tabs.read'], targetMode: 'tab', defaultTimeoutMs: READ_TIMEOUT_MS, agentVisible: false,
   },
   'browser.isolation.inspect': {
     domain: 'isolation', access: 'read', summary: '读取浏览器实例内标签页的 Cookie Store 与身份隔离上下文',
@@ -168,11 +169,27 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.instance.close'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.handoff.request': {
-    domain: 'handoff', access: 'write', summary: '请求用户完成扫码、MFA、验证码或设备确认',
+    domain: 'handoff', access: 'write',
+    summary: '页面需要用户扫码、MFA、验证码或设备确认时调用；Yakit 会在本地呈现交互内容，Agent 只等待结果',
     scopes: ['browser.human.takeover'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.handoff.status': {
     domain: 'handoff', access: 'read', summary: '读取当前人工接管状态',
+    scopes: ['browser.human.takeover'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
+  },
+  'browser.handoff.presentation.get': {
+    domain: 'handoff', access: 'sensitive-read', agentVisible: false,
+    summary: '仅在本机提取当前扫码接管的二维码展示数据',
+    scopes: ['browser.human.takeover'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
+  },
+  'browser.handoff.focus': {
+    domain: 'handoff', access: 'write', agentVisible: false,
+    summary: '二维码无法在本地呈现时，由 Yakit 将对应浏览器实例切换到前台',
+    scopes: ['browser.human.takeover'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
+  },
+  'browser.handoff.resolve': {
+    domain: 'handoff', access: 'write', agentVisible: false,
+    summary: '由 Yakit 本地界面完成或取消人工接管',
     scopes: ['browser.human.takeover'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.network.start': {
@@ -456,6 +473,11 @@ export const CAPABILITY_LABELS: Record<CapabilityScope, string> = {
 
 export function capabilityBaseScope(method: string): CapabilityScope | undefined {
   return CAPABILITY_METADATA[method as BridgeCapabilityMethod]?.scopes[0];
+}
+
+export function capabilityVisibleToAgent(method: string): boolean {
+  const metadata = CAPABILITY_METADATA[method as BridgeCapabilityMethod] as CapabilityMetadata | undefined;
+  return metadata?.agentVisible !== false;
 }
 
 export function isControlScopeSet(scopes: readonly CapabilityScope[]): boolean {
