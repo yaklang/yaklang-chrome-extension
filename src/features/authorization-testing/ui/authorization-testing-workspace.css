@@ -143,6 +143,10 @@
   display: block;
 }
 
+.authorization-cross-browser > div {
+  min-width: 0;
+}
+
 .authorization-cross-browser strong {
   font-size: var(--text-sm);
 }
@@ -152,6 +156,63 @@
   color: var(--muted);
   font-size: var(--text-xs);
   line-height: 1.45;
+}
+
+.authorization-cross-browser__instances {
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.authorization-cross-browser__instances > button {
+  height: 27px;
+  padding: 0 8px 0 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.authorization-cross-browser__instances > button > b {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-subtle);
+  color: var(--foreground);
+  font-size: var(--text-xs);
+}
+
+.authorization-cross-browser__instances > button.is-current {
+  opacity: 1;
+  background: var(--surface-subtle);
+  color: var(--muted);
+  cursor: default;
+}
+
+.authorization-cross-browser__instances > button.is-selected {
+  border-color: color-mix(in srgb, var(--authorization-accent) 50%, var(--border));
+  background: color-mix(in srgb, var(--authorization-accent) 9%, var(--surface));
+  color: var(--authorization-accent);
+}
+
+.authorization-cross-browser__instances > button.is-selected > b {
+  background: var(--authorization-accent);
+  color: white;
+}
+
+.authorization-cross-browser__instances > button.is-refresh {
+  width: 27px;
+  padding: 0;
+  justify-content: center;
 }
 
 .authorization-identity-stage,

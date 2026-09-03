@@ -307,8 +307,10 @@ const payloadSchemas = {
     v.strictObject({
       tabId,
       mode: v.optional(v.picklist(['horizontal', 'vertical'])),
+      targetDeviceId: v.optional(id),
     }),
   ]),
+  'authorization.yakit.instances': noPayload,
   'proxy.save': proxyProfile,
   'proxy.delete': v.strictObject({ id }),
   'proxy.switch': v.strictObject({ id }),

@@ -101,8 +101,10 @@ describe('extension request schemas', () => {
     }).action).toBe('authorization.yakit.open');
     expect(parseExtensionRequest({
       action: 'authorization.yakit.open',
-      payload: { tabId: 12, mode: 'horizontal' },
-    }).payload).toEqual({ tabId: 12, mode: 'horizontal' });
+      payload: { tabId: 12, mode: 'horizontal', targetDeviceId: 'device-b' },
+    }).payload).toEqual({ tabId: 12, mode: 'horizontal', targetDeviceId: 'device-b' });
+    expect(parseExtensionRequest({ action: 'authorization.yakit.instances' }).action)
+      .toBe('authorization.yakit.instances');
     expect(parseExtensionRequest({
       action: 'network.capture.start',
       payload: {

@@ -218,6 +218,12 @@ export interface BridgePairedEngine {
   pairedAt: number;
 }
 
+export interface BrowserAuthorizationInstance {
+  deviceId: string;
+  badge: string;
+  current: boolean;
+}
+
 export type BridgePairingState = 'idle' | 'requesting' | 'pending' | 'approved' | 'rejected' | 'expired' | 'error';
 
 export interface BridgePairingStatus {

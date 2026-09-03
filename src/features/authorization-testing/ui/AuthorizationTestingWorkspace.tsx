@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { authorizationShareGrantInput } from '@/features/grants/gateway-share';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import type {
-  ActiveTabInfo, BridgeStatus, BrowserIsolationContext, BrowserIsolationInspection,
+  ActiveTabInfo, BridgeStatus, BrowserAuthorizationInstance, BrowserIsolationContext, BrowserIsolationInspection,
   ExtensionState, NetworkCaptureStatus,
 } from '@/types/models';
 import {
@@ -247,6 +247,8 @@ export function AuthorizationTestingWorkspace({
   const [localError, setLocalError] = useState('');
   const [identityNotice, setIdentityNotice] = useState('');
   const [clock, setClock] = useState(Date.now());
+  const [browserInstances, setBrowserInstances] = useState<BrowserAuthorizationInstance[]>([]);
+  const [targetDeviceId, setTargetDeviceId] = useState('');
 
   const leftTab = eligibleTabs.find((item) => item.id === leftTabId);
   const rightTab = eligibleTabs.find((item) => item.id === rightTabId);
@@ -262,6 +264,10 @@ export function AuthorizationTestingWorkspace({
   const sameOrigin = Boolean(leftTab && rightTab && tabOrigin(leftTab) === tabOrigin(rightTab));
   const capabilityReady = bridge.state === 'connected'
     && Boolean(bridge.capabilities?.includes('yakit.browser_authorization.task'));
+  const instanceDiscoveryReady = bridge.state === 'connected'
+    && Boolean(bridge.capabilities?.includes('yakit.browser_authorization.instances'));
+  const currentBrowserInstance = browserInstances.find((instance) => instance.current);
+  const targetBrowserInstance = browserInstances.find((instance) => instance.deviceId === targetDeviceId);
 
   const refreshInspection = useCallback(async () => {
     const next = await request('isolation.inspect', {
@@ -269,6 +275,21 @@ export function AuthorizationTestingWorkspace({
     });
     dispatch({ type: 'patch', value: { inspection: next } });
   }, [eligibleTabs]);
+
+  const refreshBrowserInstances = useCallback(async () => {
+    if (!instanceDiscoveryReady) {
+      setBrowserInstances([]);
+      setTargetDeviceId('');
+      return;
+    }
+    const result = await request('authorization.yakit.instances');
+    setBrowserInstances(result.instances);
+    setTargetDeviceId((current) => (
+      result.instances.some((instance) => !instance.current && instance.deviceId === current)
+        ? current
+        : result.instances.find((instance) => !instance.current)?.deviceId || ''
+    ));
+  }, [instanceDiscoveryReady]);
 
   useEffect(() => {
     void (async () => {
@@ -314,6 +335,17 @@ export function AuthorizationTestingWorkspace({
   useEffect(() => {
     void refreshInspection().catch((error) => setLocalError(errorMessage(error)));
   }, [refreshInspection]);
+
+  useEffect(() => {
+    void refreshBrowserInstances().catch((error) => setLocalError(errorMessage(error)));
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void refreshBrowserInstances().catch((error) => setLocalError(errorMessage(error)));
+      }
+    };
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => document.removeEventListener('visibilitychange', refreshWhenVisible);
+  }, [refreshBrowserInstances]);
 
   useEffect(() => {
     if (!hydrated || workspace || !leftTab || !rightTab) return;
@@ -447,11 +479,16 @@ export function AuthorizationTestingWorkspace({
 
   const openCrossBrowserWorkspace = () => run(async () => {
     if (!activeTab) throw new Error('请先选择需要测试的页面');
+    if (!targetBrowserInstance) throw new Error('请选择另一个在线的 YTray 浏览器实例');
     if (!bridge.capabilities?.includes('yakit.browser_authorization.open')) {
       throw new Error('当前 Yak 引擎不支持打开跨浏览器工作区');
     }
-    await request('authorization.yakit.open', { tabId: activeTab.id, mode });
-  }, '已在 Yakit 打开跨浏览器越权测试，并带入当前页面');
+    await request('authorization.yakit.open', {
+      tabId: activeTab.id,
+      mode,
+      targetDeviceId: targetBrowserInstance.deviceId,
+    });
+  }, `已将浏览器 ${currentBrowserInstance?.badge || '当前'} 与 ${targetBrowserInstance?.badge || '对照'} 带入 Yakit`);
 
   const refreshWorkspaceDocuments = async (): Promise<BrowserAuthorizationWorkspace> => {
     if (!workspace || !leftTab || !rightTab) throw new Error('请先建立 A/B 工作区');
@@ -733,15 +770,38 @@ export function AuthorizationTestingWorkspace({
     {!workspace && <section className="authorization-cross-browser">
       <span><UserRoundPlus size={18} /></span>
       <div>
-        <strong>使用 YTray 的多个浏览器实例</strong>
-        <small>把当前页面作为资源身份带入 Yakit，再选择在线的浏览器 A、B 或 C 作为独立对照账号。</small>
+        <strong>选择独立浏览器实例</strong>
+        <small>{!instanceDiscoveryReady
+          ? '当前 Yak 版本不能读取在线实例，请更新引擎后重连。'
+          : browserInstances.length < 2
+            ? '只检测到当前浏览器，请先用 YTray 启动并连接另一个实例。'
+            : '当前页面作为资源所有者，所选浏览器作为独立对照账号。'}</small>
+        <div className="authorization-cross-browser__instances">
+          {browserInstances.map((instance) => <button
+            key={instance.deviceId}
+            type="button"
+            disabled={instance.current}
+            aria-pressed={!instance.current && instance.deviceId === targetDeviceId}
+            className={instance.current ? 'is-current' : instance.deviceId === targetDeviceId ? 'is-selected' : ''}
+            onClick={() => setTargetDeviceId(instance.deviceId)}
+          >
+            <b>{instance.badge}</b>
+            <span>{instance.current ? '当前' : instance.deviceId === targetDeviceId ? '已选择' : '在线'}</span>
+          </button>)}
+          <button
+            type="button"
+            className="is-refresh"
+            aria-label="刷新在线浏览器实例"
+            onClick={() => void refreshBrowserInstances().catch((error) => setLocalError(errorMessage(error)))}
+          ><RefreshCw size={13} /></button>
+        </div>
       </div>
       <Button
         variant="ghost"
-        disabled={busy || !activeTab || !bridge.capabilities?.includes('yakit.browser_authorization.open')}
+        disabled={busy || !activeTab || !targetBrowserInstance || !bridge.capabilities?.includes('yakit.browser_authorization.open')}
         onClick={() => void openCrossBrowserWorkspace()}
       >
-        <ExternalLink size={15} />在 Yakit 选择实例
+        <ExternalLink size={15} />用 {targetBrowserInstance?.badge || '—'} 在 Yakit 测试
       </Button>
     </section>}
 

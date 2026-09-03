@@ -14,6 +14,7 @@ import type {
   BrowserFirefoxManagedContainer,
   BrowserIsolationInspection,
   BrowserIsolationProof,
+  BrowserAuthorizationInstance,
   BrowserDeepCaptureMatcher,
   BrowserDeepCaptureStatus,
   CookieInput,
@@ -97,8 +98,16 @@ export interface ExtensionRequestMap {
     output: unknown;
   };
   'authorization.yakit.open': {
-    input: { workspaceId: string } | { tabId: number; mode?: 'horizontal' | 'vertical' };
+    input: { workspaceId: string } | {
+      tabId: number;
+      mode?: 'horizontal' | 'vertical';
+      targetDeviceId?: string;
+    };
     output: { workspaceId?: string; tabId?: number; opened: boolean };
+  };
+  'authorization.yakit.instances': {
+    input: undefined;
+    output: { instances: BrowserAuthorizationInstance[] };
   };
   'proxy.save': { input: ProxyProfile; output: ExtensionState };
   'proxy.delete': { input: { id: string }; output: ExtensionState };
