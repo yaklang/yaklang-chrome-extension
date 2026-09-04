@@ -32,7 +32,9 @@ const CAPTURED_RESOURCE_TYPES = [
 ] as const;
 
 type CapturePersistence = 'pending' | 'persisted' | 'memory-only' | 'degraded';
-type CaptureOwner = { kind: 'local' } | { kind: 'grant'; grantId: string; expiresAt: number };
+type CaptureOwner = { kind: 'local' } | {
+  kind: 'grant'; grantId: string; expiresAt: number; followSameOriginNavigation?: boolean;
+};
 
 interface CaptureSession {
   target: BrowserTarget;
@@ -270,7 +272,7 @@ function addRestoredSession(value: PersistedCaptureSession): boolean {
     options: normalizedOptions(value.options),
     records,
     owner: value.owner?.kind === 'grant' && typeof value.owner.grantId === 'string' && typeof value.owner.expiresAt === 'number'
-      ? value.owner
+      ? { ...value.owner, followSameOriginNavigation: value.owner.followSameOriginNavigation === true }
       : { kind: 'local' },
     retainedBytes,
     recordBytes,
@@ -283,7 +285,11 @@ function addRestoredSession(value: PersistedCaptureSession): boolean {
   totalRecordCount += records.length;
   totalRetainedBytes += retainedBytes;
   const ownerWasValid = value.owner?.kind === 'local'
-    || (value.owner?.kind === 'grant' && typeof value.owner.grantId === 'string' && typeof value.owner.expiresAt === 'number');
+    || (value.owner?.kind === 'grant'
+      && typeof value.owner.grantId === 'string'
+      && typeof value.owner.expiresAt === 'number'
+      && (value.owner.followSameOriginNavigation === undefined
+        || typeof value.owner.followSameOriginNavigation === 'boolean'));
   return records.length === value.records.length && ownerWasValid && !existing;
 }
 
@@ -605,7 +611,7 @@ browser.webRequest.onErrorOccurred.addListener((details) => {
   dispatchCaptureEvent(errorRecord, details);
 }, { urls: ['<all_urls>'], types: [...CAPTURED_RESOURCE_TYPES] });
 
-async function rebindLocalCaptureAfterNavigation(details: {
+async function rebindCaptureAfterNavigation(details: {
   tabId: number;
   frameId: number;
   documentId?: string;
@@ -613,7 +619,8 @@ async function rebindLocalCaptureAfterNavigation(details: {
 }): Promise<void> {
   await restorePromise;
   const session = captureSessions.get(details.tabId);
-  if (!session || session.owner.kind !== 'local' || session.target.frameId !== details.frameId) return;
+  if (!session || session.target.frameId !== details.frameId
+    || (session.owner.kind === 'grant' && !session.owner.followSameOriginNavigation)) return;
   if (details.documentId && session.target.documentId === details.documentId) return;
   let isolationBoundary: string | undefined;
   try {
@@ -639,7 +646,7 @@ async function rebindLocalCaptureAfterNavigation(details: {
 }
 
 browser.webNavigation.onCommitted.addListener((details) => {
-  void rebindLocalCaptureAfterNavigation(details).catch(() => undefined);
+  void rebindCaptureAfterNavigation(details).catch(() => undefined);
 });
 browser.tabs.onRemoved.addListener((tabId) => {
   if (!deleteSession(tabId)) return;

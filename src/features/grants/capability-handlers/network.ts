@@ -3,7 +3,9 @@ import type {
   YakPocGenerateResult,
 } from '@/types/models';
 import type { CapabilityDomainHandler } from '../capability-context';
-import { allowedTarget, requireScope } from '../capability-context';
+import {
+  allowedTarget, PAIRED_BROWSER_INSTANCE_ACCESS_ID, requireScope,
+} from '../capability-context';
 import {
   clearNetworkRequests,
   exportNetworkRequest,
@@ -30,7 +32,12 @@ export const networkCapabilityHandler: CapabilityDomainHandler = {
         captureBody: input.captureBody === true,
         maxEntries: typeof input.maxEntries === 'number' ? input.maxEntries : undefined,
         maxBodyBytes: typeof input.maxBodyBytes === 'number' ? input.maxBodyBytes : undefined,
-      }, { kind: 'grant', grantId: grant.id, expiresAt: grant.expiresAt });
+      }, {
+        kind: 'grant',
+        grantId: grant.id,
+        expiresAt: grant.expiresAt,
+        followSameOriginNavigation: grant.id === PAIRED_BROWSER_INSTANCE_ACCESS_ID,
+      });
     }
     if (method === 'browser.network.status') return networkCaptureStatus(target);
     if (method === 'browser.network.list') {

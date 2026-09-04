@@ -185,6 +185,37 @@ describe('network capture lifecycle, budget and persistence', () => {
     expect((await networkCaptureStatus({ tabId: 43, frameId: 0, documentId: 'document-cross-origin' })).active).toBe(false);
   });
 
+  it('continues a paired-browser capture across a same-origin login navigation', async () => {
+    setTarget(45, 'http://localhost:8080/logic/user/login', 'document-login');
+    const before = await start(
+      45,
+      { captureHeaders: true, captureBody: true },
+      {
+        kind: 'grant',
+        grantId: 'paired-browser-instance',
+        expiresAt: Number.MAX_SAFE_INTEGER,
+        followSameOriginNavigation: true,
+      },
+    );
+
+    await committed(45, 'http://localhost:8080/logic/user/profile', 'document-profile');
+
+    const after = await networkCaptureStatus({ tabId: 45, frameId: 0, documentId: 'document-profile' });
+    expect(after).toMatchObject({ active: true, startedAt: before.startedAt });
+
+    await committed(45, 'http://other.example/landing', 'document-other');
+    expect((await networkCaptureStatus({ tabId: 45, frameId: 0, documentId: 'document-other' })).active).toBe(false);
+  });
+
+  it('does not silently extend a regular scoped grant across navigation', async () => {
+    setTarget(46, 'https://scoped.example.test/start', 'document-start');
+    await start(46, {}, { kind: 'grant', grantId: 'scoped-grant', expiresAt: NOW + 60_000 });
+
+    await committed(46, 'https://scoped.example.test/next', 'document-next');
+
+    expect((await networkCaptureStatus({ tabId: 46, frameId: 0, documentId: 'document-next' })).active).toBe(false);
+  });
+
   it('does not retain a cross-origin navigation request before the commit boundary is processed', async () => {
     setTarget(44, 'https://source.example.test/start', 'document-source');
     await start(44);
