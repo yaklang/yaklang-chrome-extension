@@ -289,6 +289,9 @@ const payloadSchemas = {
     schema: v.picklist([
       'authorization.workspace.create',
       'authorization.workspace.inspect',
+      'authorization.capture.start',
+      'authorization.capture.status',
+      'authorization.capture.stop',
       'authorization.baseline.candidates',
       'authorization.baseline.bind',
       'authorization.logical.bind',
@@ -302,14 +305,6 @@ const payloadSchemas = {
     payload: v.record(v.string(), v.unknown()),
     timeoutMs: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(5_000), v.maxValue(120_000))),
   }),
-  'authorization.yakit.open': v.union([
-    v.strictObject({ workspaceId: id }),
-    v.strictObject({
-      tabId,
-      mode: v.optional(v.picklist(['horizontal', 'vertical'])),
-      targetDeviceId: v.optional(id),
-    }),
-  ]),
   'authorization.yakit.instances': noPayload,
   'proxy.save': proxyProfile,
   'proxy.delete': v.strictObject({ id }),

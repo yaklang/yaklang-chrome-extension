@@ -222,6 +222,8 @@ export interface BrowserAuthorizationInstance {
   deviceId: string;
   badge: string;
   current: boolean;
+  tabs: ActiveTabInfo[];
+  error?: string;
 }
 
 export type BridgePairingState = 'idle' | 'requesting' | 'pending' | 'approved' | 'rejected' | 'expired' | 'error';

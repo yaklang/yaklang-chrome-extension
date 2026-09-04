@@ -83,6 +83,9 @@ export interface ExtensionRequestMap {
       schema:
         | 'authorization.workspace.create'
         | 'authorization.workspace.inspect'
+        | 'authorization.capture.start'
+        | 'authorization.capture.status'
+        | 'authorization.capture.stop'
         | 'authorization.baseline.candidates'
         | 'authorization.baseline.bind'
         | 'authorization.logical.bind'
@@ -96,14 +99,6 @@ export interface ExtensionRequestMap {
       timeoutMs?: number;
     };
     output: unknown;
-  };
-  'authorization.yakit.open': {
-    input: { workspaceId: string } | {
-      tabId: number;
-      mode?: 'horizontal' | 'vertical';
-      targetDeviceId?: string;
-    };
-    output: { workspaceId?: string; tabId?: number; opened: boolean };
   };
   'authorization.yakit.instances': {
     input: undefined;

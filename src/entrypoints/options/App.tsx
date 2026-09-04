@@ -238,7 +238,7 @@ function App() {
 
         <div className="content-area">
           {section === 'overview' && <Overview state={state} bridge={bridge} tab={tab} navigate={navigate} run={run} busy={busy} />}
-          {section === 'authorization' && <AuthorizationTestingWorkspace state={state} setState={setState} tabs={tabs} activeTab={tab} bridge={bridge} refreshTabs={refreshTabs} run={run} busy={busy} />}
+          {section === 'authorization' && <AuthorizationTestingWorkspace bridge={bridge} run={run} busy={busy} />}
           {section === 'proxies' && <ProxyProfilesView state={state} setState={setState} run={run} busy={busy} tab={tab} />}
           {section === 'rules' && <AutoSwitchView state={state} setState={setState} tab={tab} run={run} busy={busy} />}
           {section === 'sources' && <RuleSourcesView state={state} setState={setState} tab={tab} run={run} busy={busy} />}

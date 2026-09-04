@@ -95,14 +95,6 @@ describe('extension request schemas', () => {
       action: 'authorization.engine.task',
       payload: { schema: 'authorization.unknown', payload: {} },
     })).toThrow('schema');
-    expect(parseExtensionRequest({
-      action: 'authorization.yakit.open',
-      payload: { workspaceId: 'authorization-workspace-1' },
-    }).action).toBe('authorization.yakit.open');
-    expect(parseExtensionRequest({
-      action: 'authorization.yakit.open',
-      payload: { tabId: 12, mode: 'horizontal', targetDeviceId: 'device-b' },
-    }).payload).toEqual({ tabId: 12, mode: 'horizontal', targetDeviceId: 'device-b' });
     expect(parseExtensionRequest({ action: 'authorization.yakit.instances' }).action)
       .toBe('authorization.yakit.instances');
     expect(parseExtensionRequest({

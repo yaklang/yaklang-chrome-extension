@@ -164,11 +164,6 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
         request.payload.timeoutMs,
       ));
     }
-    case 'authorization.yakit.open':
-      return ok(await engineBridge.requestEngine(
-        'yakit.browser_authorization.open',
-        request.payload,
-      ));
     case 'authorization.yakit.instances':
       return ok(await engineBridge.requestEngine('yakit.browser_authorization.instances', {}));
     case 'context.capture': {

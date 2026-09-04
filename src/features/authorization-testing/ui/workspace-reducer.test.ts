@@ -16,12 +16,14 @@ function fixtureWorkspace(): BrowserAuthorizationWorkspace {
     mode: 'horizontal',
     state: 'ready',
     left: {
+      deviceId: 'device-a',
       accountLabel: '账号 A',
       origin: 'https://example.test',
       target: { tabId: 11, frameId: 0, documentId: 'document-a' },
       authentication: { status: 'authenticated', cookieCount: 1, storageEntryCount: 0 },
     },
     right: {
+      deviceId: 'device-b',
       accountLabel: '账号 B',
       origin: 'https://example.test',
       target: { tabId: 22, frameId: 0, documentId: 'document-b' },
@@ -71,6 +73,8 @@ describe('authorization workspace UI reducer', () => {
   it('resets workflow evidence without discarding the selected identities', () => {
     const previous = {
       ...INITIAL_AUTHORIZATION_WORKSPACE_UI,
+      leftDeviceId: 'device-a',
+      rightDeviceId: 'device-b',
       leftTabId: 11,
       rightTabId: 12,
       workspace: { id: 'old' } as BrowserAuthorizationWorkspace,
@@ -80,6 +84,8 @@ describe('authorization workspace UI reducer', () => {
 
     expect(next.leftTabId).toBe(11);
     expect(next.rightTabId).toBe(12);
+    expect(next.leftDeviceId).toBe('device-a');
+    expect(next.rightDeviceId).toBe('device-b');
     expect(next.workspace).toBeUndefined();
     expect(next.capture).toEqual({});
   });
@@ -87,10 +93,8 @@ describe('authorization workspace UI reducer', () => {
   it('persists only durable workflow state', () => {
     const value = persistedAuthorizationWorkspaceUI({
       ...INITIAL_AUTHORIZATION_WORKSPACE_UI,
-      inspection: { version: 1 } as never,
       capture: { left: { active: true } } as never,
     });
-    expect(value).not.toHaveProperty('inspection');
     expect(value).not.toHaveProperty('capture');
   });
 
@@ -99,6 +103,8 @@ describe('authorization workspace UI reducer', () => {
       type: 'hydrate',
       value: {
         mode: 'vertical',
+        leftDeviceId: 'device-a',
+        rightDeviceId: 'device-b',
         leftTabId: 11,
         rightTabId: 'not-a-tab',
         leftLabel: '低权限账号',
@@ -126,6 +132,8 @@ describe('authorization workspace UI reducer', () => {
     };
     const normalized = normalizePersistedAuthorizationWorkspaceUI({
       mode: 'horizontal',
+      leftDeviceId: 'device-a',
+      rightDeviceId: 'device-b',
       leftTabId: 11,
       rightTabId: 22,
       leftLabel: '账号 A',

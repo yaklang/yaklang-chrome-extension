@@ -1,7 +1,4 @@
-import type {
-  BrowserIsolationInspection,
-  NetworkCaptureStatus,
-} from '@/types/models';
+import type { NetworkCaptureStatus } from '@/types/models';
 import type {
   BrowserAuthorizationBaselineCandidate,
   BrowserAuthorizationMode,
@@ -19,6 +16,8 @@ const EMPTY_SELECTION: Record<BrowserAuthorizationSide, string> = { left: '', ri
 
 export interface PersistedAuthorizationWorkspaceUI {
   mode: BrowserAuthorizationMode;
+  leftDeviceId: string;
+  rightDeviceId: string;
   leftTabId?: number;
   rightTabId?: number;
   leftLabel: string;
@@ -31,12 +30,13 @@ export interface PersistedAuthorizationWorkspaceUI {
 }
 
 export interface AuthorizationWorkspaceUIState extends PersistedAuthorizationWorkspaceUI {
-  inspection?: BrowserIsolationInspection;
   capture: Partial<Record<BrowserAuthorizationSide, NetworkCaptureStatus>>;
 }
 
 export const INITIAL_AUTHORIZATION_WORKSPACE_UI: AuthorizationWorkspaceUIState = {
   mode: 'horizontal',
+  leftDeviceId: '',
+  rightDeviceId: '',
   leftLabel: '账号 A',
   rightLabel: '账号 B',
   candidates: EMPTY_AUTHORIZATION_CANDIDATES,
@@ -124,6 +124,7 @@ function safeWorkspaceForUI(input: unknown): BrowserAuthorizationWorkspace | und
     const target = record(side?.target);
     const authentication = record(side?.authentication);
     return Boolean(side && target && authentication
+      && typeof side.deviceId === 'string' && side.deviceId
       && Number.isSafeInteger(target.tabId) && Number(target.tabId) > 0
       && Number.isSafeInteger(target.frameId) && Number(target.frameId) >= 0
       && typeof target.documentId === 'string' && target.documentId
@@ -265,6 +266,8 @@ export function normalizePersistedAuthorizationWorkspaceUI(
   };
   return {
     mode: value.mode === 'vertical' ? 'vertical' : 'horizontal',
+    leftDeviceId: typeof value.leftDeviceId === 'string' ? value.leftDeviceId.slice(0, 320) : '',
+    rightDeviceId: typeof value.rightDeviceId === 'string' ? value.rightDeviceId.slice(0, 320) : '',
     leftTabId: Number.isSafeInteger(value.leftTabId) && Number(value.leftTabId) > 0 ? Number(value.leftTabId) : undefined,
     rightTabId: Number.isSafeInteger(value.rightTabId) && Number(value.rightTabId) > 0 ? Number(value.rightTabId) : undefined,
     leftLabel: typeof value.leftLabel === 'string' ? value.leftLabel.slice(0, 80) : '账号 A',
@@ -290,6 +293,8 @@ export function authorizationWorkspaceUIReducer(
       return {
         ...state,
         mode: value.mode === 'vertical' ? 'vertical' : 'horizontal',
+        leftDeviceId: value.leftDeviceId || '',
+        rightDeviceId: value.rightDeviceId || '',
         leftTabId: value.leftTabId,
         rightTabId: value.rightTabId,
         leftLabel: value.leftLabel || '账号 A',
@@ -351,6 +356,8 @@ export function persistedAuthorizationWorkspaceUI(
 ): PersistedAuthorizationWorkspaceUI {
   return {
     mode: state.mode,
+    leftDeviceId: state.leftDeviceId,
+    rightDeviceId: state.rightDeviceId,
     leftTabId: state.leftTabId,
     rightTabId: state.rightTabId,
     leftLabel: state.leftLabel,

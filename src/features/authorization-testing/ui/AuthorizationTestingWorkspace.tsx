@@ -1,15 +1,13 @@
-import { useCallback, useEffect, useMemo, useReducer, useState } from 'react';
+import { useCallback, useEffect, useReducer, useState } from 'react';
 import { browser } from 'wxt/browser';
 import {
   AlertTriangle, ArrowRight, Check, CircleCheck, ExternalLink, Fingerprint,
-  LockKeyhole, Play, RefreshCw, RotateCcw, ShieldAlert, Square, UserRoundPlus,
+  LockKeyhole, Play, RefreshCw, RotateCcw, ShieldAlert, Square,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { authorizationShareGrantInput } from '@/features/grants/gateway-share';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import type {
-  ActiveTabInfo, BridgeStatus, BrowserAuthorizationInstance, BrowserIsolationContext, BrowserIsolationInspection,
-  ExtensionState, NetworkCaptureStatus,
+  ActiveTabInfo, BridgeStatus, BrowserAuthorizationInstance, NetworkCaptureStatus,
 } from '@/types/models';
 import {
   runBrowserAuthorizationTask,
@@ -19,10 +17,6 @@ import {
   type BrowserAuthorizationWorkspace,
 } from '../engine';
 import './authorization-testing-workspace.css';
-import {
-  authorizationIdentityOptionDisabledReason,
-  normalizeAuthorizationIdentityTabSelection,
-} from './identity-selection';
 import {
   authorizationWorkspaceUIReducer,
   INITIAL_AUTHORIZATION_WORKSPACE_UI,
@@ -34,15 +28,10 @@ import {
 } from './AuthorizationEvidenceWorkbench';
 import { IdentitySlot } from './IdentitySlot';
 
-const SESSION_KEY = 'session.authorization-testing-workspace-ui.v1';
+const SESSION_KEY = 'session.authorization-testing-workspace-ui.v2';
 
 interface AuthorizationTestingWorkspaceProps {
-  state: ExtensionState;
-  setState: (state: ExtensionState) => void;
-  tabs: ActiveTabInfo[];
-  activeTab?: ActiveTabInfo;
   bridge: BridgeStatus;
-  refreshTabs: () => Promise<void>;
   run: (task: () => Promise<void>, success?: string) => Promise<void>;
   busy: boolean;
 }
@@ -63,18 +52,17 @@ function shortHost(tab?: ActiveTabInfo): string {
   }
 }
 
+async function stopWorkspaceCapture(workspaceId: string): Promise<void> {
+  await Promise.allSettled((['left', 'right'] as const).map((side) => (
+    runBrowserAuthorizationTask('authorization.capture.stop', { workspaceId, side })
+  )));
+}
+
 function formatWorkspaceRemaining(expiresAt: number, now: number): string {
   const remainingSeconds = Math.max(0, Math.ceil((expiresAt - now) / 1_000));
   if (remainingSeconds < 60) return `${remainingSeconds} 秒`;
   const minutes = Math.ceil(remainingSeconds / 60);
   return minutes < 60 ? `${minutes} 分钟` : `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分钟`;
-}
-
-function contextForTab(
-  inspection: BrowserIsolationInspection | undefined,
-  tabId: number | undefined,
-): BrowserIsolationContext | undefined {
-  return inspection?.contexts.find((context) => tabId && context.tabIds.includes(tabId));
 }
 
 function proofLabel(workspace?: BrowserAuthorizationWorkspace): string {
@@ -212,19 +200,10 @@ function newestComparableAuthorizationPair(
 }
 
 export function AuthorizationTestingWorkspace({
-  state,
-  setState,
-  tabs,
-  activeTab,
   bridge,
-  refreshTabs,
   run,
   busy,
 }: AuthorizationTestingWorkspaceProps) {
-  const eligibleTabs = useMemo(
-    () => tabs.filter((item) => item.url.startsWith('http://') || item.url.startsWith('https://')),
-    [tabs],
-  );
   const [hydrated, setHydrated] = useState(false);
   const [ui, dispatch] = useReducer(
     authorizationWorkspaceUIReducer,
@@ -232,11 +211,12 @@ export function AuthorizationTestingWorkspace({
   );
   const {
     mode,
+    leftDeviceId,
+    rightDeviceId,
     leftTabId,
     rightTabId,
     leftLabel,
     rightLabel,
-    inspection,
     workspace,
     candidates,
     selected,
@@ -245,49 +225,28 @@ export function AuthorizationTestingWorkspace({
     canaryPaths,
   } = ui;
   const [localError, setLocalError] = useState('');
-  const [identityNotice, setIdentityNotice] = useState('');
   const [clock, setClock] = useState(Date.now());
   const [browserInstances, setBrowserInstances] = useState<BrowserAuthorizationInstance[]>([]);
-  const [targetDeviceId, setTargetDeviceId] = useState('');
-
-  const leftTab = eligibleTabs.find((item) => item.id === leftTabId);
-  const rightTab = eligibleTabs.find((item) => item.id === rightTabId);
-  const leftContext = contextForTab(inspection, leftTabId);
-  const rightContext = contextForTab(inspection, rightTabId);
-  const leftIsolationContextId = leftContext?.contextId || leftTab?.isolationContextId;
-  const rightIsolationContextId = rightContext?.contextId || rightTab?.isolationContextId;
-  const identityContextsSeparated = Boolean(
-    leftIsolationContextId
-    && rightIsolationContextId
-    && leftIsolationContextId !== rightIsolationContextId,
-  );
+  const leftInstance = browserInstances.find((instance) => instance.deviceId === leftDeviceId);
+  const rightInstance = browserInstances.find((instance) => instance.deviceId === rightDeviceId);
+  const leftTab = leftInstance?.tabs.find((item) => item.id === leftTabId);
+  const rightTab = rightInstance?.tabs.find((item) => item.id === rightTabId);
   const sameOrigin = Boolean(leftTab && rightTab && tabOrigin(leftTab) === tabOrigin(rightTab));
   const capabilityReady = bridge.state === 'connected'
     && Boolean(bridge.capabilities?.includes('yakit.browser_authorization.task'));
   const instanceDiscoveryReady = bridge.state === 'connected'
     && Boolean(bridge.capabilities?.includes('yakit.browser_authorization.instances'));
-  const targetBrowserInstance = browserInstances.find((instance) => instance.deviceId === targetDeviceId);
-
-  const refreshInspection = useCallback(async () => {
-    const next = await request('isolation.inspect', {
-      tabIds: eligibleTabs.length > 0 ? eligibleTabs.map((item) => item.id) : undefined,
-    });
-    dispatch({ type: 'patch', value: { inspection: next } });
-  }, [eligibleTabs]);
 
   const refreshBrowserInstances = useCallback(async () => {
     if (!instanceDiscoveryReady) {
       setBrowserInstances([]);
-      setTargetDeviceId('');
       return [];
     }
     const result = await request('authorization.yakit.instances');
+    if (!Array.isArray(result.instances) || result.instances.some((instance) => !Array.isArray(instance.tabs))) {
+      throw new Error('当前 Yak 引擎不支持插件内 A/B 越权测试，请更新引擎并重新连接两个浏览器实例');
+    }
     setBrowserInstances(result.instances);
-    setTargetDeviceId((current) => (
-      result.instances.some((instance) => !instance.current && instance.deviceId === current)
-        ? current
-        : result.instances.find((instance) => !instance.current)?.deviceId || ''
-    ));
     return result.instances;
   }, [instanceDiscoveryReady]);
 
@@ -305,36 +264,41 @@ export function AuthorizationTestingWorkspace({
   }, []);
 
   useEffect(() => {
-    if (!hydrated || workspace) return;
-    const normalized = normalizeAuthorizationIdentityTabSelection({
-      eligibleTabIds: eligibleTabs.map((item) => item.id),
-      activeTabId: activeTab?.id,
-      leftTabId,
-      rightTabId,
+    if (!hydrated || workspace || !browserInstances.length) return;
+    const left = browserInstances.find((instance) => instance.current);
+    const right = browserInstances.find((instance) => (
+      !instance.current && instance.deviceId === rightDeviceId
+    )) || browserInstances.find((instance) => !instance.current);
+    const nextLeftTabId = left?.tabs.find((tab) => tab.id === leftTabId)?.id
+      || left?.tabs.find((tab) => tab.active)?.id
+      || left?.tabs[0]?.id;
+    const nextRightTabId = right?.tabs.find((tab) => tab.id === rightTabId)?.id
+      || right?.tabs.find((tab) => tab.active)?.id
+      || right?.tabs[0]?.id;
+    if (leftDeviceId === (left?.deviceId || '')
+      && rightDeviceId === (right?.deviceId || '')
+      && leftTabId === nextLeftTabId
+      && rightTabId === nextRightTabId) return;
+    dispatch({
+      type: 'patch',
+      value: {
+        leftDeviceId: left?.deviceId || '',
+        rightDeviceId: right?.deviceId || '',
+        leftTabId: nextLeftTabId,
+        rightTabId: nextRightTabId,
+      },
     });
-    if (normalized.leftTabId !== leftTabId || normalized.rightTabId !== rightTabId) {
-      dispatch({
-        type: 'patch',
-        value: {
-          leftTabId: normalized.leftTabId,
-          rightTabId: normalized.rightTabId,
-        },
-      });
-    }
-  }, [activeTab?.id, eligibleTabs, hydrated, leftTabId, rightTabId, workspace]);
+  }, [browserInstances, hydrated, leftDeviceId, leftTabId, rightDeviceId, rightTabId, workspace]);
 
   useEffect(() => {
     if (!hydrated) return;
     const value = persistedAuthorizationWorkspaceUI(ui);
     void browser.storage.session.set({ [SESSION_KEY]: value }).catch(() => undefined);
   }, [
-    canaryPaths, candidates, hydrated, leftLabel, leftTabId, mode, rightLabel, rightTabId,
+    canaryPaths, candidates, hydrated, leftDeviceId, leftLabel, leftTabId, mode,
+    rightDeviceId, rightLabel, rightTabId,
     selected, selectedPlanCandidateId, workspace,
   ]);
-
-  useEffect(() => {
-    void refreshInspection().catch((error) => setLocalError(errorMessage(error)));
-  }, [refreshInspection]);
 
   useEffect(() => {
     void refreshBrowserInstances().catch((error) => setLocalError(errorMessage(error)));
@@ -348,54 +312,15 @@ export function AuthorizationTestingWorkspace({
   }, [refreshBrowserInstances]);
 
   useEffect(() => {
-    if (!hydrated || workspace || !leftTab || !rightTab) return;
-    const reason = authorizationIdentityOptionDisabledReason({
-      candidateTabId: rightTab.id,
-      candidateIsolationContextId: rightIsolationContextId,
-      otherTabId: leftTab.id,
-      otherIsolationContextId: leftIsolationContextId,
-      otherLabel: '身份 A',
-    });
-    if (!reason) return;
-    dispatch({ type: 'patch', value: { rightTabId: undefined } });
-    setIdentityNotice(
-      leftTab.id === rightTab.id
-        ? '身份 B 已清空：同一个页面不能同时代表两个身份'
-        : '身份 B 已清空：该页面与身份 A 共享同一登录态',
-    );
-  }, [
-    hydrated,
-    leftIsolationContextId,
-    leftTab?.id,
-    rightIsolationContextId,
-    rightTab?.id,
-    workspace,
-  ]);
-
-  useEffect(() => {
     if (!workspace) return;
     void Promise.all((['left', 'right'] as const).map(async (side) => {
-      const target = workspace[side].target;
-      const status = await request('network.capture.status', target);
+      const status = await runBrowserAuthorizationTask<NetworkCaptureStatus>(
+        'authorization.capture.status',
+        { workspaceId: workspace.id, side },
+      );
       dispatch({ type: 'capture.update', side, status });
     })).catch(() => undefined);
   }, [workspace?.id]);
-
-  useEffect(() => {
-    const listener = (message: unknown) => {
-      const input = message as { action?: string; payload?: { tabId?: number } };
-      if (input?.action !== 'network.capture.changed') return;
-      const side = input.payload?.tabId === workspace?.left.target.tabId
-        ? 'left'
-        : input.payload?.tabId === workspace?.right.target.tabId ? 'right' : undefined;
-      if (!side || !workspace) return;
-      void request('network.capture.status', workspace[side].target)
-        .then((status) => dispatch({ type: 'capture.update', side, status }))
-        .catch(() => undefined);
-    };
-    browser.runtime.onMessage.addListener(listener);
-    return () => browser.runtime.onMessage.removeListener(listener);
-  }, [workspace]);
 
   useEffect(() => {
     if (!workspace) return undefined;
@@ -405,6 +330,7 @@ export function AuthorizationTestingWorkspace({
   }, [workspace?.id]);
 
   const resetWorkspace = async () => {
+    if (workspace) await stopWorkspaceCapture(workspace.id);
     dispatch({ type: 'workspace.reset' });
     setLocalError('');
     await browser.storage.session.remove(SESSION_KEY).catch(() => undefined);
@@ -412,133 +338,72 @@ export function AuthorizationTestingWorkspace({
 
   const assignIdentityTab = (side: BrowserAuthorizationSide, nextTabId: number | undefined) => {
     setLocalError('');
-    setIdentityNotice('');
     dispatch({
       type: 'patch',
       value: side === 'left' ? { leftTabId: nextTabId } : { rightTabId: nextTabId },
     });
   };
 
-  const openIncognitoSettings = () => run(async () => {
-    await browser.tabs.create({ url: `chrome://extensions/?id=${browser.runtime.id}` });
-  }, '已打开扩展详情，请开启“允许在无痕模式下运行”');
-
-  const recheckIsolationCapability = () => run(async () => {
-    await refreshTabs();
-    await refreshInspection();
-  }, '浏览器隔离能力已重新检测');
-
-  const createIsolatedIdentity = () => run(async () => {
-    if (!leftTab) throw new Error('请先选择身份 A 的页面');
-    const result = inspection?.browser === 'firefox'
-      ? await request('isolation.container.open', { url: leftTab.url, name: rightLabel || '账号 B' })
-      : await request('isolation.incognito.open', { url: leftTab.url });
-    await refreshTabs();
-    dispatch({ type: 'patch', value: { rightTabId: result.tab.id } });
-    await refreshInspection();
-  }, inspection?.browser === 'firefox' ? '已创建独立 Container，请在新页面登录身份 B' : '已打开无痕身份页面，请在新页面登录身份 B');
+  const assignRightInstance = (deviceId: string) => {
+    const instance = browserInstances.find((item) => item.deviceId === deviceId);
+    dispatch({
+      type: 'patch',
+      value: {
+        rightDeviceId: deviceId,
+        rightTabId: instance?.tabs.find((tab) => tab.active)?.id || instance?.tabs[0]?.id,
+      },
+    });
+  };
 
   const prepareWorkspace = () => run(async () => {
     setLocalError('');
-    if (!leftTab || !rightTab) throw new Error('请选择身份 A 和身份 B 的页面');
-    if (leftTab.id === rightTab.id) throw new Error('A/B 身份不能使用同一个标签页');
+    if (!leftInstance || !rightInstance || !leftTab || !rightTab) throw new Error('请选择在线的 A/B 浏览器及页面');
+    if (leftDeviceId === rightDeviceId) throw new Error('A/B 必须来自两个独立浏览器实例');
     if (!sameOrigin) throw new Error('A/B 页面必须属于同一站点 Origin');
     if (!capabilityReady) throw new Error('当前 Yak 引擎不支持插件授权测试任务，请更新并重新连接引擎');
 
-    const nextState = await request('grant.create', authorizationShareGrantInput(state, [leftTab, rightTab]));
-    setState(nextState);
     const nextWorkspace = await runBrowserAuthorizationTask<BrowserAuthorizationWorkspace>(
       'authorization.workspace.create',
       {
         mode,
-        left: { tabId: leftTab.id, frameId: 0, accountLabel: leftLabel.trim() || '账号 A' },
-        right: { tabId: rightTab.id, frameId: 0, accountLabel: rightLabel.trim() || '账号 B' },
+        left: { deviceId: leftDeviceId, tabId: leftTab.id, frameId: 0, accountLabel: leftLabel.trim() || '账号 A' },
+        right: { deviceId: rightDeviceId, tabId: rightTab.id, frameId: 0, accountLabel: rightLabel.trim() || '账号 B' },
       },
     );
     dispatch({ type: 'workspace.initialize', workspace: nextWorkspace });
     if (nextWorkspace.state === 'ready' || nextWorkspace.state === 'conditional') {
-      const [leftStatus, rightStatus] = await Promise.all([
-        request('network.capture.start', {
-          ...nextWorkspace.left.target,
-          captureHeaders: true,
-          captureBody: true,
-          maxEntries: 200,
-          maxBodyBytes: 64 * 1024,
-        }),
-        request('network.capture.start', {
-          ...nextWorkspace.right.target,
-          captureHeaders: true,
-          captureBody: true,
-          maxEntries: 200,
-          maxBodyBytes: 64 * 1024,
-        }),
-      ]);
+      const leftStatus = await runBrowserAuthorizationTask<NetworkCaptureStatus>(
+        'authorization.capture.start', { workspaceId: nextWorkspace.id, side: 'left' },
+      );
+      let rightStatus: NetworkCaptureStatus;
+      try {
+        rightStatus = await runBrowserAuthorizationTask<NetworkCaptureStatus>(
+          'authorization.capture.start', { workspaceId: nextWorkspace.id, side: 'right' },
+        );
+      } catch (error) {
+        await stopWorkspaceCapture(nextWorkspace.id);
+        throw error;
+      }
       dispatch({ type: 'capture.replace', capture: { left: leftStatus, right: rightStatus } });
     }
   }, 'A/B 身份已验证，双方请求捕获已开始');
 
-  const openCrossBrowserWorkspace = () => run(async () => {
-    const sourceTab = leftTab || activeTab || eligibleTabs[0];
-    if (!sourceTab) throw new Error('当前浏览器没有可用于测试的 HTTP(S) 页面');
-    if (!instanceDiscoveryReady) throw new Error('当前 Yak 版本不支持读取在线实例，请更新引擎并重新连接插件');
-    if (!bridge.capabilities?.includes('yakit.browser_authorization.open')) {
-      throw new Error('当前 Yak 引擎不支持打开跨浏览器工作区');
-    }
-    const instances = await refreshBrowserInstances();
-    const target = instances.find((instance) => (
-      !instance.current && instance.deviceId === targetDeviceId
-    )) || instances.find((instance) => !instance.current);
-    if (!target) throw new Error('没有检测到另一个在线的 YTray 浏览器实例，请确认其插件已连接同一 Yak 引擎');
-    setTargetDeviceId(target.deviceId);
-    await request('authorization.yakit.open', {
-      tabId: sourceTab.id,
-      mode,
-      targetDeviceId: target.deviceId,
-    });
-  }, '已将两个浏览器实例带入 Yakit');
-
   const refreshWorkspaceDocuments = async (): Promise<BrowserAuthorizationWorkspace> => {
-    if (!workspace || !leftTab || !rightTab) throw new Error('请先建立 A/B 工作区');
-    const nextState = await request('grant.refresh');
-    setState(nextState);
-    const grant = nextState.activeGrant;
-    const leftTarget = grant?.targets.find((target) => (
-      target.tabId === workspace.left.target.tabId
-      && target.frameId === workspace.left.target.frameId
-    ));
-    const rightTarget = grant?.targets.find((target) => (
-      target.tabId === workspace.right.target.tabId
-      && target.frameId === workspace.right.target.frameId
-    ));
-    if (!leftTarget || !rightTarget) {
-      throw new Error('当前共享会话已不再包含身份 A/B，请重新建立工作区');
-    }
-    const documentChanged = (
-      leftTarget.documentId !== workspace.left.target.documentId
-      || rightTarget.documentId !== workspace.right.target.documentId
-    );
-    if (!documentChanged && workspace.expiresAt > Date.now()) return workspace;
-
+    if (!workspace) throw new Error('请先建立 A/B 工作区');
     const renewed = await runBrowserAuthorizationTask<BrowserAuthorizationWorkspace>(
-      'authorization.workspace.create',
-      {
-        mode: workspace.mode,
-        left: {
-          tabId: leftTab.id,
-          frameId: 0,
-          accountLabel: workspace.left.accountLabel || leftLabel.trim() || '账号 A',
-        },
-        right: {
-          tabId: rightTab.id,
-          frameId: 0,
-          accountLabel: workspace.right.accountLabel || rightLabel.trim() || '账号 B',
-        },
-      },
+      'authorization.workspace.inspect', { workspaceId: workspace.id, revalidate: true },
     );
-    dispatch({ type: 'workspace.initialize', workspace: renewed });
+    if (renewed.state === 'stale' || renewed.state === 'blocked') {
+      throw new Error(renewed.recovery?.message || 'A/B 页面已变化，请新建工作区后重试');
+    }
+    dispatch({ type: 'workspace.updated', workspace: renewed });
     const [leftStatus, rightStatus] = await Promise.all([
-      request('network.capture.status', renewed.left.target),
-      request('network.capture.status', renewed.right.target),
+      runBrowserAuthorizationTask<NetworkCaptureStatus>(
+        'authorization.capture.status', { workspaceId: renewed.id, side: 'left' },
+      ),
+      runBrowserAuthorizationTask<NetworkCaptureStatus>(
+        'authorization.capture.status', { workspaceId: renewed.id, side: 'right' },
+      ),
     ]);
     dispatch({ type: 'capture.replace', capture: { left: leftStatus, right: rightStatus } });
     return renewed;
@@ -677,10 +542,9 @@ export function AuthorizationTestingWorkspace({
 
   const stopCapture = (side: BrowserAuthorizationSide) => run(async () => {
     if (!workspace) return;
-    const status = await request('network.capture.stop', {
-      tabId: workspace[side].target.tabId,
-      frameId: workspace[side].target.frameId,
-    });
+    const status = await runBrowserAuthorizationTask<NetworkCaptureStatus>(
+      'authorization.capture.stop', { workspaceId: workspace.id, side },
+    );
     dispatch({ type: 'capture.update', side, status });
   }, `${side === 'left' ? leftLabel : rightLabel} 的请求捕获已停止`);
 
@@ -700,33 +564,30 @@ export function AuthorizationTestingWorkspace({
   const executionCopy = workspace?.execution
     ? verdictCopy(workspace.execution.verdict, workspace.mode)
     : undefined;
-  const incognitoAccessDenied = inspection?.browser === 'chromium'
-    && inspection.capabilities.incognitoAccess === 'denied';
-  const firefoxContainerUnavailable = inspection?.browser === 'firefox'
-    && !inspection.capabilities.containerTabs;
   const identityStageReady = Boolean(
-    leftTab && rightTab && sameOrigin && identityContextsSeparated && capabilityReady,
+    leftInstance && rightInstance && leftDeviceId !== rightDeviceId
+    && leftTab && rightTab && sameOrigin && capabilityReady,
   );
-  const prepareHint = !leftTab
-    ? '先选择当前登录页作为身份 A'
-    : !rightTab
-      ? '还需要一个隔离登录的身份 B'
+  const prepareHint = !instanceDiscoveryReady
+    ? '请更新并连接支持在线实例的 Yak 引擎'
+    : !leftInstance
+      ? '当前 YTray 浏览器尚未被引擎识别'
+      : !rightInstance
+        ? '请先用 YTray 启动并连接另一个浏览器实例'
+        : !leftTab || !rightTab
+          ? '请在 A/B 浏览器中各打开一个 HTTP(S) 页面'
       : !sameOrigin
         ? 'A/B 页面必须属于同一站点'
-        : !leftIsolationContextId || !rightIsolationContextId
-          ? '正在确认两个页面的登录态边界'
-          : !identityContextsSeparated
-            ? 'A/B 页面仍然共享同一登录态'
-            : !capabilityReady
-              ? '请先连接支持授权测试的 Yak 引擎'
-              : '两个身份页面已就绪';
+        : !capabilityReady
+          ? '请先连接支持授权测试的 Yak 引擎'
+          : '两个独立浏览器身份已就绪';
 
   return <div className="section-view authorization-workspace">
     <div className="page-heading authorization-heading">
       <div>
-        <span className="page-eyebrow">Browser-native authorization testing</span>
-        <h1>授权测试工作区</h1>
-        <p>从已经登录的两个页面建立身份隔离证明，录制双方正常请求，再由 Yak 生成并执行最小交叉矩阵。</p>
+        <span className="page-eyebrow">确定性授权测试</span>
+        <h1>越权测试</h1>
+        <p>选择两个在线 YTray 浏览器的登录页，插件监测双方正常请求并执行最小交叉矩阵。</p>
       </div>
       <div className="authorization-heading-actions">
         <span className={`authorization-engine-state ${capabilityReady ? 'ready' : ''}`}>
@@ -741,16 +602,6 @@ export function AuthorizationTestingWorkspace({
         {workspace && <Button variant="ghost" disabled={busy} onClick={() => void refreshWorkspace()}>
           <RefreshCw size={15} />复核状态
         </Button>}
-        {workspace && bridge.capabilities?.includes('yakit.browser_authorization.open') && <Button
-          variant="ghost"
-          disabled={busy}
-          onClick={() => void run(
-            async () => { await request('authorization.yakit.open', { workspaceId: workspace.id }); },
-            '已在 Yakit 打开完整证据工作区',
-          )}
-        >
-          <ExternalLink size={15} />在 Yakit 深入分析
-        </Button>}
         <Button variant="ghost" disabled={busy} onClick={() => void resetWorkspace()}>
           <RotateCcw size={15} />新建
         </Button>
@@ -764,7 +615,7 @@ export function AuthorizationTestingWorkspace({
 
     <div className="authorization-flow-strip" aria-label="授权测试步骤">
       {[
-        ['1', '身份与隔离', Boolean(workspace)],
+        ['1', 'A/B 浏览器', Boolean(workspace)],
         ['2', '正常请求', Boolean(workspace?.baselines.left && workspace?.baselines.right)],
         ['3', '确定性计划', Boolean(workspace?.plan)],
         ['4', '结果证据', Boolean(workspace?.execution)],
@@ -773,46 +624,6 @@ export function AuthorizationTestingWorkspace({
         {position < 3 && <ArrowRight size={14} />}
       </div>)}
     </div>
-
-    {!workspace && <section className="authorization-cross-browser">
-      <span><UserRoundPlus size={18} /></span>
-      <div>
-        <strong>选择独立浏览器实例</strong>
-        <small>{!instanceDiscoveryReady
-          ? '当前 Yak 版本不能读取在线实例，请更新引擎后重连。'
-          : browserInstances.length < 2
-            ? '只检测到当前浏览器，请先用 YTray 启动并连接另一个实例。'
-            : '当前页面作为资源所有者，所选浏览器作为独立对照账号。'}</small>
-        <div className="authorization-cross-browser__instances">
-          {browserInstances.map((instance) => <button
-            key={instance.deviceId}
-            type="button"
-            disabled={instance.current}
-            aria-pressed={!instance.current && instance.deviceId === targetDeviceId}
-            className={instance.current ? 'is-current' : instance.deviceId === targetDeviceId ? 'is-selected' : ''}
-            onClick={() => setTargetDeviceId(instance.deviceId)}
-          >
-            <b>{instance.badge}</b>
-            <span>{instance.current ? '当前' : instance.deviceId === targetDeviceId ? '已选择' : '在线'}</span>
-          </button>)}
-          <button
-            type="button"
-            className="is-refresh"
-            aria-label="刷新在线浏览器实例"
-            onClick={() => void refreshBrowserInstances().catch((error) => setLocalError(errorMessage(error)))}
-          ><RefreshCw size={13} /></button>
-        </div>
-      </div>
-      <Button
-        variant="ghost"
-        disabled={busy}
-        onClick={() => void openCrossBrowserWorkspace()}
-      >
-        <ExternalLink size={15} />{targetBrowserInstance
-          ? `用 ${targetBrowserInstance.badge} 在 Yakit 测试`
-          : '选择实例并在 Yakit 测试'}
-      </Button>
-    </section>}
 
     {!workspace ? <section className="authorization-identity-stage">
       <div className="authorization-mode">
@@ -831,9 +642,9 @@ export function AuthorizationTestingWorkspace({
       </div>
 
       <div className="authorization-identity-guide" aria-label="准备两个身份">
-        <span className={leftTab ? 'complete' : 'current'}><b>{leftTab ? <Check size={12} /> : '1'}</b>当前登录页作为 A</span>
+        <span className={leftTab ? 'complete' : 'current'}><b>{leftTab ? <Check size={12} /> : '1'}</b>浏览器 A 登录资源账号</span>
         <ArrowRight size={14} />
-        <span className={rightTab ? 'complete' : leftTab ? 'current' : ''}><b>{rightTab ? <Check size={12} /> : '2'}</b>隔离页面登录 B</span>
+        <span className={rightTab ? 'complete' : leftTab ? 'current' : ''}><b>{rightTab ? <Check size={12} /> : '2'}</b>浏览器 B 登录对照账号</span>
         <ArrowRight size={14} />
         <span className={identityStageReady ? 'complete' : ''}><b>{identityStageReady ? <Check size={12} /> : '3'}</b>验证并开始捕获</span>
       </div>
@@ -844,66 +655,42 @@ export function AuthorizationTestingWorkspace({
           title={mode === 'vertical' ? '低权限身份' : '身份 A'}
           label={leftLabel}
           setLabel={(value) => dispatch({ type: 'patch', value: { leftLabel: value } })}
+          instance={leftInstance}
+          instances={browserInstances}
           tabId={leftTabId}
           setTabId={(value) => assignIdentityTab('left', value)}
-          tabs={eligibleTabs}
-          context={leftContext}
-          disabledReason={(item) => authorizationIdentityOptionDisabledReason({
-            candidateTabId: item.id,
-            candidateIsolationContextId: contextForTab(inspection, item.id)?.contextId || item.isolationContextId,
-            otherTabId: rightTabId,
-            otherIsolationContextId: rightIsolationContextId,
-            otherLabel: '身份 B',
-          })}
-          emptyHint="选择你现在已经登录的页面，作为基准身份 A"
         />
         <div className="authorization-isolation-axis" aria-live="polite">
           <Fingerprint size={23} />
-          <strong>{incognitoAccessDenied ? '需要无痕权限' : !leftTab ? '先准备身份 A' : !rightTab ? '再准备身份 B' : '浏览器隔离'}</strong>
-          <span className={sameOrigin ? 'valid' : ''}>{sameOrigin ? '已是同一站点' : leftTab ? 'B 需打开同一站点' : '选择当前登录页'}</span>
-          <span>{identityContextsSeparated ? '浏览上下文已分离' : rightTab ? '等待隔离验证' : 'A/B 不能共用登录态'}</span>
-          {incognitoAccessDenied ? <div className="authorization-isolation-actions">
-            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void openIncognitoSettings()}>
-              <ExternalLink size={14} />开启无痕权限
-            </Button>
-            <button type="button" disabled={busy} onClick={() => void recheckIsolationCapability()}>已开启，重新检测</button>
-          </div> : <Button
+          <strong>{leftInstance && rightInstance ? '独立浏览器隔离' : '等待两个在线实例'}</strong>
+          <span className={sameOrigin ? 'valid' : ''}>{sameOrigin ? '已是同一站点' : leftTab ? 'B 需打开同一站点' : 'A/B 各选择登录页'}</span>
+          <span>{leftInstance && rightInstance ? `${leftInstance.badge} / ${rightInstance.badge} 来自独立 Profile` : '请用 YTray 启动 A/B 浏览器'}</span>
+          <Button
             size="sm"
             variant="secondary"
-            disabled={busy || !leftTab || !inspection || firefoxContainerUnavailable}
-            onClick={() => void createIsolatedIdentity()}
+            disabled={busy}
+            onClick={() => void refreshBrowserInstances().catch((error) => setLocalError(errorMessage(error)))}
           >
-            <UserRoundPlus size={14} />{!inspection
-              ? '正在检测隔离能力'
-              : inspection.browser === 'firefox'
-                ? `${rightTab ? '重新创建' : '创建'} Container 身份 B`
-                : `${rightTab ? '重新创建' : '创建'}无痕身份 B`}
-          </Button>}
+            <RefreshCw size={14} />刷新实例
+          </Button>
         </div>
         <IdentitySlot
           side="B"
           title={mode === 'vertical' ? '高权限身份' : '身份 B'}
           label={rightLabel}
           setLabel={(value) => dispatch({ type: 'patch', value: { rightLabel: value } })}
+          instance={rightInstance}
+          instances={browserInstances}
+          setInstanceId={assignRightInstance}
           tabId={rightTabId}
           setTabId={(value) => assignIdentityTab('right', value)}
-          tabs={eligibleTabs}
-          context={rightContext}
-          disabledReason={(item) => authorizationIdentityOptionDisabledReason({
-            candidateTabId: item.id,
-            candidateIsolationContextId: contextForTab(inspection, item.id)?.contextId || item.isolationContextId,
-            otherTabId: leftTabId,
-            otherIsolationContextId: leftIsolationContextId,
-            otherLabel: '身份 A',
-          })}
-          emptyHint={identityNotice || '在中间创建隔离页面，登录另一个账号后会自动选为身份 B'}
         />
       </div>
 
       <div className="authorization-prepare-bar">
         <div>
           <LockKeyhole size={18} />
-          <span><strong>原始 Cookie、Storage 与请求值不会进入界面</strong><small>Yak 只接收短时上下文句柄、字段指纹和用户选择的真实请求。</small></span>
+          <span><strong>插件在 A/B 浏览器内完成代码级监测</strong><small>不调用 AI；Yak 只编排短时上下文、请求基线与确定性交叉矩阵。</small></span>
         </div>
         <div className="authorization-prepare-action">
           <small>{prepareHint}</small>

@@ -62,6 +62,7 @@ export interface BrowserAuthorizationWorkspace {
   mode: BrowserAuthorizationMode;
   state: 'ready' | 'conditional' | 'blocked' | 'stale';
   left: {
+    deviceId: string;
     accountLabel?: string;
     origin: string;
     target: { tabId: number; frameId: number; documentId: string };
@@ -316,6 +317,9 @@ export interface BrowserAuthorizationEvidenceValidation {
 export type BrowserAuthorizationTaskSchema =
   | 'authorization.workspace.create'
   | 'authorization.workspace.inspect'
+  | 'authorization.capture.start'
+  | 'authorization.capture.status'
+  | 'authorization.capture.stop'
   | 'authorization.baseline.candidates'
   | 'authorization.baseline.bind'
   | 'authorization.logical.bind'

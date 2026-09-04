@@ -116,105 +116,6 @@
   color: var(--success);
 }
 
-.authorization-cross-browser {
-  min-height: 64px;
-  padding: 10px 14px;
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 11px;
-  border: 1px solid color-mix(in srgb, var(--authorization-accent) 24%, var(--border));
-  border-radius: var(--radius-lg);
-  background: color-mix(in srgb, var(--authorization-accent) 5%, var(--surface));
-}
-
-.authorization-cross-browser > span {
-  width: 34px;
-  height: 34px;
-  display: grid;
-  place-items: center;
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--authorization-accent) 12%, var(--surface));
-  color: var(--authorization-accent);
-}
-
-.authorization-cross-browser strong,
-.authorization-cross-browser small {
-  display: block;
-}
-
-.authorization-cross-browser > div {
-  min-width: 0;
-}
-
-.authorization-cross-browser strong {
-  font-size: var(--text-sm);
-}
-
-.authorization-cross-browser small {
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: var(--text-xs);
-  line-height: 1.45;
-}
-
-.authorization-cross-browser__instances {
-  margin-top: 8px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.authorization-cross-browser__instances > button {
-  height: 27px;
-  padding: 0 8px 0 5px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--muted-strong);
-  font-size: var(--text-xs);
-  cursor: pointer;
-}
-
-.authorization-cross-browser__instances > button > b {
-  width: 18px;
-  height: 18px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--surface-subtle);
-  color: var(--foreground);
-  font-size: var(--text-xs);
-}
-
-.authorization-cross-browser__instances > button.is-current {
-  opacity: 1;
-  background: var(--surface-subtle);
-  color: var(--muted);
-  cursor: default;
-}
-
-.authorization-cross-browser__instances > button.is-selected {
-  border-color: color-mix(in srgb, var(--authorization-accent) 50%, var(--border));
-  background: color-mix(in srgb, var(--authorization-accent) 9%, var(--surface));
-  color: var(--authorization-accent);
-}
-
-.authorization-cross-browser__instances > button.is-selected > b {
-  background: var(--authorization-accent);
-  color: white;
-}
-
-.authorization-cross-browser__instances > button.is-refresh {
-  width: 27px;
-  padding: 0;
-  justify-content: center;
-}
-
 .authorization-identity-stage,
 .authorization-baseline-stage,
 .authorization-plan-stage {
@@ -484,25 +385,6 @@
   margin: 7px 0 8px;
 }
 
-.authorization-isolation-actions {
-  margin: 7px 0 8px;
-  display: grid;
-  justify-items: center;
-  gap: 5px;
-}
-
-.authorization-isolation-actions .ui-button {
-  margin: 0;
-}
-
-.authorization-isolation-actions > button:not(.ui-button) {
-  padding: 2px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--primary);
-  font-size: 11px;
-  cursor: pointer;
-}
 
 .authorization-isolation-actions > button:not(.ui-button):disabled {
   color: var(--muted);
@@ -1557,15 +1439,6 @@
 }
 
 @media (max-width: 820px) {
-  .authorization-cross-browser {
-    grid-template-columns: 34px minmax(0, 1fr);
-  }
-
-  .authorization-cross-browser > .ui-button {
-    grid-column: 2;
-    justify-self: start;
-  }
-
   .authorization-heading,
   .authorization-prepare-bar,
   .authorization-section-heading {

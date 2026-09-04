@@ -219,6 +219,9 @@ export function normalizeBrowserAuthorizationTaskResult<T>(
   schema: BrowserAuthorizationTaskSchema,
   value: unknown,
 ): T {
+  if (schema.startsWith('authorization.capture.')) {
+    return objectValue(value, schema, '$') as T;
+  }
   if (schema === 'authorization.baseline.candidates') {
     if (value === undefined || value === null) return [] as T;
     if (!Array.isArray(value)) mismatch(schema, '$', '数组或空值');
