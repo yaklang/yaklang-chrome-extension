@@ -81,20 +81,12 @@ export interface ExtensionRequestMap {
   'authorization.engine.task': {
     input: {
       schema:
-        | 'authorization.workspace.create'
-        | 'authorization.workspace.inspect'
         | 'authorization.capture.start'
         | 'authorization.capture.status'
         | 'authorization.capture.stop'
-        | 'authorization.baseline.candidates'
-        | 'authorization.baseline.bind'
-        | 'authorization.logical.bind'
-        | 'authorization.plan.create'
-        | 'authorization.plan.execute'
-        | 'authorization.evidence.inspect'
-        | 'authorization.evidence.packet'
-        | 'authorization.evidence.diff'
-        | 'authorization.evidence.validate';
+        | 'authorization.requests'
+        | 'authorization.pair.inspect'
+        | 'authorization.execute';
       payload: Record<string, unknown>;
       timeoutMs?: number;
     };
@@ -282,7 +274,6 @@ export type BridgeCapabilityDomain =
   | 'system'
   | 'page'
   | 'isolation'
-  | 'authorization'
   | 'handoff'
   | 'network'
   | 'recording'

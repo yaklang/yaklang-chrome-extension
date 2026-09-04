@@ -1,6 +1,5 @@
 export type CapabilityDomainId =
   | 'navigation-isolation'
-  | 'authorization'
   | 'handoff'
   | 'network'
   | 'recording-callable-debugger'
@@ -31,11 +30,6 @@ export const NAVIGATION_CAPABILITY_DOMAIN = exactMethods('navigation-isolation',
   'browser.isolation.container.list',
   'browser.isolation.container.remove',
 ]);
-
-export const AUTHORIZATION_CAPABILITY_DOMAIN: CapabilityDomainDefinition = {
-  id: 'authorization',
-  owns: (method) => method.startsWith('browser.authorization.'),
-};
 
 export const HANDOFF_CAPABILITY_DOMAIN: CapabilityDomainDefinition = {
   id: 'handoff',
@@ -78,7 +72,6 @@ export const PROXY_CAPABILITY_DOMAIN = exactMethods('proxy', [
 
 export const CAPABILITY_DOMAINS: readonly CapabilityDomainDefinition[] = [
   NAVIGATION_CAPABILITY_DOMAIN,
-  AUTHORIZATION_CAPABILITY_DOMAIN,
   HANDOFF_CAPABILITY_DOMAIN,
   NETWORK_CAPABILITY_DOMAIN,
   RECORDING_CAPABILITY_DOMAIN,

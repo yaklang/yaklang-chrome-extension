@@ -82,11 +82,11 @@ describe('extension request schemas', () => {
     expect(parseExtensionRequest({
       action: 'authorization.engine.task',
       payload: {
-        schema: 'authorization.workspace.create',
+        schema: 'authorization.capture.start',
         payload: {
-          mode: 'horizontal',
-          left: { tabId: 12, frameId: 0, accountLabel: 'A' },
-          right: { tabId: 13, frameId: 0, accountLabel: 'B' },
+          left: { deviceId: 'browser-a', tabId: 12 },
+          right: { deviceId: 'browser-b', tabId: 13 },
+          side: 'left',
         },
         timeoutMs: 60_000,
       },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { CONTROL_CAPABILITY_SCOPES } from '@/protocol/capabilities';
 import type { ActiveTabInfo, ExtensionState } from '@/types/models';
-import { authorizationShareGrantInput, gatewayShareActive, gatewayShareGrantInput } from './gateway-share';
+import { gatewayShareActive, gatewayShareGrantInput } from './gateway-share';
 
 const NOW = 1_000_000;
 
@@ -84,34 +84,4 @@ describe('gateway quick share', () => {
     expect(gatewayShareActive(grant, { ...tab, url: 'https://elsewhere.example.test/' }, NOW)).toBe(false);
   });
 
-  it('creates a focused two-tab authorization grant without retaining unrelated targets', () => {
-    const current = state();
-    current.activeGrant = {
-      id: 'grant',
-      taskId: 'existing-task',
-      createdAt: NOW - 1_000,
-      expiresAt: NOW + 45 * 60_000,
-      scopes: ['browser.tabs.read'],
-      targets: [{
-        tabId: 99,
-        frameId: 0,
-        documentId: 'unrelated',
-        isolationContextId: 'unrelated',
-        origin: 'https://other.example.test',
-        grantedUrl: 'https://other.example.test',
-        title: 'Unrelated',
-      }],
-    };
-    const right = { ...tab, id: 8, incognito: true };
-
-    const input = authorizationShareGrantInput(current, [tab, right], NOW);
-
-    expect(input.targets).toEqual([
-      { tabId: 7, frameId: 0 },
-      { tabId: 8, frameId: 0 },
-    ]);
-    expect(input.scopes).toEqual(expect.arrayContaining(CONTROL_CAPABILITY_SCOPES));
-    expect(input.durationMinutes).toBe(45);
-    expect(input.taskId).toBe('existing-task');
-  });
 });

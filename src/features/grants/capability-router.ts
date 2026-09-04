@@ -3,7 +3,6 @@ import type {
   CapabilityRouteContext,
 } from './capability-context';
 import { navigationCapabilityHandler } from './capability-handlers/navigation';
-import { authorizationCapabilityHandler } from './capability-handlers/authorization';
 import { handoffCapabilityHandler } from './capability-handlers/handoff';
 import { networkCapabilityHandler } from './capability-handlers/network';
 import { recordingCapabilityHandler } from './capability-handlers/recording';
@@ -13,7 +12,6 @@ import { proxyCapabilityHandler } from './capability-handlers/proxy';
 
 export const CAPABILITY_HANDLERS: readonly CapabilityDomainHandler[] = [
   navigationCapabilityHandler,
-  authorizationCapabilityHandler,
   handoffCapabilityHandler,
   networkCapabilityHandler,
   recordingCapabilityHandler,

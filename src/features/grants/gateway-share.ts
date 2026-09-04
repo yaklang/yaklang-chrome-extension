@@ -63,24 +63,3 @@ export function gatewayShareGrantInput(
     taskId: active?.taskId,
   };
 }
-
-export function authorizationShareGrantInput(
-  state: ExtensionState,
-  tabs: [ActiveTabInfo, ActiveTabInfo],
-  now = Date.now(),
-): GrantCreateInput {
-  const active = state.activeGrant && state.activeGrant.expiresAt > now
-    ? state.activeGrant
-    : undefined;
-  const scopes = new Set<CapabilityScope>(active?.scopes || []);
-  CONTROL_CAPABILITY_SCOPES.forEach((scope) => scopes.add(scope));
-  const remainingMinutes = active
-    ? Math.ceil((active.expiresAt - now) / 60_000)
-    : 0;
-  return {
-    targets: tabs.map((item) => ({ tabId: item.id, frameId: 0 })),
-    scopes: [...scopes],
-    durationMinutes: Math.max(DEFAULT_GATEWAY_GRANT_MINUTES, remainingMinutes),
-    taskId: active?.taskId,
-  };
-}

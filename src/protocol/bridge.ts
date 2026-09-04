@@ -33,7 +33,6 @@ export interface BridgePairingEnvelope {
 }
 
 const id = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
-const comparisonKey = v.pipe(v.string(), v.regex(/^[A-Za-z0-9_-]{43}$/));
 const sha256Fingerprint = v.pipe(v.string(), v.regex(/^sha256:[a-f0-9]{64}$/));
 const tabId = v.pipe(v.number(), v.safeInteger(), v.minValue(1));
 const httpUrl = v.pipe(
@@ -80,23 +79,6 @@ const deepCaptureMatcher = v.variant('kind', [
 const captureId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));
 const nodeId = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80));
 const valuePath = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(512));
-const authorizationSelector = v.strictObject({
-  source: v.picklist(['wire', 'logical']),
-  location: v.picklist(['header', 'path', 'query', 'body']),
-  path: valuePath,
-});
-const authorizationResourceValue = v.strictObject({
-  version: v.literal(1),
-  baselineId: id,
-  source: v.picklist(['wire', 'logical']),
-  location: v.picklist(['header', 'path', 'query', 'body']),
-  path: valuePath,
-  valueType: v.picklist(['string', 'number', 'boolean']),
-  byteLength: v.pipe(v.number(), v.safeInteger(), v.minValue(0), v.maxValue(8 * 1_024)),
-  valueBase64: v.pipe(v.string(), v.maxLength(11_000), v.regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/)),
-  valueFingerprint: v.pipe(v.string(), v.regex(/^workspace-hmac-sha256:[a-f0-9]{64}$/)),
-  logicalBindingFingerprint: v.optional(sha256Fingerprint),
-});
 export const capabilityParams = {
   'system.ping': v.optional(v.strictObject({})),
   'browser.tabs': v.optional(v.strictObject({})),
@@ -118,57 +100,6 @@ export const capabilityParams = {
   'browser.isolation.container.list': v.optional(v.strictObject({})),
   'browser.isolation.container.remove': v.strictObject({
     cookieStoreId: v.pipe(v.string(), v.regex(/^firefox-container-[0-9]+$/)),
-  }),
-  'browser.authorization.context.capture': v.strictObject({
-    ...targetFields,
-    isolationProofId: id,
-    slotId: v.picklist(['left', 'right']),
-    accountLabel: v.optional(v.pipe(v.string(), v.trim(), v.maxLength(80))),
-  }),
-  'browser.authorization.context.get': v.strictObject({ id }),
-  'browser.authorization.context.attest': v.strictObject(targetFields),
-  'browser.authorization.context.attestation.get': v.strictObject({ id }),
-  'browser.authorization.baseline.capture': v.strictObject({
-    ...targetFields,
-    authContextKind: v.picklist(['handle', 'attestation']),
-    authContextId: id,
-    networkRequestId: id,
-    comparisonKey,
-  }),
-  'browser.authorization.baseline.candidates': v.strictObject({
-    ...targetFields,
-    authContextKind: v.picklist(['handle', 'attestation']),
-    authContextId: id,
-    limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(200))),
-  }),
-  'browser.authorization.baseline.get': v.strictObject({ id }),
-  'browser.authorization.baseline.logical.bind': v.strictObject({
-    id,
-    profileId: id,
-    comparisonKey,
-  }),
-  'browser.authorization.baseline.resource.get': v.strictObject({
-    id,
-    selector: authorizationSelector,
-  }),
-  'browser.authorization.baseline.compile': v.strictObject({
-    id,
-    selector: authorizationSelector,
-    replacement: authorizationResourceValue,
-    comparisonKey,
-  }),
-  'browser.authorization.baseline.packet.compile': v.strictObject({ id }),
-  'browser.authorization.baseline.transform.inspect': v.strictObject({
-    id,
-    profileId: id,
-  }),
-  'browser.authorization.baseline.transform.compile': v.strictObject({
-    id,
-    selector: authorizationSelector,
-    replacement: authorizationResourceValue,
-    comparisonKey,
-    profileId: id,
-    bindingFingerprint: sha256Fingerprint,
   }),
   'browser.context': v.optional(v.strictObject({
     ...targetFields,
