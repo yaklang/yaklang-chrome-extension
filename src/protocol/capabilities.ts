@@ -128,7 +128,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.human.takeover'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.network.start': {
-    domain: 'network', access: 'control', summary: '启动有界网络捕获，可选采集请求头和 Body',
+    domain: 'network', access: 'control', summary: '启动 DevTools 网络观察，只采集页面请求；不会生成或执行明文网关',
     scopes: ['browser.network.capture'],
     conditionalScopes: [{ scope: 'browser.network.sensitive.read', when: 'captureHeaders=true or captureBody=true' }],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -138,7 +138,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.network.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.network.list': {
-    domain: 'network', access: 'read', summary: '列出已捕获请求，敏感字段仍由 Agent 操作审核策略保护',
+    domain: 'network', access: 'read', summary: '列出 DevTools 已捕获请求，适合观察流量；需要转换加密报文时改用 transform 域',
     scopes: ['browser.network.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.network.clear': {
@@ -162,7 +162,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.network.sensitive.read'], targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.recording.start': {
-    domain: 'recording', access: 'control', summary: '开始业务 Trace 录制，可选采集有界值预览',
+    domain: 'recording', access: 'control', summary: '开始业务 Trace 录制；生成新明文网关时先录制一次真实业务操作，再检查候选证据',
     scopes: ['browser.recording.control'],
     conditionalScopes: [{ scope: 'browser.recording.sensitive.read', when: 'captureValues=true' }],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -194,7 +194,7 @@ const CAPABILITY_METADATA = {
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.callable.create': {
-    domain: 'callable', access: 'execute', summary: '从录制句柄或深度捕获 Frame 创建页面函数',
+    domain: 'callable', access: 'execute', summary: '从录制句柄或深度捕获 Frame 创建页面函数；生成明文网关 Profile 前需要得到可回放函数',
     scopes: ['browser.callable.execute'],
     conditionalScopes: [{ scope: 'browser.debugger.control', when: 'source=deep-capture' }],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -240,12 +240,8 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.debugger.control'], targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.transform.profile.list': {
-    domain: 'transform', access: 'read', summary: '列出目标页面可见的明文网关 Profile',
+    domain: 'transform', access: 'read', summary: '明文网关入口：先列出目标页面已有 Profile；已有配置可直接用 transform.execute，无配置再走录制、提案和验证',
     scopes: ['browser.transform.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
-  },
-  'browser.transform.profile.save': {
-    domain: 'transform', access: 'dangerous', summary: '保存或更新完整 Transform Profile',
-    scopes: ['browser.transform.manage'], targetMode: 'profile', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.transform.profile.delete': {
     domain: 'transform', access: 'write', summary: '删除 Transform Profile',
@@ -278,7 +274,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.transform.manage'], targetMode: 'profile', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.transform.execute': {
-    domain: 'transform', access: 'execute', summary: '对 HTTP 报文应用已保存的请求或响应转换',
+    domain: 'transform', access: 'execute', summary: '使用已保存的 Profile 对 HTTP 报文执行请求加密或响应解密；它不是网络代理切换',
     scopes: ['browser.transform.execute'], targetMode: 'profile', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.packet.compare': {
@@ -286,16 +282,16 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.transform.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.profile.propose': {
-    domain: 'transform', access: 'read', summary: '从候选证据和页面函数确定性编译 Profile 提案',
+    domain: 'transform', access: 'read', summary: '从录制候选和页面函数编译未保存的 Profile 提案；下一步必须调用 profile.validate',
     scopes: ['browser.transform.read', 'browser.recording.read'],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.profile.validation.latest': {
-    domain: 'transform', access: 'read', summary: '读取当前文档最近的短时验证草稿',
+    domain: 'transform', access: 'read', summary: '读取当前文档最近的短时验证草稿及本地确认状态；草稿过期后需重新验证',
     scopes: ['browser.transform.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.profile.validate': {
-    domain: 'transform', access: 'execute', summary: '重新编译并执行 Profile，再与候选或报文证据比较',
+    domain: 'transform', access: 'execute', summary: '确定性执行 Profile 提案并与证据比较；成功后只生成短时草稿，必须由用户在插件本地确认保存',
     scopes: ['browser.transform.execute', 'browser.recording.read'],
     targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
@@ -310,11 +306,11 @@ const CAPABILITY_METADATA = {
     targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'proxy.list': {
-    domain: 'proxy', access: 'read', summary: '列出扩展代理 Profile',
+    domain: 'proxy', access: 'read', summary: '列出 Chrome 网络代理 Profile，仅用于流量路由；不是页面加解密或明文网关',
     scopes: ['browser.proxy.read'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'proxy.switch': {
-    domain: 'proxy', access: 'write', summary: '切换当前代理 Profile',
+    domain: 'proxy', access: 'write', summary: '切换 Chrome 流量代理，仅改变网络路由；不会生成、启用或执行 Transform Profile',
     scopes: ['browser.proxy.write'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
 } satisfies Record<BridgeCapabilityMethod, CapabilityMetadata>;

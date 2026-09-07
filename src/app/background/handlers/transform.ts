@@ -14,6 +14,7 @@ import {
   validateBrowserTransformRecovery,
 } from '@/features/browser-transform/service';
 import {
+  discardBrowserTransformValidation,
   latestBrowserTransformValidation,
   proposeBrowserTransformProfile,
   validateInferredBrowserTransformProfile,
@@ -60,6 +61,28 @@ export const handleTransformRequest: BackgroundRequestHandler = async (request, 
         await requiredRequestTarget(request.payload, sender),
       ),
     );
+    case 'analysis.profile.validation.resolve': {
+      const input = request.payload;
+      const target = await requiredRequestTarget(input, sender);
+      const draft = await latestBrowserTransformValidation(target);
+      if (!draft || draft.id !== input.validationId) {
+        throw new Error('验证草稿不存在或已经过期，请重新生成并验证');
+      }
+      if (input.outcome === 'discard') {
+        await discardBrowserTransformValidation(target, draft.id);
+        return ok(null);
+      }
+      const profile = await saveBrowserTransformProfile(draft.profile);
+      await discardBrowserTransformValidation(target, draft.id);
+      void appendAuditEvent({
+        category: 'capability',
+        action: 'analysis.profile.validation.save',
+        outcome: 'success',
+        targetTabId: profile.target.tabId,
+        summary: profile.name,
+      });
+      return ok(profile);
+    }
     case 'transform.profile.list': {
       const input = request.payload;
       const target = input.tabId ? await requiredRequestTarget(input, sender) : undefined;

@@ -202,6 +202,16 @@ export interface ExtensionRequestMap {
     input: { tabId?: number; frameId?: number; documentId?: string };
     output: BrowserTransformValidationDraft | null;
   };
+  'analysis.profile.validation.resolve': {
+    input: {
+      tabId?: number;
+      frameId?: number;
+      documentId?: string;
+      validationId: string;
+      outcome: 'save' | 'discard';
+    };
+    output: BrowserTransformProfile | null;
+  };
   'transform.profile.list': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserTransformProfile[] };
   'transform.profile.save': { input: BrowserTransformProfileInput; output: BrowserTransformProfile };
   'transform.profile.delete': { input: { id: string }; output: BrowserTransformProfile[] };

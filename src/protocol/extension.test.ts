@@ -317,6 +317,14 @@ describe('extension request schemas', () => {
       payload: { tabId: 12, frameId: 0 },
     }).action).toBe('analysis.profile.validation.latest');
     expect(parseExtensionRequest({
+      action: 'analysis.profile.validation.resolve',
+      payload: { tabId: 12, frameId: 0, validationId: 'validation-1', outcome: 'save' },
+    }).action).toBe('analysis.profile.validation.resolve');
+    expect(() => parseExtensionRequest({
+      action: 'analysis.profile.validation.resolve',
+      payload: { tabId: 12, frameId: 0, validationId: 'validation-1', outcome: 'approve' },
+    })).toThrow();
+    expect(parseExtensionRequest({
       action: 'transform.execute',
       payload: {
         profileId: 'profile-1', direction: 'request',

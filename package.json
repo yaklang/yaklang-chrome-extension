@@ -2,7 +2,7 @@
   "name": "yakit-chrome-client",
   "description": "Yakit Browser Extension",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "packageManager": "pnpm@10.28.2",
   "scripts": {

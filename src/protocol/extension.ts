@@ -440,6 +440,11 @@ const payloadSchemas = {
   'analysis.profile.propose': capabilityParams['browser.profile.propose'],
   'analysis.profile.validate': capabilityParams['browser.profile.validate'],
   'analysis.profile.validation.latest': capabilityParams['browser.profile.validation.latest'],
+  'analysis.profile.validation.resolve': v.strictObject({
+    ...targetFields,
+    validationId: id,
+    outcome: v.picklist(['save', 'discard']),
+  }),
   'transform.profile.list': v.strictObject(targetFields),
   'transform.profile.save': browserTransformProfileInputSchema,
   'transform.profile.delete': v.strictObject({ id }),

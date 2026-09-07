@@ -33,6 +33,7 @@ import {
   BROWSER_TRANSFORM_VALIDATION_DRAFT_MAX_BYTES,
   compareBrowserPackets,
   comparePacketWithInferenceCandidate,
+  discardBrowserTransformValidation,
   inspectRecordingEvidence,
   listRecordingTraces,
   promoteObservedEnvelopeCallable,
@@ -75,6 +76,13 @@ function formCandidate(): BrowserProfileInferenceCandidate {
 }
 
 describe('browser analysis deterministic tools', () => {
+  it('rejects confirmation for a missing or expired validation draft', async () => {
+    await expect(discardBrowserTransformValidation(
+      { tabId: 1, frameId: 0, documentId: 'document-1' },
+      'validation-missing',
+    )).rejects.toThrow(/不存在或已经过期/);
+  });
+
   it('bounds validation drafts before session persistence', () => {
     const draft = {
       contractVersion: 1,

@@ -4,7 +4,6 @@ import type { BridgePublicKey } from '@/types/models';
 import {
   browserTransformExecuteSchema,
   browserTransformPacketSchema,
-  browserTransformProfileInputSchema,
 } from './transform';
 
 export const BRIDGE_PROTOCOL_VERSION = 3;
@@ -237,7 +236,6 @@ export const capabilityParams = {
   'browser.deep_capture.resume': v.optional(v.strictObject(targetFields)),
   'browser.deep_capture.detach': v.optional(v.strictObject(targetFields)),
   'browser.transform.profile.list': v.optional(v.strictObject(targetFields)),
-  'browser.transform.profile.save': browserTransformProfileInputSchema,
   'browser.transform.profile.delete': v.strictObject({ id }),
   'browser.transform.recovery.get': v.strictObject({ id }),
   'browser.transform.recovery.start': v.strictObject({ id }),

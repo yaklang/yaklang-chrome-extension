@@ -478,6 +478,26 @@ export async function latestBrowserTransformValidation(
   return draft || memoryValidationDrafts.get(key) || null;
 }
 
+export async function discardBrowserTransformValidation(
+  target: BrowserTarget,
+  validationId: string,
+): Promise<void> {
+  const key = validationDraftKey(target);
+  let discarded = false;
+  validationDraftStorageQueue = validationDraftStorageQueue.then(async () => {
+    const drafts = pruneValidationDrafts(await readStoredValidationDrafts());
+    if (drafts[key]?.id === validationId) {
+      delete drafts[key];
+      discarded = true;
+    }
+    await writeStoredValidationDrafts(drafts);
+  });
+  await validationDraftStorageQueue;
+  if (!discarded) {
+    throw new ExtensionError('validation_draft_stale', '验证草稿不存在或已经过期，请重新生成并验证');
+  }
+}
+
 function formValueType(value: string): string {
   if (!value) return 'empty';
   const trimmed = value.trim();
@@ -1109,7 +1129,7 @@ export async function proposeBrowserTransformProfile(
         ? callable.transaction ? 'captured-request-transaction' : 'validated-callable-envelope'
         : 'recording-evidence',
     },
-    next: '调用 profile.validate；验证成功后由用户确认保存，AI 不直接持久化配置',
+    next: '调用 profile.validate；验证成功后由用户在插件中确认保存，AI 不直接持久化配置',
   };
 }
 
@@ -1186,7 +1206,7 @@ export async function validateBrowserTransformProposal(
     } : undefined,
     next: comparison
       ? comparison.equivalent
-        ? '确定性验证通过；Yakit 已收到待用户确认的明文网关草稿'
+        ? '确定性验证通过；插件已生成待用户确认的明文网关草稿'
         : '数据包对比未通过；检查输入映射或重新选择页面函数'
       : 'Pipeline 已真实回放并生成待确认草稿；如需更强证明，请提供一份浏览器线上请求进行结构对比',
   };

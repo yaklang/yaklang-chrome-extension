@@ -10,7 +10,7 @@ import type {
   ActiveTabInfo, BrowserPageCallable, BrowserRecordingEvent, BrowserTransformBuiltinOperation,
   BrowserTransformDirection,
   BrowserTransformNodeReference, BrowserTransformPipelineNode, BrowserTransformProfile,
-  BrowserTransformProfileInput, BrowserProfileInferenceCandidate,
+  BrowserTransformProfileInput, BrowserProfileInferenceCandidate, BrowserTransformValidationDraft,
 } from '@/types/models';
 import {
   callableEnvelopeDescription, compileGuidedTransform, defaultGuidedTransform, guidedOutputDescription, parseGuidedTransform,
@@ -257,6 +257,7 @@ export function BrowserTransformWorkspace({
     INITIAL_TRANSFORM_WORKSPACE_STATE,
   );
   const [workspaceView, setWorkspaceView] = useState<'flow' | 'configure'>('flow');
+  const [pendingValidation, setPendingValidation] = useState<BrowserTransformValidationDraft | null>(null);
   const {
     profiles, callables, selectedProfileId, draft, directionName, loadError,
     testMethod, testUrl, testHeaders, testBody, testSample, testResult, testError,
@@ -351,11 +352,28 @@ export function BrowserTransformWorkspace({
     }
   }, [tab]);
 
+  const loadPendingValidation = useCallback(async () => {
+    if (!tab) {
+      setPendingValidation(null);
+      return;
+    }
+    try {
+      setPendingValidation(await request('analysis.profile.validation.latest', { tabId: tab.id, frameId: 0 }));
+    } catch {
+      setPendingValidation(null);
+    }
+  }, [tab]);
+
   useEffect(() => {
     workspaceMounted.current = true;
     return () => { workspaceMounted.current = false; };
   }, []);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void loadPendingValidation();
+    const timer = setInterval(() => void loadPendingValidation(), 2_000);
+    return () => clearInterval(timer);
+  }, [loadPendingValidation]);
   useEffect(() => {
     if (recoveryRevision > 0) void load();
   }, [load, recoveryRevision]);
@@ -731,6 +749,22 @@ export function BrowserTransformWorkspace({
     await load();
   }, '已取消本次恢复结果，旧网关继续保持停用');
 
+  const resolvePendingValidation = (outcome: 'save' | 'discard') => run(async () => {
+    if (!tab || !pendingValidation) return;
+    const profile = await request('analysis.profile.validation.resolve', {
+      tabId: tab.id,
+      frameId: 0,
+      validationId: pendingValidation.id,
+      outcome,
+    });
+    setPendingValidation(null);
+    if (!profile) return;
+    setProfiles((current) => [profile, ...current.filter((item) => item.id !== profile.id)]);
+    setSelectedProfileId(profile.id);
+    setDraft(toInput(profile));
+    setWorkspaceView('flow');
+  }, outcome === 'save' ? '明文网关已保存' : '验证草稿已放弃');
+
   const execute = async () => {
     if (!draft?.id || dirty) { setTestError('请先保存当前 Pipeline'); return; }
     setTestError('');
@@ -762,6 +796,18 @@ export function BrowserTransformWorkspace({
     />
 
     <main className="transform-editor">
+      {pendingValidation && <section className="transform-validation-pending" role="status">
+        <span className="transform-validation-pending__mark"><CheckCircle2 size={16} /></span>
+        <div>
+          <small>Agent 已完成本地验证 · {pendingValidation.proofLevel === 'exact' ? '报文一致' : pendingValidation.proofLevel === 'structure' ? '结构一致' : '执行通过'}</small>
+          <strong>{pendingValidation.profile.name}</strong>
+          <p>{pendingValidation.profile.origin} · {pendingValidation.profile.request.enabled ? '请求加密' : '响应解密'} · {Math.max(1, Math.ceil((pendingValidation.expiresAt - Date.now()) / 60_000))} 分钟后过期</p>
+        </div>
+        <div className="transform-validation-pending__actions">
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => void resolvePendingValidation('discard')}>放弃</Button>
+          <Button size="sm" variant="primary" disabled={busy} onClick={() => void resolvePendingValidation('save')}><Save size={13} />确认保存</Button>
+        </div>
+      </section>}
       {!draft ? <div className="transform-editor-empty"><Link2 size={24} /><strong>建立明文与线上报文的转换链路</strong>{callables.length ? <Button variant="primary" onClick={create}><CirclePlus size={14} />新建 Pipeline</Button> : <Button variant="primary" onClick={onOpenCapture}><Code2 size={14} />{deepCaptureAvailable ? '先捕获页面函数' : '回到录制并保存页面函数'}</Button>}</div> : <>
         <header className="transform-editor-head">
           <div>{workspaceView === 'flow' && savedProfile

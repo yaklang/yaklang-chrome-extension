@@ -52,6 +52,11 @@ describe('versioned Bridge capability catalog', () => {
     expect(capabilityVisibleToAgent('browser.handoff.resolve')).toBe(false);
     expect(capabilityVisibleToAgent('browser.thumbnail')).toBe(false);
     expect(capabilityVisibleToAgent('browser.context')).toBe(true);
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.profile.save')).toBeUndefined();
+    expect(catalog.capabilities.find((capability) => capability.method === 'proxy.switch')?.summary)
+      .toContain('不会生成、启用或执行 Transform Profile');
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.profile.validate')?.summary)
+      .toContain('用户在插件本地确认保存');
     expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.recovery.capture')).toMatchObject({
       access: 'dangerous',
       scopes: ['browser.transform.manage', 'browser.debugger.control', 'browser.callable.execute'],

@@ -63,6 +63,16 @@
 .transform-callable-confirm > div { display: flex; justify-content: flex-end; gap: 6px; }
 
 .transform-editor { max-height: 820px; overflow: auto; display: grid; align-content: start; border-right: 1px solid var(--border); }
+.transform-validation-pending { min-width: 0; min-height: 72px; padding: 11px 14px; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; border-bottom: 1px solid color-mix(in srgb, var(--success) 28%, var(--border)); background: color-mix(in srgb, var(--success-soft) 68%, var(--surface)); }
+.transform-validation-pending__mark { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--success-soft); color: var(--success); }
+.transform-validation-pending > div { min-width: 0; }
+.transform-validation-pending small,
+.transform-validation-pending strong,
+.transform-validation-pending p { display: block; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.transform-validation-pending small { color: var(--success); font-size: 10px; font-weight: 650; }
+.transform-validation-pending strong { margin-top: 3px; font-size: var(--text-sm); }
+.transform-validation-pending p { margin-top: 2px; color: var(--muted); font-size: var(--text-xs); }
+.transform-validation-pending__actions { display: flex; align-items: center; gap: 6px; }
 .transform-editor-empty { min-height: 520px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 11px; color: var(--muted); text-align: center; }
 .transform-editor-empty strong { color: var(--foreground); font-size: var(--text-md); }
 .transform-editor-head { min-height: 64px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid var(--border); }
@@ -438,6 +448,8 @@
   .transform-route label:last-child { grid-column: 1 / -1; }
   .transform-recovery { grid-template-columns: 30px minmax(0, 1fr); }
   .transform-recovery__actions { grid-column: 2; justify-content: flex-start; flex-wrap: wrap; }
+  .transform-validation-pending { grid-template-columns: 30px minmax(0, 1fr); }
+  .transform-validation-pending__actions { grid-column: 2; justify-content: flex-start; }
   .transform-step-fields { grid-template-columns: minmax(0, 1fr); }
   .transform-step-fields .transform-step-name { grid-column: auto; }
   .transform-output-list > div { grid-template-columns: minmax(0, 1fr) 14px minmax(0, 1fr) 32px; }
