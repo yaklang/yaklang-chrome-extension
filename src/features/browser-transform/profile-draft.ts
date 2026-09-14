@@ -5,7 +5,9 @@ import type {
   BrowserRecordingEvent,
   BrowserTransformDirection,
   BrowserTransformProfileInput,
+  BrowserTransformPacket,
 } from '@/types/models';
+import { ExtensionError } from '@/shared/errors';
 import { compileGuidedTransform, defaultGuidedTransform, type GuidedTransformOutputKind } from './guided';
 
 interface RequestRouteSource {
@@ -26,7 +28,7 @@ function emptyDirection(enabled = false): BrowserTransformDirection {
   return { enabled, nodes: [] };
 }
 
-function candidateGuidance(candidate?: BrowserProfileInferenceCandidate): {
+function candidateGuidance(candidate?: BrowserProfileInferenceCandidate, callable?: BrowserPageCallable, packet?: BrowserTransformPacket): {
   inputPaths?: string[];
   outputKind?: GuidedTransformOutputKind;
   outputField?: string;
@@ -37,7 +39,23 @@ function candidateGuidance(candidate?: BrowserProfileInferenceCandidate): {
   if (candidate?.direction === 'response') {
     return { inputPaths: [destination], outputKind: 'body' };
   }
-  if (serialization === 'form-field') return { outputKind: 'form-field', outputField: destination.slice(5) };
+  if (serialization === 'form-field') {
+    let inputPaths: string[] | undefined;
+    const slots = callable?.inputSlots.filter((slot) => !slot.retained);
+    if (packet && slots?.length === 1 && slots[0].dataType === 'string') {
+      const contentType = packet.headers.find((header) => header.name.toLowerCase() === 'content-type')?.value.split(';')[0].trim().toLowerCase();
+      if (contentType === 'application/x-www-form-urlencoded') {
+        const body = new TextDecoder().decode(Uint8Array.from(atob(packet.bodyBase64), (char) => char.charCodeAt(0)));
+        const fields = new URLSearchParams(body);
+        const destinations = new Set(candidate?.request.mappings.map((mapping) => mapping.destination));
+        if (destinations.size > 1 || fields.getAll(destination.slice(5)).length !== 1) {
+          throw new ExtensionError('profile_input_mismatch', '无法唯一确定表单明文输入，请显式指定 input_paths；尚未发送请求');
+        }
+        inputPaths = [destination];
+      }
+    }
+    return { inputPaths, outputKind: 'form-field', outputField: destination.slice(5) };
+  }
   if (serialization === 'json-field') return { outputKind: 'json-field', outputField: destination.slice(5) };
   if (serialization === 'header') return { outputKind: 'header', outputField: destination.slice(7) };
   if (serialization === 'query') return { outputKind: 'query', outputField: destination.slice(6) };
@@ -49,8 +67,9 @@ export function createBrowserTransformProfileInput(
   event?: BrowserRecordingEvent,
   callable?: BrowserPageCallable,
   candidate?: BrowserProfileInferenceCandidate,
+  packet?: BrowserTransformPacket,
 ): BrowserTransformProfileInput {
-  const guide = defaultGuidedTransform(callable, candidateGuidance(candidate));
+  const guide = defaultGuidedTransform(callable, candidateGuidance(candidate, callable, packet));
   const compiled = callable ? compileGuidedTransform(guide, callable) : emptyDirection(true);
   const responseDirection = candidate?.direction === 'response';
   const routeEvent = candidate ? {

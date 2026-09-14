@@ -114,6 +114,12 @@ export const capabilityParams = {
     action: v.picklist(['click', 'focus', 'scroll', 'setValue']),
     value: v.optional(v.pipe(v.string(), v.maxLength(100_000))),
   }), v.check((input) => input.action !== 'setValue' || typeof input.value === 'string', 'setValue 操作必须提供 value')),
+  'browser.crypto.inspect': v.strictObject({
+    ...targetFields,
+    captureId,
+    nodeId,
+    settleMs: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(250), v.maxValue(5_000))),
+  }),
   'browser.cookies': v.optional(v.strictObject(targetFields)),
   'browser.takeover': v.optional(v.strictObject(targetFields)),
   'browser.instance.close': v.optional(v.strictObject({})),
@@ -230,6 +236,13 @@ export const capabilityParams = {
     observed: v.optional(browserTransformPacketSchema),
     comparisonMode: v.optional(v.picklist(['structure', 'exact'])),
   }),
+  'browser.transform.prepare': v.strictObject({
+    ...targetFields,
+    candidateId: id,
+    inputPaths: v.optional(v.pipe(v.array(valuePath), v.maxLength(64))),
+    name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+    packet: browserTransformPacketSchema,
+  }),
   'browser.deep_capture.start': v.strictObject({ ...targetFields, matcher: deepCaptureMatcher }),
   'browser.deep_capture.status': v.optional(v.strictObject(targetFields)),
   'browser.deep_capture.keepalive': v.optional(v.strictObject(targetFields)),
@@ -252,6 +265,11 @@ export const capabilityParams = {
   'browser.transform.recovery.confirm': v.strictObject({ id, validationId: id }),
   'browser.transform.recovery.reset': v.strictObject({ id }),
   'browser.transform.execute': browserTransformExecuteSchema,
+  'browser.transform.validation.execute': v.strictObject({
+    validationId: id,
+    direction: v.picklist(['request', 'response']),
+    packet: browserTransformPacketSchema,
+  }),
   'browser.invoke': v.strictObject({
     ...targetFields,
     path: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(2_048)),

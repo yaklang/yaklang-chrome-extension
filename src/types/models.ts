@@ -1271,7 +1271,15 @@ export interface BrowserTransformExecuteInput {
   packet: BrowserTransformPacket;
 }
 
+export interface BrowserTransformValidationExecuteInput {
+  validationId: string;
+  direction: BrowserTransformDirectionName;
+  packet: BrowserTransformPacket;
+}
+
 export interface BrowserTransformExecution {
+  explanation?: BrowserTransformExplanation;
+  proofLevel?: 'structure' | 'exact' | 'execution-only';
   profileId: string;
   direction: BrowserTransformDirectionName;
   url: string;
@@ -1732,6 +1740,13 @@ export interface PageContextDiff {
 
 export type PageNodeAction = 'click' | 'focus' | 'scroll' | 'setValue';
 
+export interface PageDialog {
+  type: 'alert' | 'confirm' | 'prompt';
+  message: string;
+  decision: 'auto_dismissed' | 'auto_accepted' | 'auto_submitted';
+  timestamp: number;
+}
+
 export interface PageNodeDetails extends PageNodeSummary {
   reference: PageNodeReference;
   connected: boolean;
@@ -1741,8 +1756,10 @@ export interface PageNodeDetails extends PageNodeSummary {
 
 export interface PageNodeActionResult {
   action: PageNodeAction;
-  completedAt: number;
+  status: 'dispatched';
+  dispatchedAt: number;
   node: PageNodeDetails;
+  dialogs?: PageDialog[];
 }
 
 export interface PageEvalRequest {

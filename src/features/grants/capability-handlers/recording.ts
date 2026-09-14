@@ -33,10 +33,28 @@ import {
   stageBrowserProfileEvidence,
 } from '@/features/browser-analysis/service';
 import { RECORDING_CAPABILITY_DOMAIN } from '../capability-domains';
+import { inspectPageCryptoOperation } from '@/features/browser-crypto/inspect';
 
 export const recordingCapabilityHandler: CapabilityDomainHandler = {
   ...RECORDING_CAPABILITY_DOMAIN,
   async handle({ method, input, grant }) {
+    if (method === 'browser.crypto.inspect') {
+      for (const scope of [
+        'browser.recording.control',
+        'browser.recording.sensitive.read',
+        'browser.network.capture',
+        'browser.network.sensitive.read',
+      ] as const) requireScope(grant, scope);
+      return inspectPageCryptoOperation(
+        await allowedTarget(grant, input),
+        {
+          captureId: String(input.captureId || ''),
+          nodeId: String(input.nodeId || ''),
+          settleMs: typeof input.settleMs === 'number' ? input.settleMs : undefined,
+        },
+        { grantId: grant.id, expiresAt: grant.expiresAt },
+      );
+    }
     if (method.startsWith('browser.recording.')) {
       const target = await allowedTarget(grant, input);
       if (method === 'browser.recording.trace.list') {

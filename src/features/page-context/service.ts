@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser';
 import type {
   ActiveTabInfo, BrowserStorageInventory, BrowserTarget, PageAuthenticationSignals, PageContext, PageContextChange,
   PageContextDiff, PageContextOptions, PageEvalResult, PageNodeAction, PageNodeActionResult,
-  PageFormSummary, PageNodeDetails, PageNodeSummary, PageStorageSummary,
+  PageDialog, PageFormSummary, PageNodeDetails, PageNodeSummary, PageStorageSummary,
 } from '@/types/models';
 import { executePageOperation } from '@/features/page-context/execution-adapter';
 import { getFrameInventory } from '@/features/page-context/frames';
@@ -12,6 +12,7 @@ import { listCookies } from '@/features/cookies/service';
 import { ExtensionError } from '@/shared/errors';
 import { getTab, resolveDocumentTarget, scriptingTarget } from '@/platform/browser/targets';
 import { resolveTabCookieStoreId } from '@/platform/browser/isolation';
+import { beginPageDialogCapture, endPageDialogCapture } from './dialogs';
 
 async function collectDocumentContext(input: { options: PageContextOptions; captureId: string }) {
   const MAX_SCANNED_ELEMENTS = 10_000;
@@ -738,7 +739,13 @@ function operateRegisteredNode(input: { captureId: string; nodeId: string; opera
   if (input.operation === 'inspect') return { ok: true as const, node };
   const control = element as HTMLInputElement;
   if (input.operation === 'click') {
-    if (control.disabled || element.getAttribute('aria-disabled') === 'true') {
+    const style = getComputedStyle(element);
+    const visible = element.getClientRects().length > 0
+      && style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.opacity !== '0'
+      && style.pointerEvents !== 'none';
+    if (!visible || control.disabled || element.getAttribute('aria-disabled') === 'true') {
       return { ok: false as const, code: 'node_not_actionable', message: '页面元素当前不可点击' };
     }
     const click = (element as HTMLElement).click;
@@ -807,8 +814,17 @@ export async function actOnPageNode(
   input: BrowserTarget | number,
   value?: string,
 ): Promise<PageNodeActionResult> {
-  const node = await operateNode(captureId, nodeId, action, input, value);
-  return { action, completedAt: Date.now(), node };
+  const target = await resolveDocumentTarget(input);
+  const dialogCaptureOwned = action === 'click' ? await beginPageDialogCapture(target) : false;
+  let node: PageNodeDetails;
+  let dialogs: PageDialog[] = [];
+  try {
+    node = await operateNode(captureId, nodeId, action, target, value);
+    if (dialogCaptureOwned) await new Promise((resolve) => globalThis.setTimeout(resolve, 50));
+  } finally {
+    dialogs = await endPageDialogCapture(target, dialogCaptureOwned);
+  }
+  return { action, status: 'dispatched', dispatchedAt: Date.now(), node, dialogs };
 }
 
 export async function invokePageFunction(path: string, args: unknown[], input?: BrowserTarget | number, timeoutMs = 10_000): Promise<PageEvalResult> {

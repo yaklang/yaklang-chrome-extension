@@ -35,6 +35,18 @@ describe('versioned Bridge capability catalog', () => {
     expect(JSON.stringify(evalCapability?.paramsSchema)).toContain('"mode"');
     expect(JSON.stringify(evalCapability?.paramsSchema)).toContain('"program"');
     expect(capabilityBaseScope('browser.profile.validate')).toBe('browser.transform.execute');
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.crypto.inspect')).toMatchObject({
+      domain: 'recording',
+      access: 'execute',
+      scopes: [
+        'browser.dom.write',
+        'browser.recording.control',
+        'browser.recording.sensitive.read',
+        'browser.network.capture',
+        'browser.network.sensitive.read',
+      ],
+      targetMode: 'document',
+    });
     expect(catalog.capabilities.find((capability) => capability.method === 'browser.thumbnail')).toMatchObject({
       agentVisible: false,
     });
@@ -63,6 +75,14 @@ describe('versioned Bridge capability catalog', () => {
       targetMode: 'profile',
     });
     expect(capabilityBaseScope('browser.transform.recovery.validate')).toBe('browser.transform.execute');
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.validation.execute')).toMatchObject({
+      domain: 'transform',
+      access: 'execute',
+      scopes: ['browser.transform.execute'],
+      targetMode: 'profile',
+    });
+    expect(capabilityVisibleToAgent('browser.transform.validation.execute')).toBe(true);
+    expect(capabilityVisibleToAgent('browser.transform.prepare')).toBe(true);
     expect(catalog.capabilities.find((capability) => capability.method === 'browser.isolation.proof')).toMatchObject({
       domain: 'isolation',
       access: 'sensitive-read',

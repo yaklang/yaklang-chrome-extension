@@ -91,6 +91,18 @@ const CAPABILITY_METADATA = {
     domain: 'page', access: 'write', summary: '点击、聚焦、滚动或填写稳定页面节点',
     scopes: ['browser.dom.write'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
+  'browser.crypto.inspect': {
+    domain: 'recording', access: 'execute',
+    summary: '原子化触发一个可见页面节点，返回加解密、编码、网络证据及动作后的新页面节点；以非阻塞本地默认值处理 alert/confirm/prompt，并为明文转换准备候选',
+    scopes: [
+      'browser.dom.write',
+      'browser.recording.control',
+      'browser.recording.sensitive.read',
+      'browser.network.capture',
+      'browser.network.sensitive.read',
+    ],
+    targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
+  },
   'browser.cookies': {
     domain: 'page', access: 'sensitive-read', summary: '读取目标页面 Cookie，包括已授权的 HttpOnly 值',
     scopes: ['browser.cookies.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -162,7 +174,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.network.sensitive.read'], targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.recording.start': {
-    domain: 'recording', access: 'control', summary: '开始业务 Trace 录制；生成新明文网关时先录制一次真实业务操作，再检查候选证据',
+    domain: 'recording', access: 'control', summary: '开始业务 Trace 录制；由插件本地诊断与高层能力使用',
     scopes: ['browser.recording.control'],
     conditionalScopes: [{ scope: 'browser.recording.sensitive.read', when: 'captureValues=true' }],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -194,7 +206,7 @@ const CAPABILITY_METADATA = {
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.callable.create': {
-    domain: 'callable', access: 'execute', summary: '从录制句柄或深度捕获 Frame 创建页面函数；生成明文网关 Profile 前需要得到可回放函数',
+    domain: 'callable', access: 'execute', summary: '从录制句柄或深度捕获 Frame 创建页面函数',
     scopes: ['browser.callable.execute'],
     conditionalScopes: [{ scope: 'browser.debugger.control', when: 'source=deep-capture' }],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -240,7 +252,7 @@ const CAPABILITY_METADATA = {
     scopes: ['browser.debugger.control'], targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.transform.profile.list': {
-    domain: 'transform', access: 'read', summary: '明文网关入口：先列出目标页面已有 Profile；已有配置可直接用 transform.execute，无配置再走录制、提案和验证',
+    domain: 'transform', access: 'read', summary: '列出目标页面已有的明文转换；无匹配配置时使用 browser.crypto.inspect 和 browser.transform.prepare',
     scopes: ['browser.transform.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.transform.profile.delete': {
@@ -277,22 +289,32 @@ const CAPABILITY_METADATA = {
     domain: 'transform', access: 'execute', summary: '使用已保存的 Profile 对 HTTP 报文执行请求加密或响应解密；它不是网络代理切换',
     scopes: ['browser.transform.execute'], targetMode: 'profile', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
+  'browser.transform.validation.execute': {
+    domain: 'transform', access: 'execute', summary: '使用 Agent 已验证的短时草稿执行请求加密或响应解密，不会永久保存 Profile',
+    scopes: ['browser.transform.execute'], targetMode: 'profile', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
+  },
   'browser.packet.compare': {
     domain: 'transform', access: 'read', summary: '按结构或精确模式比较两份 HTTP 报文',
     scopes: ['browser.transform.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.profile.propose': {
-    domain: 'transform', access: 'read', summary: '从录制候选和页面函数编译未保存的 Profile 提案；下一步必须调用 profile.validate',
+    domain: 'transform', access: 'read', summary: '从录制候选和页面函数编译未保存的 Profile 提案',
     scopes: ['browser.transform.read', 'browser.recording.read'],
     targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.profile.validation.latest': {
-    domain: 'transform', access: 'read', summary: '读取当前文档最近的短时验证草稿及本地确认状态；草稿过期后需重新验证',
+    domain: 'transform', access: 'read', summary: '读取当前文档最近的短时验证草稿及本地确认状态',
     scopes: ['browser.transform.read'], targetMode: 'document', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.profile.validate': {
-    domain: 'transform', access: 'execute', summary: '确定性执行 Profile 提案并与证据比较；成功后只生成短时草稿，必须由用户在插件本地确认保存',
+    domain: 'transform', access: 'execute', summary: '确定性执行 Profile 提案并与证据比较；保存仍需用户在插件本地确认保存',
     scopes: ['browser.transform.execute', 'browser.recording.read'],
+    targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
+  },
+  'browser.transform.prepare': {
+    domain: 'transform', access: 'execute',
+    summary: '将 browser.crypto.inspect 捕获的候选原子化编译并验证为短时明文转换；不需要 Agent 操作录制、页面函数或 Profile 底层步骤',
+    scopes: ['browser.transform.execute', 'browser.recording.read', 'browser.callable.execute'],
     targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
   },
   'browser.invoke': {

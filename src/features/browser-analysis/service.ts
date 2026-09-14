@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import * as v from 'valibot';
 import {
+  createRecordedPageCallable,
   getBrowserRecording,
 } from '@/features/browser-recording/service';
 import { recordingSnapshotForScope } from '@/features/browser-recording/redaction';
@@ -34,6 +35,7 @@ import {
   type BrowserTransformProfileProposalResult,
   type BrowserTransformProfileValidationResult,
   type BrowserTransformValidationDraft,
+  type BrowserTransformDirectionName,
 } from '@/types/models';
 
 const MAX_TRACE_EVENTS = 80;
@@ -478,6 +480,37 @@ export async function latestBrowserTransformValidation(
   return draft || memoryValidationDrafts.get(key) || null;
 }
 
+export async function browserTransformValidationById(
+  validationId: string,
+): Promise<BrowserTransformValidationDraft> {
+  const now = Date.now();
+  const stored = await readStoredValidationDrafts();
+  const drafts = pruneValidationDrafts(stored, now);
+  if (Object.keys(drafts).length !== Object.keys(stored).length) {
+    validationDraftStorageQueue = validationDraftStorageQueue.then(() => writeStoredValidationDrafts(drafts));
+    await validationDraftStorageQueue;
+  }
+  const draft = Object.values(drafts).find((item) => item.id === validationId)
+    || [...memoryValidationDrafts.values()].find((item) => item.id === validationId && item.expiresAt > now);
+  if (!draft) {
+    throw new ExtensionError('validation_draft_stale', '验证草稿不存在或已经过期，请重新生成并验证');
+  }
+  return draft;
+}
+
+export async function executeBrowserTransformValidation(
+  validationId: string,
+  direction: BrowserTransformDirectionName,
+  packet: BrowserTransformPacket,
+): Promise<BrowserTransformExecution> {
+  const draft = await browserTransformValidationById(validationId);
+  const { profile, execution } = await validateBrowserTransformProfile(draft.profile, packet, {
+    direction,
+    profileId: `transient-${validationId}`,
+  });
+  return { ...execution, explanation: profile.explanation, proofLevel: draft.proofLevel };
+}
+
 export async function discardBrowserTransformValidation(
   target: BrowserTarget,
   validationId: string,
@@ -801,7 +834,7 @@ export function comparePacketWithInferenceCandidate(
   check(
     checks,
     'body-shape',
-    '已关联的线上字段存在且没有二次 JSON 包装',
+    '线上字段结构一致（不验证加密前的输入内容）',
     bodyFieldsPresent,
     actualShape.signature,
     bodyFields,
@@ -1045,6 +1078,7 @@ export async function proposeBrowserTransformProfile(
   callableId: string,
   inputPaths?: string[],
   name?: string,
+  packet?: BrowserTransformPacket,
 ): Promise<BrowserTransformProfileProposalResult> {
   const [snapshot, callables, tab, frame] = await Promise.all([
     getBrowserRecording(target, 500, false),
@@ -1082,7 +1116,7 @@ export async function proposeBrowserTransformProfile(
     lastAccessed: tab.lastAccessed,
   };
   const requestEvent = evidence.requestEvent;
-  let profile = createBrowserTransformProfileInput(tabInfo, requestEvent, callable, candidate);
+  let profile = createBrowserTransformProfileInput(tabInfo, requestEvent, callable, candidate, inputPaths ? undefined : packet);
   profile = {
     ...profile,
     name: name || profile.name,
@@ -1129,7 +1163,7 @@ export async function proposeBrowserTransformProfile(
         ? callable.transaction ? 'captured-request-transaction' : 'validated-callable-envelope'
         : 'recording-evidence',
     },
-    next: '调用 profile.validate；验证成功后由用户在插件中确认保存，AI 不直接持久化配置',
+    next: '调用 profile.validate；验证成功后可立即用 validationDraft.id 做一次临时明文 HTTP 测试，只有复用配置才需要用户在插件中确认保存',
   };
 }
 
@@ -1196,7 +1230,7 @@ export async function validateBrowserTransformProposal(
     proofLevel,
     normalizedProfile,
     generated,
-    execution,
+    execution: { ...execution, explanation: normalized.explanation },
     comparison,
     validationDraft: validationDraft ? {
       contractVersion: validationDraft.contractVersion,
@@ -1206,9 +1240,11 @@ export async function validateBrowserTransformProposal(
     } : undefined,
     next: comparison
       ? comparison.equivalent
-        ? '确定性验证通过；插件已生成待用户确认的明文网关草稿'
+        ? comparison.mode === 'exact'
+          ? '样本报文对比通过；尚未发送业务测试请求，使用 validationDraft.id 调用 browser.http.test'
+          : '仅结构校验通过，不证明明文输入、加密语义或业务成功；使用 validationDraft.id 调用 browser.http.test 验证，请勿原样重复 prepare'
         : '数据包对比未通过；检查输入映射或重新选择页面函数'
-      : 'Pipeline 已真实回放并生成待确认草稿；如需更强证明，请提供一份浏览器线上请求进行结构对比',
+      : 'Pipeline 已真实回放；可将 validationDraft.id 直接交给 browser.http.test。如需更强证明，请提供一份浏览器线上请求进行结构对比',
   };
 }
 
@@ -1228,6 +1264,7 @@ export async function validateInferredBrowserTransformProfile(
     callableId,
     inputPaths,
     name,
+    packet,
   );
   return validateBrowserTransformProposal(
     proposal.profile,
@@ -1235,5 +1272,37 @@ export async function validateInferredBrowserTransformProfile(
     observed,
     comparisonMode,
     candidateId,
+  );
+}
+
+export async function prepareCapturedBrowserTransformProfile(
+  target: BrowserTarget,
+  candidateId: string,
+  packet: BrowserTransformPacket,
+  inputPaths?: string[],
+  name?: string,
+): Promise<BrowserTransformProfileValidationResult> {
+  const candidate = await resolveStagedProfileCandidate(target, candidateId);
+  const source = [candidate.source, ...candidate.sources]
+    .find((item) => item.callHandleId);
+  if (!source?.callHandleId) {
+    throw new ExtensionError(
+      'gateway_capture_required',
+      '本次操作没有捕获到可回放的页面函数，请在原页面重新执行一次浏览器加解密检查',
+    );
+  }
+  const existing = (await listPageCallables(target))
+    .find((item) => item.provenance.eventId === source.eventId);
+  const callable = existing || await createRecordedPageCallable(target, {
+    callHandleId: source.callHandleId,
+    name: name || candidate.summary.slice(0, 120) || 'Captured page transform',
+  });
+  return validateInferredBrowserTransformProfile(
+    target,
+    candidate.id,
+    callable.id,
+    packet,
+    inputPaths,
+    name,
   );
 }

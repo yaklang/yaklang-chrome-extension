@@ -855,9 +855,10 @@ export async function executeBrowserTransform(input: BrowserTransformExecuteInpu
       direction,
       input.packet,
     );
-    return input.direction === 'request'
+    const result = input.direction === 'request'
       ? await bindOnlineTransactionSession(profile, execution)
       : execution;
+    return { ...result, explanation: profile.explanation };
   } finally {
     leave();
   }
@@ -866,6 +867,7 @@ export async function executeBrowserTransform(input: BrowserTransformExecuteInpu
 export async function validateBrowserTransformProfile(
   input: BrowserTransformProfileInput,
   packet: BrowserTransformExecuteInput['packet'],
+  options: { direction?: BrowserTransformDirectionName; profileId?: string } = {},
 ): Promise<{ profile: BrowserTransformProfile; execution: BrowserTransformExecution }> {
   const target = await resolveDocumentTarget(input.target);
   const isolation = await currentTransformIsolation(target);
@@ -878,19 +880,22 @@ export async function validateBrowserTransformProfile(
   const normalized = withRequestTransactionBinding(
     normalizeProfile({
       ...input,
-      id: `validation-${crypto.randomUUID()}`,
+      id: options.profileId || `validation-${crypto.randomUUID()}`,
       target,
       maxConcurrency: transactionSafeConcurrency(input, callables),
     }, isolation),
     requestTransaction,
   );
   const profile = withTransformExplanation(normalized, callables);
-  const directionName: BrowserTransformDirectionName = profile.request.enabled
+  const directionName: BrowserTransformDirectionName = options.direction || (profile.request.enabled
     ? 'request'
-    : profile.response.enabled ? 'response' : 'request';
+    : profile.response.enabled ? 'response' : 'request');
   const direction = profile[directionName];
-  if (!profile.enabled || !direction.enabled) {
-    throw new ExtensionError('transform_direction_disabled', '候选明文网关没有启用任何转换方向');
+  if (!profile.enabled) {
+    throw new ExtensionError('transform_profile_disabled', '候选明文网关未启用');
+  }
+  if (!direction.enabled) {
+    throw new ExtensionError('transform_direction_disabled', `候选明文网关未启用 ${directionName} 转换方向`);
   }
   assertTransformRoute(profile.match.methods, profile.match.urlPattern, packet, profile.origin);
   assertRequestTransactionPacket(profile, packet);

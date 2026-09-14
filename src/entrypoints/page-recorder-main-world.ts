@@ -48,6 +48,7 @@ import {
   type RecordingTraceContext,
   type RecordingTraceRuntime,
 } from '@/features/browser-recording/main-world/trace';
+import { recordingExpiryDelay } from '@/features/browser-recording/expiry';
 import { RetainedCallBudget } from '@/features/browser-recording/main-world/retained-call-budget';
 import { estimateRetainedCallBytes } from '@/features/browser-recording/main-world/retained-value-size';
 import { ExtensionError } from '@/shared/errors';
@@ -673,7 +674,14 @@ export default defineUnlistedScript(() => {
     if (active || !startedAt) return;
     active = true;
     installObservers();
-    if (options.expiresAt) expiryTimer = window.setTimeout(stop, Math.max(0, options.expiresAt - Date.now()));
+    scheduleExpiry();
+  }
+
+  function scheduleExpiry(): void {
+    const delay = recordingExpiryDelay(options.expiresAt);
+    if (delay === undefined) return;
+    if (delay === 0) { stop(); return; }
+    expiryTimer = window.setTimeout(stop, delay);
   }
 
   function snapshot(limit = options.maxEntries): RecorderSnapshot {
@@ -863,7 +871,7 @@ export default defineUnlistedScript(() => {
         reseedFingerprints();
         active = true;
         installObservers();
-        if (options.expiresAt) expiryTimer = window.setTimeout(stop, Math.max(0, options.expiresAt - Date.now()));
+        scheduleExpiry();
         return snapshot();
       }
       if (command === 'resume') {

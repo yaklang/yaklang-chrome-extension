@@ -1,6 +1,7 @@
 import type {
   BrowserTransformExecuteInput,
   BrowserTransformPacket,
+  BrowserTransformValidationExecuteInput,
 } from '@/types/models';
 import type { CapabilityDomainHandler } from '../capability-context';
 import { allowedTarget, requireScope } from '../capability-context';
@@ -18,7 +19,10 @@ import {
 } from '@/features/browser-transform/service';
 import {
   compareBrowserPackets,
+  browserTransformValidationById,
+  executeBrowserTransformValidation,
   latestBrowserTransformValidation,
+  prepareCapturedBrowserTransformProfile,
   proposeBrowserTransformProfile,
   validateInferredBrowserTransformProfile,
 } from '@/features/browser-analysis/service';
@@ -27,6 +31,17 @@ import { TRANSFORM_CAPABILITY_DOMAIN } from '../capability-domains';
 export const transformCapabilityHandler: CapabilityDomainHandler = {
   ...TRANSFORM_CAPABILITY_DOMAIN,
   async handle({ method, input, grant }) {
+    if (method === 'browser.transform.prepare') {
+      requireScope(grant, 'browser.recording.read');
+      requireScope(grant, 'browser.callable.execute');
+      return prepareCapturedBrowserTransformProfile(
+        await allowedTarget(grant, input),
+        String(input.candidateId || ''),
+        input.packet as BrowserTransformPacket,
+        Array.isArray(input.inputPaths) ? input.inputPaths.map(String) : undefined,
+        typeof input.name === 'string' ? input.name : undefined,
+      );
+    }
     if (method === 'browser.packet.compare') {
       await allowedTarget(grant, input);
       return compareBrowserPackets(
@@ -122,6 +137,17 @@ export const transformCapabilityHandler: CapabilityDomainHandler = {
       const profile = await getBrowserTransformProfile(String(input.id || ''));
       await allowedTarget(grant, profile.target);
       return deleteBrowserTransformProfile(profile.id);
+    }
+    if (method === 'browser.transform.validation.execute') {
+      requireScope(grant, 'browser.transform.execute');
+      const executeValidationInput = input as unknown as BrowserTransformValidationExecuteInput;
+      const draft = await browserTransformValidationById(executeValidationInput.validationId);
+      await allowedTarget(grant, draft.profile.target);
+      return executeBrowserTransformValidation(
+        executeValidationInput.validationId,
+        executeValidationInput.direction,
+        executeValidationInput.packet,
+      );
     }
     const executeInput = input as unknown as BrowserTransformExecuteInput;
     const profile = await getBrowserTransformProfile(executeInput.profileId);

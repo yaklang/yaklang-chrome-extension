@@ -5,6 +5,7 @@ import type {
   BrowserProfileInferenceCandidate,
 } from '@/types/models';
 import { createBrowserTransformProfileInput } from './profile-draft';
+import { executeTransformDirection } from './mapping';
 
 const tab: ActiveTabInfo = {
   id: 7,
@@ -66,6 +67,26 @@ const responseCandidate = {
 } satisfies BrowserProfileInferenceCandidate;
 
 describe('browser transform profile draft', () => {
+  it('reads only the captured form field for a single string input and rejects ambiguous fields', async () => {
+    const candidate = { ...responseCandidate, direction: 'request' as const,
+      request: { ...responseCandidate.request, bodyFormat: 'form' as const, serialization: 'form-field' as const } };
+    const packet = { method: 'POST', url: candidate.request.url,
+      headers: [{ name: 'Content-Type', value: 'application/x-www-form-urlencoded; charset=utf-8' }],
+      bodyBase64: btoa('encryptedData={"username":"admin","password":"admin123"}') };
+    const profile = createBrowserTransformProfileInput(tab, undefined, callable, candidate, packet);
+    expect(profile.request.nodes.filter((node) => node.kind === 'context.read')).toMatchObject([{ path: 'body.encryptedData' }]);
+    let received: unknown[] = [];
+    await executeTransformDirection('test', 'request', profile.request, packet, async (callableId, args) => {
+      received = args;
+      return { callableId, type: 'string', preview: 'cipher', value: 'cipher', durationMs: 1 };
+    });
+    expect(received).toEqual(['{"username":"admin","password":"admin123"}']);
+    for (const body of ['username=admin', 'encryptedData=a&encryptedData=b']) {
+      expect(() => createBrowserTransformProfileInput(tab, undefined, callable, candidate, { ...packet, bodyBase64: btoa(body) })).toThrow(/input_paths/);
+    }
+    const jsonPacket = { ...packet, headers: [{ name: 'Content-Type', value: 'application/json' }], bodyBase64: btoa('{"username":"admin"}') };
+    expect(createBrowserTransformProfileInput(tab, undefined, callable, candidate, jsonPacket).request.nodes[0]).toMatchObject({ path: 'body' });
+  });
   it('compiles an inferred response decryptor into the response direction', () => {
     const profile = createBrowserTransformProfileInput(tab, undefined, callable, responseCandidate);
 

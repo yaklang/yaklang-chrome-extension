@@ -131,6 +131,12 @@ describe('Bridge v3 protocol', () => {
     expect(parseCapabilityParams('browser.recording.trace.list', {
       tabId: 12, frameId: 0, limit: 20,
     })).toMatchObject({ limit: 20 });
+    expect(parseCapabilityParams('browser.crypto.inspect', {
+      tabId: 12, captureId: 'capture-1', nodeId: 'n1', settleMs: 2_000,
+    })).toMatchObject({ captureId: 'capture-1', nodeId: 'n1', settleMs: 2_000 });
+    expect(() => parseCapabilityParams('browser.crypto.inspect', {
+      captureId: 'capture-1', nodeId: 'n1', settleMs: 30_000,
+    })).toThrow();
     expect(parseCapabilityParams('browser.recording.evidence.inspect', {
       tabId: 12, traceId: 'trace-1', includeValues: false,
     })).toMatchObject({ traceId: 'trace-1', includeValues: false });
@@ -163,6 +169,12 @@ describe('Bridge v3 protocol', () => {
       candidateId: 'candidate-1',
       callableId: 'callable-1',
     });
+    expect(parseCapabilityParams('browser.transform.prepare', {
+      tabId: 12,
+      candidateId: 'candidate-1',
+      inputPaths: ['body'],
+      packet,
+    })).toMatchObject({ candidateId: 'candidate-1', packet });
     expect(parseCapabilityParams('browser.transform.recovery.start', {
       id: 'profile-1',
     })).toMatchObject({ id: 'profile-1' });
@@ -186,6 +198,11 @@ describe('Bridge v3 protocol', () => {
       id: 'profile-1',
       validationId: 'validation-1',
     })).toMatchObject({ validationId: 'validation-1' });
+    expect(parseCapabilityParams('browser.transform.validation.execute', {
+      validationId: 'validation-1',
+      direction: 'request',
+      packet,
+    })).toMatchObject({ validationId: 'validation-1', direction: 'request' });
     expect(() => parseCapabilityParams('browser.profile.validate', {
       tabId: 12,
       profile: {},

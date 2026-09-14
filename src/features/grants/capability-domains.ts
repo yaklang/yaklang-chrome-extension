@@ -43,7 +43,8 @@ export const NETWORK_CAPABILITY_DOMAIN: CapabilityDomainDefinition = {
 
 export const RECORDING_CAPABILITY_DOMAIN: CapabilityDomainDefinition = {
   id: 'recording-callable-debugger',
-  owns: (method) => method.startsWith('browser.recording.')
+  owns: (method) => method === 'browser.crypto.inspect'
+    || method.startsWith('browser.recording.')
     || method.startsWith('browser.callable.')
     || method.startsWith('browser.deep_capture.'),
 };
