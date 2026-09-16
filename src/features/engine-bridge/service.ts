@@ -33,6 +33,23 @@ const MAX_CONCURRENT_REQUESTS = 8;
 const ENGINE_REQUEST_TIMEOUT = 10_000;
 const MAX_OUTGOING_REQUESTS = 4;
 
+export function browserClientIdentity(
+  config: BridgeConfig,
+  userAgent = globalThis.navigator?.userAgent || '',
+): { client: string; version: string } {
+  const detected = [
+    [/\bEdg(?:A|iOS)?\/([\d.]+)/, 'Microsoft Edge'],
+    [/\b(?:Chrome|CriOS)\/([\d.]+)/, 'Google Chrome'],
+    [/\bChromium\/([\d.]+)/, 'Chromium'],
+    [/\bFirefox\/([\d.]+)/, 'Firefox'],
+  ].map(([pattern, name]) => ({ match: userAgent.match(pattern as RegExp), name: name as string }))
+    .find(({ match }) => match);
+  return {
+    client: config.browserName?.trim() || detected?.name || 'Browser',
+    version: config.browserVersion?.trim() || detected?.match?.[1] || '',
+  };
+}
+
 interface OutgoingRequest {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -297,10 +314,11 @@ export class EngineBridge {
     const [state, previousSession] = await Promise.all([getState(), getBridgeRuntimeSession()]);
     const identity = await getOrCreateBrowserBridgeIdentity(config.installationId);
     const capabilityCatalog = await getBridgeCapabilityCatalog();
+    const browserIdentity = browserClientIdentity(config);
     const auth: BridgeEnvelope = {
       type: 'auth',
-      client: 'yakit-browser-extension',
-      version: browser.runtime.getManifest().version,
+      client: browserIdentity.client,
+      version: browserIdentity.version,
       protocolVersion: BRIDGE_PROTOCOL_VERSION,
       capabilities: [...BRIDGE_CAPABILITIES],
       capabilityCatalog,
@@ -781,6 +799,7 @@ export class EngineBridge {
     if (this.pairingSocket && ['requesting', 'pending'].includes(currentPairing.state)) return currentPairing;
     this.cancelPairing(false);
     const identity = await getOrCreateBrowserBridgeIdentity(config.installationId);
+    const browserIdentity = browserClientIdentity(config);
     const clientNonce = randomBridgeNonce();
     const pairingURL = new URL(config.endpoint);
     pairingURL.pathname = '/pairing';
@@ -805,7 +824,7 @@ export class EngineBridge {
           type: 'pair_request', protocolVersion: BRIDGE_PROTOCOL_VERSION,
           installationId: config.installationId,
           managedInstance: config.managedInstance,
-          client: 'yakit-browser-extension', version: browser.runtime.getManifest().version,
+          client: browserIdentity.client, version: browserIdentity.version,
           nonce: clientNonce, publicKey: identity.publicKey,
         } satisfies BridgePairingEnvelope));
       } catch (error) {

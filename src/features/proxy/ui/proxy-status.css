@@ -1,0 +1,22 @@
+.proxy-effective-status { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); flex-shrink: 0; min-width: 0; }
+.proxy-effective-status small { color: var(--muted); font-size: var(--text-xs, 12px); flex-shrink: 0; }
+.proxy-effective-status strong { font-size: var(--text-sm, 13px); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.popup-proxy-view > .proxy-effective-status { padding: 8px 12px; background: var(--surface); }
+.popup-proxy-view.popup-tool-view { overflow-y: auto; }
+.startup-proxy-option { position: relative; border: 1px solid transparent; border-radius: var(--radius-md); min-width: 0; }
+.startup-proxy-option.is-active { border-color: color-mix(in srgb, var(--primary) 20%, var(--border)); background: var(--primary-soft); }
+.startup-proxy-option.is-active > button:first-child { color: var(--primary-text); }
+.startup-proxy-option > button { border: 0; background: transparent; color: var(--foreground); cursor: pointer; padding: 7px 8px; }
+.startup-proxy-option > button:first-child { display: grid; grid-template-columns: 28px minmax(0, 1fr) 14px; align-items: center; gap: 8px; width: 100%; padding: 5px 8px; min-width: 0; text-align: left; min-height: 41px; }
+.startup-proxy-label { min-width: 0; padding-right: 28px; }
+.startup-proxy-icon { width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); color: var(--muted-strong); }
+.startup-proxy-option.is-active .startup-proxy-icon { border-color: color-mix(in srgb, var(--primary) 28%, var(--border)); color: var(--primary); }
+.startup-proxy-check { display: grid; place-items: center; color: var(--primary); }
+.startup-proxy-option strong, .startup-proxy-option small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.startup-proxy-option strong { font-size: var(--text-sm, 13px); font-weight: 600; line-height: 16px; }
+.startup-proxy-option small { margin-top: 1px; font-size: var(--text-xs, 12px); line-height: 14px; color: var(--muted); }
+.startup-proxy-option svg { flex-shrink: 0; }
+.startup-proxy-option .startup-proxy-info { position: absolute; right: 30px; top: 50%; translate: 0 -50%; color: var(--muted); display: grid; place-items: center; width: 28px; height: 32px; padding: 0; }
+.startup-proxy-option > button:hover { background: var(--surface-subtle); }
+.startup-proxy-option > button:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; border-radius: var(--radius-md); }
+.startup-proxy-option > button:disabled { cursor: default; opacity: .5; }

@@ -113,6 +113,13 @@ export interface ProxyRulePage {
   rules: NormalizedProxyRule[];
 }
 
+export interface ProxyStatus {
+  followingStartup?: boolean;
+  control: string;
+  label: string;
+  activeProfileId?: string;
+}
+
 export interface ProxyRuntimeState {
   dirty: boolean;
   compiledBytes: number;
@@ -196,6 +203,8 @@ export interface BridgeConfig {
   endpoint: string;
   autoConnect: boolean;
   installationId: string;
+  browserName?: string;
+  browserVersion?: string;
   managedInstance?: {
     manager: 'ytray' | 'yakit';
     instanceId: string;
@@ -1488,6 +1497,7 @@ export interface DiagnosticsBundle {
 }
 
 export interface ExtensionState {
+  startupProxy?: string;
   version: 7;
   proxyProfiles: ProxyProfile[];
   proxyRules: ProxyRule[];

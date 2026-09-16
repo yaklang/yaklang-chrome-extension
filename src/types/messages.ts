@@ -99,6 +99,8 @@ export interface ExtensionRequestMap {
   'proxy.save': { input: ProxyProfile; output: ExtensionState };
   'proxy.delete': { input: { id: string }; output: ExtensionState };
   'proxy.switch': { input: { id: string }; output: ExtensionState };
+  'proxy.status': { input: undefined; output: import('./models').ProxyStatus };
+  'proxy.release': { input: undefined; output: ExtensionState };
   'proxy.rule.save': { input: ProxyRule; output: ExtensionState };
   'proxy.rule.delete': { input: { id: string }; output: ExtensionState };
   'proxy.auto.apply': { input: undefined; output: ExtensionState };
@@ -250,7 +252,9 @@ export interface ExtensionRequestMap {
   'metrics.reset': { input: undefined; output: RuntimeMetrics };
   'bridge.config.save': { input: BridgeConfig; output: ExtensionState };
   'bridge.managed-instance.bind': {
-    input: NonNullable<BridgeConfig['managedInstance']>;
+    input: NonNullable<BridgeConfig['managedInstance']> & Pick<BridgeConfig, 'browserName' | 'browserVersion'> & {
+      startupProxy?: string;
+    };
     output: BridgeStatus;
   };
   'bridge.pair': { input: undefined; output: BridgePairingStatus };

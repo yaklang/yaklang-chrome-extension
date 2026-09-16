@@ -179,6 +179,8 @@ const bridgeConfig = v.strictObject({
   endpoint: v.pipe(v.string(), v.trim(), v.maxLength(2_048)),
   autoConnect: v.boolean(),
   installationId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160)),
+  browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+  browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
   managedInstance: v.optional(managedInstance),
   pairedEngine: v.optional(v.strictObject({
     engineIdentityId: id,
@@ -301,6 +303,8 @@ const payloadSchemas = {
   'proxy.save': proxyProfile,
   'proxy.delete': v.strictObject({ id }),
   'proxy.switch': v.strictObject({ id }),
+  'proxy.status': noPayload,
+  'proxy.release': noPayload,
   'proxy.rule.save': proxyRule,
   'proxy.rule.delete': v.strictObject({ id }),
   'proxy.auto.apply': noPayload,
@@ -471,7 +475,15 @@ const payloadSchemas = {
   'metrics.get': noPayload,
   'metrics.reset': noPayload,
   'bridge.config.save': bridgeConfig,
-  'bridge.managed-instance.bind': managedInstance,
+  'bridge.managed-instance.bind': v.strictObject({
+    ...managedInstance.entries,
+    browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+    browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
+    startupProxy: v.optional(v.union([v.literal('direct'), v.pipe(httpUrl, v.check((value) => {
+      const parsed = new URL(value);
+      return !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.pathname === '/';
+    }, '启动代理只能包含协议、主机和端口'))])),
+  }),
   'bridge.pair': noPayload,
   'bridge.pair.cancel': noPayload,
   'bridge.pair.status': noPayload,

@@ -145,6 +145,7 @@ vi.stubGlobal('WebSocket', FakeWebSocket);
 import {
   BRIDGE_HEARTBEAT_TIMEOUT_MS,
   EngineBridge,
+  browserClientIdentity,
 } from './service';
 import { beginAgentAction } from '@/features/agent-runtime/service';
 import {
@@ -162,6 +163,8 @@ function bridgeConfig(paired = true) {
     endpoint: 'ws://127.0.0.1:64333/extension',
     autoConnect: false,
     installationId: 'installation-1',
+    browserName: 'Chrome for Testing',
+    browserVersion: '152.0.7977.82',
     pairedEngine: paired ? {
       engineIdentityId: 'engine-identity-1',
       deviceId: 'device-1',
@@ -346,6 +349,8 @@ describe('Engine Bridge transport lifecycle', () => {
 
     expect(auth).toMatchObject({
       type: 'auth',
+      client: 'Chrome for Testing',
+      version: '152.0.7977.82',
       challenge: 'engine-challenge-0123456789',
       resumeSessionId: 'previous-session',
     });
@@ -491,6 +496,24 @@ describe('Engine Bridge transport lifecycle', () => {
     expect(bridge.getPairingStatus()).toMatchObject({
       state: 'error',
       message: expect.stringContaining('无法保存'),
+    });
+  });
+});
+
+describe('browser client identity', () => {
+  it('distinguishes Edge and lets managed Chrome for Testing metadata win', () => {
+    const config = { ...bridgeConfig(false), browserName: undefined, browserVersion: undefined };
+    expect(browserClientIdentity(
+      config,
+      'Mozilla/5.0 AppleWebKit/537.36 Chrome/152.0.0.0 Safari/537.36 Edg/152.0.1234.5',
+    )).toEqual({ client: 'Microsoft Edge', version: '152.0.1234.5' });
+    expect(browserClientIdentity({
+      ...config,
+      browserName: 'Chrome for Testing',
+      browserVersion: '152.0.7977.82',
+    }, 'Mozilla/5.0 Chrome/152.0.0.0')).toEqual({
+      client: 'Chrome for Testing',
+      version: '152.0.7977.82',
     });
   });
 });

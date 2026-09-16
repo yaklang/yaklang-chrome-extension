@@ -2,7 +2,7 @@ import { browser } from 'wxt/browser';
 import { isStateStorageChange, PROXY_AUTH_STORAGE_KEY } from '@/protocol/storage';
 import type {
   ExtensionState, ProxyConfiguration, ProxyProfile, ProxyRule, ProxyRulePage, ProxyRulePreview,
-  ProxyRuleSource, ProxyRuleSourceExport, ProxyRuleSourceInput,
+  ProxyRuleSource, ProxyRuleSourceExport, ProxyRuleSourceInput, ProxyStatus,
 } from '@/types/models';
 import { getState, updateState } from '@/platform/storage/state';
 import {
@@ -31,6 +31,10 @@ const sessionStorage = (browser.storage as unknown as { session?: StorageArea })
 const authPasswords = new Map<string, string>();
 const sourceRefreshes = new Map<string, { identity: string; promise: Promise<ExtensionState> }>();
 let proxyState: ExtensionState | undefined;
+
+browser.proxy?.settings?.onChange?.addListener(() => {
+  void browser.runtime.sendMessage({ action: 'proxy.status.changed' }).catch(() => undefined);
+});
 
 function isFirefox(): boolean {
   return Boolean(import.meta.env.FIREFOX);
@@ -119,7 +123,7 @@ async function assertProxyControl(): Promise<void> {
     throw new Error('浏览器代理正由其他扩展控制，请先停用其他代理扩展后重试');
   }
   if (current.levelOfControl === 'not_controllable') {
-    throw new Error('浏览器代理受系统策略或启动参数控制，当前扩展无法修改');
+    throw new Error('浏览器报告代理不可由扩展控制，请检查强制管理策略；普通启动代理参数不代表锁定');
   }
 }
 
@@ -130,18 +134,89 @@ async function setPacScript(pacScript: string): Promise<void> {
       value: { proxyType: 'autoConfig', autoConfigUrl: `data:application/x-ns-proxy-autoconfig,${encodeURIComponent(pacScript)}` } as unknown as Browser.proxy.ProxyConfig,
       scope: 'regular',
     });
+    await verifyProxyControl({ proxyType: 'autoConfig', autoConfigUrl: `data:application/x-ns-proxy-autoconfig,${encodeURIComponent(pacScript)}` });
     return;
   }
   await browser.proxy.settings.set({
     value: { mode: 'pac_script', pacScript: { data: pacScript, mandatory: true } },
     scope: 'regular',
   });
+  await verifyProxyControl({ mode: 'pac_script', pacScript: { data: pacScript, mandatory: true } });
 }
 
 async function setBrowserProxyProfile(profile: ProxyProfile): Promise<void> {
   await assertProxyControl();
   const value = isFirefox() ? firefoxProxyValue(profile) : chromeProxyValue(profile);
   await browser.proxy.settings.set({ value: value as Browser.proxy.ProxyConfig, scope: 'regular' });
+  await verifyProxyControl(value);
+}
+
+async function verifyProxyControl(expected: object): Promise<void> {
+  const actual = await browser.proxy.settings.get({ incognito: false });
+  if (actual.levelOfControl !== 'controlled_by_this_extension' || !proxyConfigMatches(actual.value, expected)) {
+    throw new Error('代理设置已提交，但实际配置或控制权与预期不符，请刷新实际代理状态后重试');
+  }
+}
+
+export async function getProxyStatus(state?: ExtensionState): Promise<ProxyStatus> {
+  if (!browser.proxy?.settings) return { control: 'unavailable', label: '浏览器不支持代理 API' };
+  const actual = await browser.proxy.settings.get({ incognito: false });
+  const value = actual.value as Browser.proxy.ProxyConfig & { proxyType?: string };
+  const control = actual.levelOfControl;
+  const mode = value.mode || value.proxyType;
+  const server = value.rules?.singleProxy;
+  let label = server ? `${server.scheme || 'http'}://${server.host}:${server.port || (server.scheme === 'https' ? 443 : server.scheme?.startsWith('socks') ? 1080 : 80)}`
+    : ({ direct: '直接连接', none: '直接连接', system: '系统代理', pac_script: 'PAC 自动代理', autoConfig: 'PAC 自动代理', fixed_servers: '固定代理（按协议）', manual: '手动代理', auto_detect: '自动检测' }[mode] || '未知代理模式');
+  let activeProfileId: string | undefined;
+  const current = state || await getState();
+  let followingStartup = control === 'controllable_by_this_extension';
+  if (followingStartup && current.startupProxy) {
+    try {
+      const endpoint = current.startupProxy === 'direct' ? undefined : new URL(current.startupProxy);
+      followingStartup = proxyConfigMatches(value, endpoint ? chromeProxyValue({
+        id: '', name: '', kind: 'fixed_servers', scheme: endpoint.protocol === 'https:' ? 'https' : 'http',
+        host: endpoint.hostname, port: Number(endpoint.port || (endpoint.protocol === 'https:' ? 443 : 80)), bypass: [],
+      }) : { mode: 'direct' });
+    } catch { followingStartup = false; }
+  }
+  if (control === 'controlled_by_this_extension') {
+    const profile = current.proxyProfiles.find((item) => item.id === current.activeProxyId);
+    if (profile && proxyConfigMatches(value, isFirefox() ? firefoxProxyValue(profile) : chromeProxyValue(profile))) {
+      activeProfileId = profile.id;
+    } else if (current.activeProxyId === 'auto') {
+      const artifact = current.proxyRuntime.revision ? await getCompiledArtifact(current.proxyRuntime.revision) : undefined;
+      if (artifact && (value.pacScript?.data === artifact.pacScript
+        || (value as unknown as { autoConfigUrl?: string }).autoConfigUrl === `data:application/x-ns-proxy-autoconfig,${encodeURIComponent(artifact.pacScript)}`)) activeProfileId = 'auto';
+    }
+    if (activeProfileId) label = activeProfileId === 'auto' ? '自动切换（PAC）' : profile!.name === label ? label : `${profile!.name} · ${label}`;
+  }
+  return { control, label, activeProfileId, followingStartup };
+}
+
+// Chrome may add default ports and expand singleProxy into per-protocol entries on readback.
+export function proxyConfigMatches(actual: unknown, expected: unknown): boolean {
+  const a = actual as Record<string, any>;
+  const e = expected as Record<string, any>;
+  if (e.mode === 'fixed_servers') {
+    if (a.mode !== e.mode) return false;
+    const server = (value: any) => value && `${value.scheme || 'http'}://${String(value.host).toLowerCase()}:${value.port || (value.scheme === 'https' ? 443 : value.scheme?.startsWith('socks') ? 1080 : 80)}`;
+    const wanted = server(e.rules.singleProxy);
+    const rules = a.rules || {};
+    const matches = rules.singleProxy ? server(rules.singleProxy) === wanted
+      : ['proxyForHttp', 'proxyForHttps', 'proxyForFtp', 'fallbackProxy'].every((key) => server(rules[key]) === wanted);
+    return matches && JSON.stringify([...(rules.bypassList || [])].sort()) === JSON.stringify([...(e.rules.bypassList || [])].sort());
+  }
+  if (e.mode === 'pac_script') return a.mode === e.mode && a.pacScript?.data === e.pacScript?.data && a.pacScript?.url === e.pacScript?.url;
+  return Object.keys(e).every((key) => a[key] === e[key]);
+}
+
+export async function releaseProxy(): Promise<ExtensionState> {
+  return updateState(async (current) => {
+    await browser.proxy.settings.clear({ scope: 'regular' });
+    const actual = await browser.proxy.settings.get({ incognito: false });
+    if (actual.levelOfControl === 'controlled_by_this_extension') throw new Error('浏览器尚未撤销本扩展的代理接管');
+    return { ...current, activeProxyId: '' };
+  });
 }
 
 async function compilationInput(state: ExtensionState, withRules = true): Promise<ProxyCompilationInput> {
@@ -213,17 +288,17 @@ export async function saveProxyProfile(profile: ProxyProfile): Promise<Extension
       ...current,
       proxyProfiles: [...current.proxyProfiles.filter((item) => item.id !== canonical.id), canonical],
     });
-    if (current.activeProxyId === canonical.id) await setBrowserProxyProfile(canonical);
+    if ((await getProxyStatus(current)).activeProfileId === canonical.id) await setBrowserProxyProfile(canonical);
     return next;
   });
 }
 
 export async function removeProxyProfile(profileId: string): Promise<ExtensionState> {
-  const saved = await updateState((current) => {
+  const saved = await updateState(async (current) => {
     const profile = current.proxyProfiles.find((item) => item.id === profileId);
     if (!profile) throw new Error('代理配置不存在');
     if (RESERVED_PROXY_PROFILE_IDS.has(profileId) || profile.builtin) throw new Error('内置代理出口不能删除');
-    if (current.activeProxyId === profileId) throw new Error('该出口正在使用，请先切换到其他出口');
+    if ((await getProxyStatus(current)).activeProfileId === profileId) throw new Error('该出口正在使用，请先切换到其他出口');
     if (current.proxyRules.some((rule) => rule.proxyProfileId === profileId)
       || current.proxyRuleSources.some((source) => source.matchProfileId === profileId || source.bypassProfileId === profileId)
       || current.proxyRouting.defaultProfileId === profileId) {
@@ -232,6 +307,7 @@ export async function removeProxyProfile(profileId: string): Promise<ExtensionSt
     return dirtyProxyState({
       ...current,
       proxyProfiles: current.proxyProfiles.filter((item) => item.id !== profileId),
+      activeProxyId: current.activeProxyId === profileId ? '' : current.activeProxyId,
     });
   });
   await setProxyAuthPassword(profileId, '');

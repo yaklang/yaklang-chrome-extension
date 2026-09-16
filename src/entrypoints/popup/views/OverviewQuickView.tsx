@@ -2,6 +2,7 @@ import { Braces, ChevronRight, Cookie, Network, Radio, ShieldCheck, UserRoundCog
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { request } from '@/platform/messaging/runtime';
+import { useProxyStatus } from '@/features/proxy/ui/ProxyStatusBar';
 import { READ_CAPABILITY_SCOPES } from '@/protocol/capabilities';
 import type { ActiveTabInfo, ExtensionState, UserAgentResolution } from '@/types/models';
 
@@ -25,9 +26,7 @@ interface OverviewQuickViewProps {
 export function OverviewQuickView({
   state, tab, grantActive, busy, run, setState, cookieCount, uaResolution, onNavigate, onOpenContext, onCapture,
 }: OverviewQuickViewProps) {
-  const activeProxy = state.activeProxyId === 'auto'
-    ? '自动切换'
-    : state.proxyProfiles.find((profile) => profile.id === state.activeProxyId)?.name || '未选择';
+  const activeProxy = useProxyStatus(state).label;
   const targetAvailable = Boolean(tab?.url?.startsWith('http'));
 
   return <section className="popup-overview-view">

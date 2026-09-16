@@ -7,6 +7,7 @@ const harness = vi.hoisted(() => ({
   state: undefined as ExtensionState | undefined,
   sourceRules: new Map<string, NormalizedProxyRule[]>(),
   proxySet: vi.fn(async (_details: unknown) => undefined),
+  proxyClear: vi.fn(async (_details: unknown) => undefined),
   proxyGet: vi.fn(async (_details: unknown) => ({
     value: { mode: 'direct' }, levelOfControl: 'controllable_by_this_extension',
   })),
@@ -24,7 +25,7 @@ const harness = vi.hoisted(() => ({
 
 vi.mock('wxt/browser', () => ({
   browser: {
-    proxy: { settings: { get: harness.proxyGet, set: harness.proxySet } },
+    proxy: { settings: { get: harness.proxyGet, set: harness.proxySet, clear: harness.proxyClear } },
     storage: {
       session: { get: harness.sessionGet, set: harness.sessionSet },
       onChanged: { addListener: vi.fn() },
@@ -60,6 +61,7 @@ vi.mock('./repository', () => ({
 import {
   applyProxyRules, importProxyConfiguration, refreshProxyRuleSource, removeProxyProfile,
   routeCurrentSite, saveProxyProfile, saveProxyRuleSource, setProxyAuthPassword, switchProxy,
+  getProxyStatus, releaseProxy, proxyConfigMatches,
 } from './service';
 
 function baseState(): ExtensionState {
@@ -120,10 +122,39 @@ describe('proxy service', () => {
     harness.state = baseState();
     harness.sourceRules.clear();
     vi.clearAllMocks();
-    harness.proxySet.mockResolvedValue(undefined);
+    harness.proxySet.mockImplementation(async (details) => {
+      harness.proxyGet.mockResolvedValue({ value: (details as any).value, levelOfControl: 'controlled_by_this_extension' });
+    });
     harness.proxyGet.mockResolvedValue({
       value: { mode: 'direct' }, levelOfControl: 'controllable_by_this_extension',
     });
+  });
+
+  it('distinguishes launch proxy from stored selection, verifies application and releases without selecting direct', async () => {
+    harness.proxyGet.mockResolvedValue({ value: { mode: 'fixed_servers', rules: { singleProxy: { host: '127.0.0.1', port: 8083 } } } as any, levelOfControl: 'controllable_by_this_extension' });
+    expect(await getProxyStatus()).toEqual({ control: 'controllable_by_this_extension', label: 'http://127.0.0.1:8083', activeProfileId: undefined, followingStartup: true });
+    harness.state!.startupProxy = 'http://127.0.0.1:9999';
+    expect((await getProxyStatus()).followingStartup).toBe(false);
+    harness.state!.startupProxy = 'http://127.0.0.1:8083';
+    expect((await getProxyStatus()).followingStartup).toBe(true);
+    await saveProxyProfile({ ...baseState().proxyProfiles[0] });
+    expect(harness.proxySet).not.toHaveBeenCalled();
+    await switchProxy('custom');
+    expect((await getProxyStatus()).activeProfileId).toBe('custom');
+    harness.proxyClear.mockImplementation(async () => {
+      harness.proxyGet.mockResolvedValue({ value: { mode: 'fixed_servers' }, levelOfControl: 'controllable_by_this_extension' });
+    });
+    expect((await releaseProxy()).activeProxyId).toBe('');
+    expect(harness.proxyClear).toHaveBeenCalledWith({ scope: 'regular' });
+    expect(harness.proxySet).toHaveBeenCalledTimes(1);
+    harness.proxySet.mockResolvedValue(undefined);
+    await expect(switchProxy('direct')).rejects.toThrow('实际配置或控制权');
+    expect(harness.state?.activeProxyId).toBe('');
+    harness.state!.activeProxyId = 'custom';
+    expect((await removeProxyProfile('custom')).activeProxyId).toBe('');
+    harness.proxyGet.mockResolvedValue({ value: { mode: 'direct' }, levelOfControl: 'not_controllable' });
+    await expect(switchProxy('direct')).rejects.toThrow('管理策略');
+    expect(proxyConfigMatches({ mode: 'fixed_servers', rules: { singleProxy: { host: 'a', port: 80 } } }, { mode: 'fixed_servers', rules: { singleProxy: { scheme: 'http', host: 'a', port: 80 }, bypassList: [] } })).toBe(true);
   });
 
   it('applies automatic routing and commits the exact PAC revision', async () => {

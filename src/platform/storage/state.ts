@@ -31,7 +31,7 @@ export const DEFAULT_STATE: ExtensionState = {
   proxyRuleSources: [],
   proxyRouting: { defaultProfileId: 'direct', failMode: 'closed' },
   proxyRuntime: { dirty: false, compiledBytes: 0, manualRuleCount: 0, sourceRuleCount: 0, warnings: [] },
-  activeProxyId: 'direct',
+  activeProxyId: '',
   customUserAgentProfiles: [],
   userAgentAssignments: [],
   bridge: {
@@ -109,6 +109,11 @@ function normalizeManagedInstance(input: unknown): BridgeConfig['managedInstance
   return value as NonNullable<BridgeConfig['managedInstance']>;
 }
 
+function normalizeBrowserMetadata(input: unknown, maxLength: number): string | undefined {
+  if (typeof input !== 'string') return undefined;
+  return input.trim().slice(0, maxLength) || undefined;
+}
+
 function normalizeState(value: Partial<ExtensionState>): ExtensionState {
   const profileMap = new Map(defaultProfiles().map((profile) => [profile.id, profile]));
   const storedProfiles = Array.isArray(value.proxyProfiles) ? value.proxyProfiles.slice(0, 500) : [];
@@ -183,14 +188,16 @@ function normalizeState(value: Partial<ExtensionState>): ExtensionState {
       ...(value.proxyRuntime && typeof value.proxyRuntime === 'object' ? value.proxyRuntime : {}),
       warnings: Array.isArray(value.proxyRuntime?.warnings) ? value.proxyRuntime.warnings.slice(0, 100) : [],
     },
-    activeProxyId: value.activeProxyId === 'auto' || proxyProfiles.some((profile) => profile.id === value.activeProxyId)
+    activeProxyId: value.activeProxyId === '' || value.activeProxyId === 'auto' || proxyProfiles.some((profile) => profile.id === value.activeProxyId)
       ? value.activeProxyId!
-      : 'direct',
+      : '',
     customUserAgentProfiles: userAgentState.customUserAgentProfiles,
     userAgentAssignments: userAgentState.userAgentAssignments,
     bridge: {
       ...DEFAULT_STATE.bridge,
       ...value.bridge,
+      browserName: normalizeBrowserMetadata(value.bridge?.browserName, 120),
+      browserVersion: normalizeBrowserMetadata(value.bridge?.browserVersion, 80),
       managedInstance: normalizeManagedInstance(value.bridge?.managedInstance),
     },
     floatingPanel: {
@@ -259,6 +266,7 @@ export async function setState(input: ExtensionState): Promise<ExtensionState> {
         proxyProfiles: state.proxyProfiles, proxyRules: state.proxyRules,
         proxyRuleSources: state.proxyRuleSources, proxyRouting: state.proxyRouting,
         proxyRuntime: state.proxyRuntime, activeProxyId: state.activeProxyId,
+        startupProxy: state.startupProxy,
       },
       [USER_AGENT_SETTINGS_STORAGE_KEY]: {
         customUserAgentProfiles: state.customUserAgentProfiles,

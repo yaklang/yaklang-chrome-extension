@@ -11,6 +11,7 @@ import { AGENT_RUNTIME_STORAGE_KEY, isStateStorageChange } from '@/protocol/stor
 import type { ActiveTabInfo, AgentRuntime, BridgeStatus, ExtensionState, PageContext } from '@/types/models';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import { isFloatingPanelShortcut, mergeFloatingTabUpdate } from './host-controller';
+import { ProxyStatusBar, StartupProxyOption, useProxyStatus } from '@/features/proxy/ui/ProxyStatusBar';
 
 interface FloatingPanelProps {
   initialState: ExtensionState;
@@ -21,6 +22,7 @@ interface FloatingPanelProps {
 
 export function FloatingPanel({ initialState, initialTab, initialBridge, hostChannel }: FloatingPanelProps) {
   const [state, setState] = useState(initialState);
+  const proxyStatus = useProxyStatus(state);
   const [bridge, setBridge] = useState(initialBridge);
   const [tab, setTab] = useState(initialTab);
   const [busy, setBusy] = useState(false);
@@ -142,15 +144,17 @@ export function FloatingPanel({ initialState, initialTab, initialBridge, hostCha
             </TabsList>
 
             <TabsContent value="proxy" className="floating-tab-content">
+              <ProxyStatusBar status={proxyStatus} />
               <div className="floating-section-heading"><span>快速切换</span><Button size="icon" variant="ghost" title="代理设置" onClick={() => openWorkspace('proxies')}><Settings size={15} /></Button></div>
               <div className="floating-option-list">
+                <StartupProxyOption state={state} status={proxyStatus} setState={setState} run={run} busy={busy} />
                 {state.proxyProfiles.map((profile) => (
-                  <button key={profile.id} className={state.activeProxyId === profile.id ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.switch', { id: profile.id })))}>
+                  <button key={profile.id} className={proxyStatus.activeProfileId === profile.id ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.switch', { id: profile.id })))}>
                     <i className="floating-radio" />
                     <span><strong>{profile.name}</strong><small>{profile.kind === 'fixed_servers' ? `${profile.host}:${profile.port}` : profile.kind}</small></span>
                   </button>
                 ))}
-                <button className={state.activeProxyId === 'auto' ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.auto.apply')))}><i className="floating-radio" /><span><strong>自动切换</strong><small>{state.proxyRules.filter((rule) => rule.enabled).length} 条手动 · {state.proxyRuleSources.filter((source) => source.enabled).length} 个订阅</small></span></button>
+                <button className={proxyStatus.activeProfileId === 'auto' ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.auto.apply')))}><i className="floating-radio" /><span><strong>自动切换</strong><small>{state.proxyRules.filter((rule) => rule.enabled).length} 条手动 · {state.proxyRuleSources.filter((source) => source.enabled).length} 个订阅</small></span></button>
               </div>
             </TabsContent>
 

@@ -119,6 +119,16 @@ describe('extension request schemas', () => {
   });
 
   it('validates manager-owned browser instance binding', () => {
+    const binding = {
+      manager: 'ytray', instanceId: 'instance-a', badge: 'A',
+      browserName: 'Chrome for Testing', browserVersion: '152.0.7977.82',
+    };
+    for (const startupProxy of ['direct', 'http://127.0.0.1:8083', 'https://proxy.example:443']) {
+      expect(parseExtensionRequest({ action: 'bridge.managed-instance.bind', payload: { ...binding, startupProxy } }).action).toBe('bridge.managed-instance.bind');
+    }
+    for (const startupProxy of ['http://user:secret@proxy.example:8083', 'http://proxy.example/path', 'javascript:alert(1)']) {
+      expect(() => parseExtensionRequest({ action: 'bridge.managed-instance.bind', payload: { ...binding, startupProxy } })).toThrow();
+    }
     expect(parseExtensionRequest({
       action: 'bridge.managed-instance.bind',
       payload: { manager: 'ytray', instanceId: '13367db6-232a-40d1-ad84-81ee5d97634f', badge: 'B' },

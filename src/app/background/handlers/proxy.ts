@@ -18,6 +18,8 @@ import {
   saveProxyRuleSource,
   setProxyAuthPassword,
   switchProxy,
+  getProxyStatus,
+  releaseProxy,
 } from '@/features/proxy/service';
 import { updateState } from '@/platform/storage/state';
 
@@ -26,6 +28,8 @@ export const handleProxyRequest: BackgroundRequestHandler = async (request) => {
     case 'proxy.save': return ok(await saveProxyProfile(request.payload));
     case 'proxy.delete': return ok(await removeProxyProfile(request.payload.id));
     case 'proxy.switch': return ok(await switchProxy(request.payload.id));
+    case 'proxy.status': return ok(await getProxyStatus());
+    case 'proxy.release': return ok(await releaseProxy());
     case 'proxy.rule.save': {
       const rule = request.payload;
       return ok(await updateState((state) => {

@@ -10,6 +10,7 @@ import { request } from '@/platform/messaging/runtime';
 import type { ProxyConditionType, ProxyRule, ProxyRulePreview } from '@/types/models';
 import { CONDITION_LABELS, formatBytes, proxyProfileDetail } from './presentation';
 import type { ProxyViewProps } from './types';
+import { useProxyStatus } from './ProxyStatusBar';
 import './proxy-workspace.css';
 
 const ROW_HEIGHT = 58;
@@ -47,6 +48,7 @@ function conditionHint(type: ProxyConditionType): string {
 }
 
 export function AutoSwitchView({ state, setState, run, busy, tab }: ProxyViewProps) {
+  const proxyStatus = useProxyStatus(state);
   const rules = useMemo(() => [...state.proxyRules].sort((left, right) => left.order - right.order), [state.proxyRules]);
   const routableProfiles = useMemo(() => state.proxyProfiles.filter((profile) => ['direct', 'fixed_servers'].includes(profile.kind)), [state.proxyProfiles]);
   const [draft, setDraft] = useState<ProxyRule>(() => freshRule(state.proxyRules.length, tab?.url));
@@ -64,7 +66,7 @@ export function AutoSwitchView({ state, setState, run, busy, tab }: ProxyViewPro
   const visibleCount = Math.ceil(LIST_HEIGHT / ROW_HEIGHT) + OVERSCAN * 2;
   const visibleRules = rules.slice(firstVisible, firstVisible + visibleCount);
   const enabledSources = state.proxyRuleSources.filter((source) => source.enabled && source.revision);
-  const active = state.activeProxyId === 'auto';
+  const active = proxyStatus.activeProfileId === 'auto';
 
   const save = () => run(async () => {
     const now = Date.now();
