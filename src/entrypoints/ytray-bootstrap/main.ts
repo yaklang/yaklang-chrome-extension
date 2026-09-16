@@ -25,6 +25,7 @@ async function bootstrap(): Promise<void> {
 
   await request('bridge.managed-instance.bind', {
     manager: manager as 'ytray' | 'yakit', instanceId, badge,
+    startupProxy: query.get('startupProxy') || undefined,
   });
 
   const current = await browser.tabs.getCurrent();

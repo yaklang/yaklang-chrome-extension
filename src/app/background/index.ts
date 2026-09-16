@@ -428,7 +428,10 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       }
       const state = await updateState((current) => ({
         ...current,
-        bridge: { ...current.bridge, managedInstance: request.payload },
+        startupProxy: request.payload.startupProxy,
+        bridge: { ...current.bridge, managedInstance: {
+          manager: request.payload.manager, instanceId: request.payload.instanceId, badge: request.payload.badge,
+        } },
       }));
       await syncManagedInstanceBadge(state.bridge.managedInstance);
       if (state.bridge.autoConnect && state.bridge.pairedEngine) {
@@ -512,6 +515,7 @@ export function runBackground(): void {
   ) => {
     if ([
       'bridge.status.changed',
+      'proxy.status.changed',
       'bridge.pairing.status.changed',
       'network.capture.changed',
       'deep.capture.changed',

@@ -16,6 +16,7 @@ import {
 import { cookieKey, cookieRemovalInput } from '@/features/cookies/presentation';
 import { AutoSwitchView } from '@/features/proxy/ui/AutoSwitchView';
 import { ProxyProfilesView } from '@/features/proxy/ui/ProxyProfilesView';
+import { useProxyStatus } from '@/features/proxy/ui/ProxyStatusBar';
 import { RuleSourcesView } from '@/features/proxy/ui/RuleSourcesView';
 import { RecordingWorkspace } from '@/features/browser-recording/RecordingWorkspace';
 import { AuthorizationTestingWorkspace } from '@/features/authorization-testing/ui/AuthorizationTestingWorkspace';
@@ -337,7 +338,7 @@ function ActivityLog({ run, busy }: { run: (task: () => Promise<void>, success?:
 }
 
 function Overview({ state, bridge, tab, navigate, run, busy }: { state: ExtensionState; bridge: BridgeStatus; tab?: ActiveTabInfo; navigate: (value: Section) => void; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
-  const activeProxy = state.proxyProfiles.find((profile) => profile.id === state.activeProxyId)?.name || (state.activeProxyId === 'auto' ? '自动切换' : '未知');
+  const activeProxy = useProxyStatus(state).label;
   const [runtime, setRuntime] = useState<AgentRuntime>({ state: 'idle', updatedAt: Date.now(), actions: [] });
   const [network, setNetwork] = useState<NetworkCaptureStatus>();
   const [loginContext, setLoginContext] = useState<PageContext>();

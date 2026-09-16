@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Check, ExternalLink, Globe2, LoaderCircle, Network, Route } from 'lucide-react';
 import { request } from '@/platform/messaging/runtime';
 import type { ActiveTabInfo, ExtensionState, ProxyProfile, ProxyRulePreview } from '@/types/models';
+import { ProxyStatusBar, StartupProxyOption, useProxyStatus } from '@/features/proxy/ui/ProxyStatusBar';
 
 type RunTask = (task: () => Promise<void>, success?: string) => Promise<void>;
 
@@ -43,10 +44,11 @@ function routeKindLabel(preview?: ProxyRulePreview): string {
 }
 
 export function ProxyQuickView({ state, setState, busy, run, tab, onOpenFull }: ProxyQuickViewProps) {
+  const status = useProxyStatus(state);
   const [preview, setPreview] = useState<ProxyRulePreview>();
   const currentHostname = hostname(tab?.url);
-  const autoActive = state.activeProxyId === 'auto';
-  const activeProfile = state.proxyProfiles.find((profile) => profile.id === state.activeProxyId);
+  const autoActive = status.activeProfileId === 'auto';
+  const activeProfile = state.proxyProfiles.find((profile) => profile.id === status.activeProfileId);
   const routableProfiles = useMemo(
     () => state.proxyProfiles.filter((profile) => profile.kind === 'direct' || profile.kind === 'fixed_servers'),
     [state.proxyProfiles],
@@ -130,7 +132,7 @@ export function ProxyQuickView({ state, setState, busy, run, tab, onOpenFull }: 
   };
 
   const effectiveProfile = state.proxyProfiles.find((profile) => profile.id === preview?.effectiveProfileId);
-  const activeModeName = autoActive ? '自动切换' : activeProfile?.name || '未选择';
+  const activeModeName = autoActive ? '自动切换' : status.label;
   const siteHint = !autoActive
     ? `当前使用“${activeModeName}”；选择网站出口后将启用自动切换。`
     : siteTarget === AUTOMATIC_TARGET
@@ -142,13 +144,14 @@ export function ProxyQuickView({ state, setState, busy, run, tab, onOpenFull }: 
   const routeKindText = autoActive ? routeKindLabel(preview) : '全局模式';
 
   return <section className="popup-view popup-tool-view popup-proxy-view">
+    <ProxyStatusBar status={status} />
     {currentHostname ? <section className="popup-site-router" aria-label="当前站点路由">
       <div className="popup-site-router__heading">
         <div><Globe2 size={16} /><span><small>当前站点</small><strong title={currentHostname}>{currentHostname}</strong></span></div>
         <i className={routeKind}>{routeKindText}</i>
       </div>
       <div className="popup-site-decision" title={autoActive ? preview?.matchedCondition : activeModeName}>
-        <span>{routeLabel}</span><i>→</i><strong>{routeProfile?.name || '—'}</strong>
+        <span>{routeLabel}</span><i>→</i><strong>{routeProfile?.name || status.label}</strong>
       </div>
       <div className="popup-site-picker">
         <label htmlFor="popup-site-proxy">网站出口 <span>选择后立即生效</span></label>
@@ -168,13 +171,14 @@ export function ProxyQuickView({ state, setState, busy, run, tab, onOpenFull }: 
 
     <div className="popup-mode-heading"><span><strong>浏览器模式</strong><small>全局切换，不会创建站点规则</small></span><i>{activeModeName}</i></div>
     <div className="popup-proxy-list popup-proxy-list--view" role="radiogroup" aria-label="浏览器代理模式">
+      <StartupProxyOption state={state} status={status} setState={setState} run={run} busy={busy} />
       <button role="radio" aria-checked={autoActive} className={autoActive ? 'is-active' : ''} disabled={busy} onClick={() => void switchAuto()}>
         <span className="popup-mode-icon"><Route size={15} /></span>
         <span><strong>自动切换</strong><small>{state.proxyRules.filter((rule) => rule.enabled).length} 条手动 · {sourceRuleCount.toLocaleString()} 条订阅</small></span>
         {state.proxyRuntime.dirty ? <em>待应用</em> : autoActive ? <Check size={14} /> : null}
       </button>
       {state.proxyProfiles.map((profile) => {
-        const active = state.activeProxyId === profile.id;
+        const active = status.activeProfileId === profile.id;
         return <button key={profile.id} role="radio" aria-checked={active} className={active ? 'is-active' : ''} disabled={busy} onClick={() => void run(async () => setState(await request('proxy.switch', { id: profile.id })), `${profile.name} 已作为全局模式启用`)}>
           <span className="popup-mode-icon"><Network size={15} /></span>
           <span><strong>{profile.name}</strong><small>{proxyDetail(profile)}</small></span>

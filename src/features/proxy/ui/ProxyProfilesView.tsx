@@ -9,6 +9,7 @@ import type { ProxyProfile } from '@/types/models';
 import { PROXY_KIND_LABELS, proxyProfileDetail } from './presentation';
 import type { ProxyViewProps } from './types';
 import './proxy-workspace.css';
+import { ProxyStatusBar, StartupProxyOption, useProxyStatus } from './ProxyStatusBar';
 
 function createProfile(): ProxyProfile {
   return {
@@ -17,6 +18,7 @@ function createProfile(): ProxyProfile {
 }
 
 export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps) {
+  const status = useProxyStatus(state);
   const [draft, setDraft] = useState<ProxyProfile>(() => state.proxyProfiles[0] || createProfile());
   const [password, setPassword] = useState('');
   const [passwordConfigured, setPasswordConfigured] = useState(false);
@@ -65,18 +67,20 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
       <Button variant="primary" onClick={() => setDraft(createProfile())}><Plus size={16} />新建出口</Button>
     </div>
 
+    <ProxyStatusBar status={status} />
     <div className="proxy-profile-workspace">
       <section className="proxy-profile-index" aria-label="代理出口列表">
         <div className="proxy-panel-label"><span>出口</span><strong>{state.proxyProfiles.length}</strong></div>
         <div className="proxy-profile-list">
+          <StartupProxyOption state={state} status={status} setState={setState} run={run} busy={busy} />
           {state.proxyProfiles.map((profile) => <button
             key={profile.id}
-            className={`${draft.id === profile.id ? 'is-selected' : ''} ${state.activeProxyId === profile.id ? 'is-active' : ''}`}
+            className={`${draft.id === profile.id ? 'is-selected' : ''} ${status.activeProfileId === profile.id ? 'is-active' : ''}`}
             onClick={() => setDraft({ ...profile, bypass: [...profile.bypass] })}
           >
             <span className="proxy-profile-icon"><Network size={16} /></span>
             <span><strong>{profile.name}</strong><small>{proxyProfileDetail(profile)}</small></span>
-            {state.activeProxyId === profile.id && <i>使用中</i>}
+            {status.activeProfileId === profile.id && <i>使用中</i>}
             <ChevronRight size={15} />
           </button>)}
         </div>
@@ -85,7 +89,7 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
       <section className="proxy-profile-editor">
         <div className="proxy-editor-heading">
           <div><span>{draft.builtin ? '内置出口' : '自定义出口'}</span><h2>{draft.name}</h2></div>
-          <span className={`proxy-live-state ${state.activeProxyId === draft.id ? 'is-live' : ''}`}><i />{state.activeProxyId === draft.id ? '当前生效' : '未使用'}</span>
+          <span className={`proxy-live-state ${status.activeProfileId === draft.id ? 'is-live' : ''}`}><i />{status.activeProfileId === draft.id ? '当前生效' : '未确认生效'}</span>
         </div>
         <div className="proxy-form-grid">
           <Field label="名称"><input value={draft.name} disabled={draft.id === 'direct' || draft.id === 'system'} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>

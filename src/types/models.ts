@@ -113,6 +113,13 @@ export interface ProxyRulePage {
   rules: NormalizedProxyRule[];
 }
 
+export interface ProxyStatus {
+  followingStartup?: boolean;
+  control: string;
+  label: string;
+  activeProfileId?: string;
+}
+
 export interface ProxyRuntimeState {
   dirty: boolean;
   compiledBytes: number;
@@ -1488,6 +1495,7 @@ export interface DiagnosticsBundle {
 }
 
 export interface ExtensionState {
+  startupProxy?: string;
   version: 7;
   proxyProfiles: ProxyProfile[];
   proxyRules: ProxyRule[];

@@ -206,7 +206,9 @@
 .popup-footer { margin-top: auto; padding: 10px 14px 12px; border-top: 1px solid var(--border); background: var(--surface); }
 .popup-capture { width: 100%; height: 36px; border-radius: 7px; font-size: var(--text-md); box-shadow: 0 1px 0 color-mix(in srgb, var(--primary-strong) 55%, transparent); }
 .popup-notice { display: block; margin-top: 6px; overflow: hidden; color: var(--muted); font-size: var(--text-sm); line-height: 16px; text-align: center; white-space: nowrap; text-overflow: ellipsis; }
-.popup-global-notice { position: absolute; z-index: 20; left: 50%; bottom: 54px; max-width: calc(100% - 28px); padding: 7px 11px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--foreground); color: var(--surface); box-shadow: var(--shadow-md); font-size: var(--text-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transform: translateX(-50%); animation: popup-content-in .16s ease-out; }
+/* Keep horizontal centering independent of the entrance animation's transform. */
+.popup-global-notice { position: absolute; z-index: 20; left: 50%; bottom: 54px; max-width: calc(100% - 28px); padding: 7px 11px; overflow: hidden; border: 1px solid var(--border); border-radius: 999px; background: var(--foreground); color: var(--surface); box-shadow: var(--shadow-md); font-size: var(--text-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; translate: -50% 0; animation: popup-content-in .16s ease-out; }
+@media (prefers-reduced-motion: reduce) { .popup-global-notice { animation: none; } }
 
 .popup-loading { width: 390px; height: 230px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); background: var(--background); font-size: var(--text-md); }
 .spin { animation: spin .8s linear infinite; }

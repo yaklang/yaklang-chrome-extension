@@ -31,7 +31,7 @@ export const DEFAULT_STATE: ExtensionState = {
   proxyRuleSources: [],
   proxyRouting: { defaultProfileId: 'direct', failMode: 'closed' },
   proxyRuntime: { dirty: false, compiledBytes: 0, manualRuleCount: 0, sourceRuleCount: 0, warnings: [] },
-  activeProxyId: 'direct',
+  activeProxyId: '',
   customUserAgentProfiles: [],
   userAgentAssignments: [],
   bridge: {
@@ -183,9 +183,9 @@ function normalizeState(value: Partial<ExtensionState>): ExtensionState {
       ...(value.proxyRuntime && typeof value.proxyRuntime === 'object' ? value.proxyRuntime : {}),
       warnings: Array.isArray(value.proxyRuntime?.warnings) ? value.proxyRuntime.warnings.slice(0, 100) : [],
     },
-    activeProxyId: value.activeProxyId === 'auto' || proxyProfiles.some((profile) => profile.id === value.activeProxyId)
+    activeProxyId: value.activeProxyId === '' || value.activeProxyId === 'auto' || proxyProfiles.some((profile) => profile.id === value.activeProxyId)
       ? value.activeProxyId!
-      : 'direct',
+      : '',
     customUserAgentProfiles: userAgentState.customUserAgentProfiles,
     userAgentAssignments: userAgentState.userAgentAssignments,
     bridge: {
@@ -259,6 +259,7 @@ export async function setState(input: ExtensionState): Promise<ExtensionState> {
         proxyProfiles: state.proxyProfiles, proxyRules: state.proxyRules,
         proxyRuleSources: state.proxyRuleSources, proxyRouting: state.proxyRouting,
         proxyRuntime: state.proxyRuntime, activeProxyId: state.activeProxyId,
+        startupProxy: state.startupProxy,
       },
       [USER_AGENT_SETTINGS_STORAGE_KEY]: {
         customUserAgentProfiles: state.customUserAgentProfiles,
