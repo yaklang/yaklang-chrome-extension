@@ -179,6 +179,8 @@ const bridgeConfig = v.strictObject({
   endpoint: v.pipe(v.string(), v.trim(), v.maxLength(2_048)),
   autoConnect: v.boolean(),
   installationId: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160)),
+  browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+  browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
   managedInstance: v.optional(managedInstance),
   pairedEngine: v.optional(v.strictObject({
     engineIdentityId: id,
@@ -475,6 +477,8 @@ const payloadSchemas = {
   'bridge.config.save': bridgeConfig,
   'bridge.managed-instance.bind': v.strictObject({
     ...managedInstance.entries,
+    browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
+    browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
     startupProxy: v.optional(v.union([v.literal('direct'), v.pipe(httpUrl, v.check((value) => {
       const parsed = new URL(value);
       return !parsed.username && !parsed.password && !parsed.search && !parsed.hash && parsed.pathname === '/';

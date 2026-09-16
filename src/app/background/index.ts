@@ -429,9 +429,14 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       const state = await updateState((current) => ({
         ...current,
         startupProxy: request.payload.startupProxy,
-        bridge: { ...current.bridge, managedInstance: {
-          manager: request.payload.manager, instanceId: request.payload.instanceId, badge: request.payload.badge,
-        } },
+        bridge: {
+          ...current.bridge,
+          browserName: request.payload.browserName,
+          browserVersion: request.payload.browserVersion,
+          managedInstance: {
+            manager: request.payload.manager, instanceId: request.payload.instanceId, badge: request.payload.badge,
+          },
+        },
       }));
       await syncManagedInstanceBadge(state.bridge.managedInstance);
       if (state.bridge.autoConnect && state.bridge.pairedEngine) {

@@ -203,6 +203,8 @@ export interface BridgeConfig {
   endpoint: string;
   autoConnect: boolean;
   installationId: string;
+  browserName?: string;
+  browserVersion?: string;
   managedInstance?: {
     manager: 'ytray' | 'yakit';
     instanceId: string;

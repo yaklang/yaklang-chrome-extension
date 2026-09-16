@@ -252,7 +252,9 @@ export interface ExtensionRequestMap {
   'metrics.reset': { input: undefined; output: RuntimeMetrics };
   'bridge.config.save': { input: BridgeConfig; output: ExtensionState };
   'bridge.managed-instance.bind': {
-    input: NonNullable<BridgeConfig['managedInstance']> & { startupProxy?: string };
+    input: NonNullable<BridgeConfig['managedInstance']> & Pick<BridgeConfig, 'browserName' | 'browserVersion'> & {
+      startupProxy?: string;
+    };
     output: BridgeStatus;
   };
   'bridge.pair': { input: undefined; output: BridgePairingStatus };

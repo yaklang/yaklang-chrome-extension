@@ -119,7 +119,10 @@ describe('extension request schemas', () => {
   });
 
   it('validates manager-owned browser instance binding', () => {
-    const binding = { manager: 'ytray', instanceId: 'instance-a', badge: 'A' };
+    const binding = {
+      manager: 'ytray', instanceId: 'instance-a', badge: 'A',
+      browserName: 'Chrome for Testing', browserVersion: '152.0.7977.82',
+    };
     for (const startupProxy of ['direct', 'http://127.0.0.1:8083', 'https://proxy.example:443']) {
       expect(parseExtensionRequest({ action: 'bridge.managed-instance.bind', payload: { ...binding, startupProxy } }).action).toBe('bridge.managed-instance.bind');
     }

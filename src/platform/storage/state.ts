@@ -109,6 +109,11 @@ function normalizeManagedInstance(input: unknown): BridgeConfig['managedInstance
   return value as NonNullable<BridgeConfig['managedInstance']>;
 }
 
+function normalizeBrowserMetadata(input: unknown, maxLength: number): string | undefined {
+  if (typeof input !== 'string') return undefined;
+  return input.trim().slice(0, maxLength) || undefined;
+}
+
 function normalizeState(value: Partial<ExtensionState>): ExtensionState {
   const profileMap = new Map(defaultProfiles().map((profile) => [profile.id, profile]));
   const storedProfiles = Array.isArray(value.proxyProfiles) ? value.proxyProfiles.slice(0, 500) : [];
@@ -191,6 +196,8 @@ function normalizeState(value: Partial<ExtensionState>): ExtensionState {
     bridge: {
       ...DEFAULT_STATE.bridge,
       ...value.bridge,
+      browserName: normalizeBrowserMetadata(value.bridge?.browserName, 120),
+      browserVersion: normalizeBrowserMetadata(value.bridge?.browserVersion, 80),
       managedInstance: normalizeManagedInstance(value.bridge?.managedInstance),
     },
     floatingPanel: {
