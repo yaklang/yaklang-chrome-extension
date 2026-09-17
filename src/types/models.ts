@@ -844,6 +844,7 @@ export interface BrowserProfileInferenceSource {
   operation: string;
   crypto?: BrowserRecordingCrypto;
   callHandleId?: string;
+  dynamicInputPaths?: string[];
   arguments: BrowserRecordingCallArgument[];
   destination?: string;
   serialization?: BrowserProfileInferenceSerialization;
@@ -868,6 +869,7 @@ export interface BrowserProfileInferenceCandidate {
   id: string;
   recordingId: string;
   traceId: string;
+  transactionId?: string;
   target: BrowserTarget;
   direction: 'request' | 'response';
   request: {
@@ -927,6 +929,7 @@ export interface BrowserDeepCaptureFrame {
   sourceMapUrl?: string;
   lineNumber: number;
   columnNumber: number;
+  functionLocation?: { lineNumber: number; columnNumber: number };
   scopes: BrowserDeepCaptureScope[];
   thisPreview: string;
   sourceKind: 'page' | 'extension-hook' | 'library';
@@ -936,7 +939,7 @@ export interface BrowserDeepCaptureFrame {
     parameterCount?: number;
     parameterNames?: string[];
     riskFlags: Array<'network' | 'dom' | 'navigation' | 'storage'>;
-    resolution?: 'frame-name' | 'receiver-method' | 'scope-binding' | 'manual-expression';
+    resolution?: 'frame-name' | 'receiver-method' | 'scope-binding' | 'current-function' | 'event-listener' | 'manual-expression';
     referenceExpression?: string;
     candidateCount?: number;
   };
@@ -1335,7 +1338,9 @@ export interface BrowserTransformProfileValidationResult {
   generated: BrowserTransformPacket;
   execution: BrowserTransformExecution;
   comparison?: BrowserPacketComparison;
-  validationDraft?: Pick<BrowserTransformValidationDraft, 'contractVersion' | 'id' | 'createdAt' | 'expiresAt'>;
+  validationDraft?: Pick<BrowserTransformValidationDraft, 'contractVersion' | 'id' | 'createdAt' | 'expiresAt'> & {
+    directions: { request: boolean; response: boolean };
+  };
   next: string;
 }
 

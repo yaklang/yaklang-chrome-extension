@@ -13,6 +13,7 @@ import { resolveDocumentTarget, scriptingTarget } from '@/platform/browser/targe
 import { PAGE_RECORDER_PROTOCOL_VERSION, PAGE_RECORDER_REGISTRY_KEY } from '@/features/browser-recording/constants';
 import { executeFirefoxPageRecorderCommand } from '@/features/browser-recording/bridge-client';
 import { normalizeBrowserRecordingCrypto } from '@/features/browser-crypto/model';
+import { serializeTabExecution, withPageNetworkGuard } from './network-guard';
 import {
   MAX_CALLABLE_TIMEOUT_MS,
   MIN_CALLABLE_TIMEOUT_MS,
@@ -241,13 +242,39 @@ async function pageCallableCommand(
     if (command === 'callable.list') return [];
     throw new Error('页面函数控制器不存在，页面可能已经刷新');
   }
-  return await Promise.resolve(controller.command(command, input));
+  try {
+    return await Promise.resolve(controller.command(command, input));
+  } catch (error) {
+    return { __yakitCallError: {
+      message: error instanceof Error ? error.message : String(error),
+    } };
+  }
 }
 
 async function callPageController(
   target: BrowserTarget,
   command: PageControllerCommand,
   input: Record<string, unknown> = {},
+): Promise<unknown> {
+  if (command === 'callable.execute' || command === 'transform.execute') {
+    return serializeTabExecution(target.tabId, async () => {
+      const current = await resolveDocumentTarget(target);
+      const callables = await callPageController(current, 'callable.list') as RawCallable[];
+      const ids = command === 'callable.execute' ? [input.callableId]
+        : (input.direction as BrowserTransformDirection).nodes.flatMap((node) => node.kind === 'page.call' ? [node.callableId] : []);
+      const used = callables.filter((callable) => ids.includes(callable.id));
+      if (used.length !== new Set(ids).size) throw new ExtensionError('callable_unavailable', '页面函数已经失效');
+      const prerequisites = used.flatMap((callable) => callable.transaction?.prerequisites || []);
+      return withPageNetworkGuard(current, prerequisites, () => invokePageController(current, command, input));
+    });
+  }
+  return invokePageController(target, command, input);
+}
+
+async function invokePageController(
+  target: BrowserTarget,
+  command: PageControllerCommand,
+  input: Record<string, unknown>,
 ): Promise<unknown> {
   if (import.meta.env.FIREFOX) return executeFirefoxPageRecorderCommand(target, command, input);
   const [result] = await browser.scripting.executeScript({
@@ -260,6 +287,8 @@ async function callPageController(
   if (injectionError !== undefined) {
     throw new ExtensionError('page_callable_execution_failed', injectionErrorMessage(injectionError));
   }
+  const failure = (result?.result as { __yakitCallError?: { message: string } } | undefined)?.__yakitCallError;
+  if (failure) throw new ExtensionError('page_callable_execution_failed', failure.message);
   return result?.result;
 }
 

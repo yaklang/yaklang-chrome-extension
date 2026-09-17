@@ -259,6 +259,10 @@ const CAPABILITY_METADATA = {
     domain: 'transform', access: 'write', summary: '删除 Transform Profile',
     scopes: ['browser.transform.manage'], targetMode: 'profile', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
+  'browser.transform.profile.save': {
+    domain: 'transform', access: 'write', summary: '保存或更新经验证的明文网关；仅在用户需要持久保存时使用，普通测试优先短时草稿',
+    scopes: ['browser.transform.manage'], targetMode: 'none', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
+  },
   'browser.transform.recovery.get': {
     domain: 'transform', access: 'read', summary: '读取 Profile 的非敏感文档恢复计划和确定性状态',
     scopes: ['browser.transform.read'], targetMode: 'profile', defaultTimeoutMs: READ_TIMEOUT_MS,
@@ -313,9 +317,13 @@ const CAPABILITY_METADATA = {
   },
   'browser.transform.prepare': {
     domain: 'transform', access: 'execute',
-    summary: '将 browser.crypto.inspect 捕获的候选原子化编译并验证为短时明文转换；不需要 Agent 操作录制、页面函数或 Profile 底层步骤',
+    summary: '从 browser.crypto.inspect 候选准备双向短时网关；自动重触发原操作并捕获缺失业务方向，无需插件 UI；节点变化时可传入新的 trigger',
     scopes: ['browser.transform.execute', 'browser.recording.read', 'browser.callable.execute'],
     targetMode: 'document', defaultTimeoutMs: REPLAY_TIMEOUT_MS,
+  },
+  'browser.transform.validation.get': {
+    domain: 'transform', access: 'read', summary: '读取短时网关的有效期和已启用方向；不返回页面闭包或明文样本',
+    scopes: ['browser.transform.read'], targetMode: 'none', defaultTimeoutMs: READ_TIMEOUT_MS,
   },
   'browser.invoke': {
     domain: 'page', access: 'dangerous', summary: '在页面 MAIN world 调用具名函数路径',

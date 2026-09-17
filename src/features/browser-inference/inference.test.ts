@@ -6,6 +6,7 @@ import type {
 } from '@/types/models';
 import { inferBrowserTransformProfiles } from './inference';
 import { buildRecordingLinks } from '@/features/browser-recording/timeline';
+import { pairedBrowserTransformCandidate } from '@/features/browser-transform/profile-draft';
 
 function event(overrides: Partial<BrowserRecordingEvent> & Pick<BrowserRecordingEvent, 'id' | 'sequence' | 'kind' | 'operation'>): BrowserRecordingEvent {
   return {
@@ -605,5 +606,113 @@ describe('browser profile inference', () => {
       kind: 'response-boundary', strength: 'proven',
     }));
     expect(candidate.aiContext.requiredDecision).toBe('none');
+  });
+
+  it('replays response ciphertext, key, and iv as dynamic CryptoJS decrypt inputs', () => {
+    const response = event({
+      id: 'encrypted-response-dynamic', sequence: 1, kind: 'fetch', operation: 'response',
+      direction: 'receive', method: 'POST', url: 'https://example.test/crypto/login', statusCode: 200,
+      outputs: [
+        { path: '$body:json.message', fingerprint: 'cipher', encoding: 'text', byteLength: 88 },
+        { path: '$body:json.key', fingerprint: 'key-hex', encoding: 'hex', byteLength: 32 },
+        { path: '$body:json.iv', fingerprint: 'iv-hex', encoding: 'hex', byteLength: 32 },
+      ],
+    });
+    const key = event({
+      id: 'parse-key', sequence: 2, kind: 'transform', operation: 'Hex.parse',
+      inputs: [{ path: '$input', fingerprint: 'key-hex', encoding: 'hex', byteLength: 32 }],
+      outputs: [{ path: '$output', fingerprint: 'key-word-array', encoding: 'bytes', byteLength: 16 }],
+    });
+    const iv = event({
+      id: 'parse-iv', sequence: 3, kind: 'transform', operation: 'Hex.parse',
+      inputs: [{ path: '$input', fingerprint: 'iv-hex', encoding: 'hex', byteLength: 32 }],
+      outputs: [{ path: '$output', fingerprint: 'iv-word-array', encoding: 'bytes', byteLength: 16 }],
+    });
+    const decrypt = event({
+      id: 'decrypt-dynamic-response', sequence: 4, kind: 'crypto', operation: 'AES.decrypt',
+      crypto: cryptoJsAESDecrypt,
+      callHandleId: 'decrypt-dynamic-handle', callableCapable: true, arguments: safeArguments,
+      inputs: [
+        { path: '$input', fingerprint: 'cipher', encoding: 'text', byteLength: 88 },
+        { path: '$input.key', fingerprint: 'key-word-array', encoding: 'bytes', byteLength: 16 },
+        { path: '$input.iv', fingerprint: 'iv-word-array', encoding: 'bytes', byteLength: 16 },
+      ],
+      outputs: [{ path: '$output', fingerprint: 'plain', encoding: 'hex', byteLength: 42 }],
+    });
+    const events = [response, key, iv, decrypt];
+    const [candidate] = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0, documentId: 'document-1' },
+      events,
+      links: buildRecordingLinks(events),
+    });
+
+    expect(candidate).toMatchObject({
+      direction: 'response',
+      status: 'ready',
+      source: { dynamicInputPaths: ['$input', '$input.key', '$input.iv'] },
+      request: {
+        mappings: [
+          { destination: 'body.message' },
+          { destination: 'body.key' },
+          { destination: 'body.iv' },
+        ],
+      },
+    });
+    expect(candidate.missing).toEqual([]);
+    expect(candidate.aiContext.requiredDecision).toBe('none');
+
+    const withoutCipherLink = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0, documentId: 'document-1' },
+      events: [
+        { ...response, outputs: response.outputs.filter((output) => output.path !== '$body:json.message') },
+        key,
+        iv,
+        { ...decrypt, inputs: decrypt.inputs.filter((input) => input.path !== '$input') },
+      ],
+      links: buildRecordingLinks([
+        { ...response, outputs: response.outputs.filter((output) => output.path !== '$body:json.message') },
+        key,
+        iv,
+        { ...decrypt, inputs: decrypt.inputs.filter((input) => input.path !== '$input') },
+      ]),
+    })[0];
+    expect(withoutCipherLink).toMatchObject({ direction: 'response', status: 'capture-required' });
+  });
+
+  it('pairs request and response candidates by the browser network transaction', () => {
+    const encrypt = event({
+      id: 'encrypt-transaction', sequence: 1, kind: 'crypto', operation: 'AES.encrypt', crypto: cryptoJsAES,
+      callHandleId: 'encrypt-handle', callableCapable: true, arguments: safeArguments,
+      inputs: [{ path: '$input', fingerprint: 'plain-request', encoding: 'text', byteLength: 20 }],
+      outputs: [{ path: '$output:string', fingerprint: 'cipher-request', encoding: 'text', byteLength: 44 }],
+    });
+    const request = event({
+      id: 'request-transaction', sequence: 2, kind: 'fetch', operation: 'request', direction: 'send',
+      channelId: 'fetch-transaction-1', method: 'POST', url: 'https://example.test/login',
+      inputs: [{ path: '$body:json.message', fingerprint: 'cipher-request', encoding: 'text', byteLength: 44 }],
+    });
+    const response = event({
+      id: 'response-transaction', sequence: 3, kind: 'fetch', operation: 'response', direction: 'receive',
+      channelId: 'fetch-transaction-1', method: 'POST', url: 'https://example.test/login', statusCode: 200,
+      outputs: [{ path: '$body:json.message', fingerprint: 'cipher-response', encoding: 'text', byteLength: 44 }],
+    });
+    const decrypt = event({
+      id: 'decrypt-transaction', sequence: 4, kind: 'crypto', operation: 'AES.decrypt', crypto: cryptoJsAESDecrypt,
+      callHandleId: 'decrypt-handle', callableCapable: true, arguments: safeArguments,
+      inputs: [{ path: '$input', fingerprint: 'cipher-response', encoding: 'text', byteLength: 44 }],
+      outputs: [{ path: '$output', fingerprint: 'plain-response', encoding: 'hex', byteLength: 20 }],
+    });
+    const events = [encrypt, request, response, decrypt];
+    const candidates = inferBrowserTransformProfiles({
+      target: { tabId: 7, frameId: 0, documentId: 'document-1' },
+      events,
+      links: buildRecordingLinks(events),
+    });
+    const requestCandidate = candidates.find((candidate) => candidate.direction === 'request')!;
+    const responseCandidate = candidates.find((candidate) => candidate.direction === 'response')!;
+
+    expect(requestCandidate.transactionId).toBe('fetch-transaction-1');
+    expect(responseCandidate.transactionId).toBe('fetch-transaction-1');
+    expect(pairedBrowserTransformCandidate(candidates, requestCandidate)?.id).toBe(responseCandidate.id);
   });
 });

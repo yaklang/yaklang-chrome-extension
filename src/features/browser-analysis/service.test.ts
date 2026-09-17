@@ -13,6 +13,7 @@ vi.mock('wxt/browser', () => {
   const event = { addListener: vi.fn() };
   return {
     browser: {
+      storage: {},
       tabs: { onRemoved: event, onCreated: event },
       webNavigation: {
         onBeforeNavigate: event,

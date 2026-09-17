@@ -9,12 +9,20 @@ import {
   compileGuidedTransform,
   parseGuidedTransform,
 } from '@/features/browser-transform/guided';
-import { createBrowserTransformProfileInput } from '@/features/browser-transform/profile-draft';
+import {
+  createBrowserTransformProfileInput,
+  pairedBrowserTransformCandidate,
+} from '@/features/browser-transform/profile-draft';
 import { validateBrowserTransformProfile } from '@/features/browser-transform/service';
 import { executePageCallable, listPageCallables } from '@/features/page-callable/service';
 import { browserTransformProfileInputSchema } from '@/protocol/transform';
 import { ExtensionError } from '@/shared/errors';
 import { createOpaqueId } from '@/shared/id';
+import { eventMatcher } from '@/features/deep-capture/matcher';
+import { createCapturedPageCallable, deepCaptureStatus, detachDeepCapture, startDeepCapture, type DeepCaptureOwner } from '@/features/deep-capture/service';
+import { withPageNetworkGuard } from '@/features/page-callable/network-guard';
+import { actOnPageNode, capturePageContext } from '@/features/page-context/service';
+import { beginPageDialogCapture, endPageDialogCapture } from '@/features/page-context/dialogs';
 import {
   BROWSER_TRANSFORM_AGENT_CONTRACT_VERSION,
   type ActiveTabInfo,
@@ -36,6 +44,7 @@ import {
   type BrowserTransformProfileValidationResult,
   type BrowserTransformValidationDraft,
   type BrowserTransformDirectionName,
+  type BrowserDeepCaptureMatcher,
 } from '@/types/models';
 
 const MAX_TRACE_EVENTS = 80;
@@ -67,6 +76,8 @@ let callableOutputStorageQueue: Promise<void> = Promise.resolve();
 interface BrowserProfileEvidenceReference {
   candidate: BrowserProfileInferenceCandidate;
   requestEvent?: BrowserRecordingEvent;
+  matcher?: BrowserDeepCaptureMatcher;
+  triggerKey?: string;
   createdAt: number;
   expiresAt: number;
 }
@@ -136,7 +147,7 @@ function pruneProfileEvidence(
   );
 }
 
-export async function stageBrowserProfileEvidence(snapshot: BrowserRecordingSnapshot): Promise<void> {
+export async function stageBrowserProfileEvidence(snapshot: BrowserRecordingSnapshot, triggerKey?: string): Promise<void> {
   if (!snapshot.profileCandidates.length) return;
   const scoped = recordingSnapshotForScope(snapshot, false);
   const events = new Map(scoped.events.map((event) => [event.id, event]));
@@ -147,6 +158,8 @@ export async function stageBrowserProfileEvidence(snapshot: BrowserRecordingSnap
       stored[candidate.id] = {
         candidate,
         requestEvent: events.get(candidate.request.eventId),
+        matcher: eventMatcher(events.get(candidate.capturePlan?.matcherEventId || candidate.source.eventId), candidate),
+        triggerKey: triggerKey || stored[candidate.id]?.triggerKey,
         createdAt,
         expiresAt: createdAt + PROFILE_EVIDENCE_TTL_MS,
       };
@@ -194,12 +207,14 @@ export async function resolveBrowserProfileCaptureTransaction(
 }
 
 function callableAnalysis(candidate: BrowserProfileInferenceCandidate): BrowserTransformCallableAnalysis {
+  const sources = [candidate.source, ...candidate.sources]
+    .filter((source, index, items) => items.findIndex((item) => item.eventId === source.eventId) === index);
   return {
     version: 1,
     traceId: candidate.traceId,
     confidence: { ...candidate.confidence },
     flow: candidate.flow.slice(0, 32),
-    operations: candidate.sources.slice(0, 16).map((source) => ({
+    operations: sources.slice(0, 16).map((source) => ({
       operation: source.operation,
       destination: source.destination,
       crypto: source.crypto ? structuredClone(source.crypto) : undefined,
@@ -221,6 +236,13 @@ async function resolveStagedProfileCandidate(
     throw new ExtensionError('profile_candidate_not_found', `当前捕获会话不存在已暂存的自动推断候选: ${candidateId}`);
   }
   return reference.candidate;
+}
+
+async function resolvePairedStagedProfileCandidate(
+  candidate: BrowserProfileInferenceCandidate,
+): Promise<BrowserProfileInferenceCandidate | undefined> {
+  const references = Object.values(pruneProfileEvidence(await readStoredProfileEvidence()));
+  return pairedBrowserTransformCandidate(references.map((item) => item.candidate), candidate, true);
 }
 
 export async function resolveBrowserProfileCallableAnalysis(
@@ -1072,6 +1094,21 @@ function originOf(value: string): string {
   }
 }
 
+function callableMatchesCandidate(
+  callable: BrowserPageCallable,
+  candidate: BrowserProfileInferenceCandidate,
+): boolean {
+  const sources = [candidate.source, ...candidate.sources]
+    .filter((source, index, items) => items.findIndex((item) => item.eventId === source.eventId) === index);
+  const sourceEventIds = new Set(sources.map((source) => source.eventId));
+  if (callable.provenance.eventId) return sourceEventIds.has(callable.provenance.eventId);
+  const analysis = callable.provenance.analysis;
+  return analysis?.traceId === candidate.traceId && sources.every((source) => (
+    analysis.operations.some((operation) => operation.operation === source.operation
+      && operation.destination === source.destination)
+  ));
+}
+
 export async function proposeBrowserTransformProfile(
   target: BrowserTarget,
   candidateId: string,
@@ -1088,8 +1125,41 @@ export async function proposeBrowserTransformProfile(
   ]);
   const evidence = await resolveProfileEvidence(snapshot, target, candidateId);
   const candidate = evidence.candidate;
+  const pairedCandidate = pairedBrowserTransformCandidate(snapshot.profileCandidates, candidate, true)
+    || await resolvePairedStagedProfileCandidate(candidate);
   const recordedCallable = callables.find((item) => item.id === callableId);
   if (!recordedCallable) throw new ExtensionError('callable_unavailable', `页面函数已经失效: ${callableId}`);
+  if (candidate.status !== 'ready' && recordedCallable.kind === 'recorded-call') {
+    throw new ExtensionError(
+      'gateway_capture_required',
+      candidate.missing[0]?.label || '当前候选依赖完整业务流程，不能直接复用单个页面加解密调用',
+    );
+  }
+  const recordedPairedCallable = pairedCandidate
+    ? callables.find((item) => item.id !== recordedCallable.id && callableMatchesCandidate(item, pairedCandidate))
+    : undefined;
+  if (pairedCandidate && pairedCandidate.status !== 'ready' && recordedPairedCallable?.kind === 'recorded-call') {
+    throw new ExtensionError(
+      'gateway_capture_required',
+      pairedCandidate.missing[0]?.label || `配对的${pairedCandidate.direction === 'request' ? '请求' : '响应'}方向尚未完成捕获`,
+    );
+  }
+  if (pairedCandidate && !recordedPairedCallable) {
+    throw new ExtensionError(
+      'gateway_pair_incomplete',
+      `已经识别同一事务的${pairedCandidate.direction === 'request' ? '请求' : '响应'}方向，但对应页面函数尚未创建`,
+    );
+  }
+  const pairedObservation = pairedCandidate?.direction === 'request' && recordedPairedCallable
+    ? await callableOutputObservation(recordedPairedCallable)
+    : undefined;
+  const pairedCallable = pairedObservation && recordedPairedCallable
+    ? promoteObservedEnvelopeCallable(
+      recordedPairedCallable,
+      snapshot.events.find((item) => item.id === pairedCandidate!.request.eventId),
+      pairedObservation.objectKeys,
+    )
+    : recordedPairedCallable;
   const observation = candidate.direction === 'request'
     ? await callableOutputObservation(recordedCallable)
     : undefined;
@@ -1099,7 +1169,7 @@ export async function proposeBrowserTransformProfile(
   if (!sameEvidenceTarget(candidate, target)) {
     throw new ExtensionError('target_denied', '自动推断候选不属于当前共享页面');
   }
-  if (callable.provenance.traceId && callable.provenance.traceId !== candidate.traceId) {
+  if (!callableMatchesCandidate(callable, candidate)) {
     throw new ExtensionError('profile_evidence_mismatch', '页面函数与自动推断候选不属于同一条业务 Trace');
   }
   const pageUrl = frame?.url || callable.origin;
@@ -1116,7 +1186,14 @@ export async function proposeBrowserTransformProfile(
     lastAccessed: tab.lastAccessed,
   };
   const requestEvent = evidence.requestEvent;
-  let profile = createBrowserTransformProfileInput(tabInfo, requestEvent, callable, candidate, inputPaths ? undefined : packet);
+  let profile = createBrowserTransformProfileInput(
+    tabInfo,
+    requestEvent,
+    callable,
+    candidate,
+    inputPaths ? undefined : packet,
+    pairedCandidate && pairedCallable ? { candidate: pairedCandidate, callable: pairedCallable } : undefined,
+  );
   profile = {
     ...profile,
     name: name || profile.name,
@@ -1193,15 +1270,17 @@ export async function validateBrowserTransformProposal(
   comparisonMode: 'structure' | 'exact' = 'structure',
   candidateId?: string,
 ): Promise<BrowserTransformProfileValidationResult> {
-  const { profile: normalized, execution } = await validateBrowserTransformProfile(profile, packet);
-  const generated = applyTransformExecution(packet, execution);
   const candidate = candidateId
     ? (await resolveProfileEvidence(
-      await getBrowserRecording(normalized.target, 500, false),
-      normalized.target,
+      await getBrowserRecording(profile.target, 500, false),
+      profile.target,
       candidateId,
     )).candidate
     : undefined;
+  const { profile: normalized, execution } = await validateBrowserTransformProfile(profile, packet, {
+    direction: candidate?.direction,
+  });
+  const generated = applyTransformExecution(packet, execution);
   if (candidate && !sameEvidenceTarget(candidate, normalized.target)) {
     throw new ExtensionError('profile_evidence_mismatch', '验证候选不属于明文网关绑定的页面');
   }
@@ -1237,6 +1316,7 @@ export async function validateBrowserTransformProposal(
       id: validationDraft.id,
       createdAt: validationDraft.createdAt,
       expiresAt: validationDraft.expiresAt,
+      directions: { request: normalizedProfile.request.enabled, response: normalizedProfile.response.enabled },
     } : undefined,
     next: comparison
       ? comparison.equivalent
@@ -1275,34 +1355,107 @@ export async function validateInferredBrowserTransformProfile(
   );
 }
 
+const preparingTabs = new Set<number>();
+
+interface PreparationCapture {
+  owner: DeepCaptureOwner;
+  trigger?: { captureId: string; nodeId: string };
+  authorize(): void;
+}
+
+async function captureMissingProfileCallable(
+  target: BrowserTarget,
+  candidate: BrowserProfileInferenceCandidate,
+  options?: PreparationCapture,
+): Promise<BrowserPageCallable> {
+  if (candidate.status !== 'capture-required' || !options) {
+    throw new ExtensionError('gateway_capture_required', candidate.missing[0]?.label || '候选缺少可安全捕获的业务边界');
+  }
+  options.authorize();
+  const reference = pruneProfileEvidence(await readStoredProfileEvidence())[candidate.id];
+  if (!reference?.matcher) throw new ExtensionError('gateway_capture_required', '候选缺少断点证据，请重新执行 browser.crypto.inspect');
+  let trigger = options.trigger;
+  if (!trigger && reference.triggerKey) {
+    const context = await capturePageContext({ includeDom: true }, target);
+    const nodes = context.document.interactive.filter((node) => node.semanticKey === reference.triggerKey);
+    if (nodes.length === 1) trigger = { captureId: context.captureId, nodeId: nodes[0].nodeId };
+  }
+  if (!trigger) throw new ExtensionError('gateway_trigger_required', '无法唯一定位原操作，请用 browser.context 获取新的触发节点，并向 browser.transform.prepare 传入 trigger');
+  const current = await deepCaptureStatus(target, options.owner);
+  if (['attached', 'armed', 'paused'].includes(current.state)) throw new ExtensionError('capture_busy', '当前页面已有深度捕获会话，请先完成或释放它');
+  const transaction = candidate.direction === 'request' ? (await resolveBrowserProfileCaptureContext(target, candidate.id)).transaction : undefined;
+  return withPageNetworkGuard(target, transaction?.prerequisites || [], async () => {
+    const dialogOwned = await beginPageDialogCapture(target);
+    let started = false;
+    try {
+      await startDeepCapture(target, reference.matcher!, options.owner);
+      started = true;
+      await actOnPageNode(trigger!.captureId, trigger!.nodeId, 'click', target);
+      const deadline = Math.min(Date.now() + 15_000, options.owner.kind === 'grant' ? options.owner.expiresAt : Infinity);
+      while (Date.now() < deadline) {
+        const status = await deepCaptureStatus(target, options.owner);
+        if (status.state === 'paused' && status.pause && !status.pause.collecting) {
+          const automatic = status.pause.automaticCapture;
+          if (automatic?.state !== 'ready' || !automatic.frameId) {
+            throw new ExtensionError('gateway_capture_ambiguous', automatic?.reason || '暂停现场没有唯一可复用的业务函数', { automaticCapture: automatic });
+          }
+          const analysis = callableAnalysis(candidate);
+          if (automatic.strategy === 'request-transaction') {
+            if (!transaction) throw new ExtensionError('gateway_capture_required', '该方向没有请求事务证据');
+            return await createCapturedPageCallable(target, automatic.frameId, { strategy: 'request-transaction', transaction, analysis }, options.owner);
+          }
+          return await createCapturedPageCallable(target, automatic.frameId, { strategy: 'selected-frame', analysis }, options.owner);
+        }
+        if (!['armed', 'paused', 'attached'].includes(status.state)) throw new ExtensionError('gateway_capture_failed', status.error || '捕获会话已结束，未获取业务函数');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      throw new ExtensionError('gateway_capture_timeout', '重触发操作后未命中预期业务边界，请检查当前页面状态');
+    } finally {
+      try { if (started) await detachDeepCapture(target, options.owner); }
+      finally { await endPageDialogCapture(target, dialogOwned); }
+    }
+  }, candidate.direction === 'request' ? candidate.request.url : undefined);
+}
+
 export async function prepareCapturedBrowserTransformProfile(
   target: BrowserTarget,
   candidateId: string,
   packet: BrowserTransformPacket,
   inputPaths?: string[],
   name?: string,
+  capture?: PreparationCapture,
 ): Promise<BrowserTransformProfileValidationResult> {
-  const candidate = await resolveStagedProfileCandidate(target, candidateId);
-  const source = [candidate.source, ...candidate.sources]
-    .find((item) => item.callHandleId);
-  if (!source?.callHandleId) {
-    throw new ExtensionError(
-      'gateway_capture_required',
-      '本次操作没有捕获到可回放的页面函数，请在原页面重新执行一次浏览器加解密检查',
-    );
+  if (preparingTabs.has(target.tabId)) throw new ExtensionError('capture_busy', '当前标签页正在准备网关，请等待该操作完成');
+  preparingTabs.add(target.tabId);
+  try {
+    const candidate = await resolveStagedProfileCandidate(target, candidateId);
+    const pairedCandidate = await resolvePairedStagedProfileCandidate(candidate);
+    const existingCallables = await listPageCallables(target);
+    const ensureCallable = async (item: BrowserProfileInferenceCandidate) => {
+      const source = [item.source, ...item.sources].find((value) => value.callHandleId) || item.source;
+      const existing = existingCallables.find((callable) => callableMatchesCandidate(callable, item)
+        && (item.status === 'ready'
+          ? callable.inputSlots.filter((slot) => !slot.retained).length === (source.dynamicInputPaths?.length || 1)
+          : callable.kind !== 'recorded-call'));
+      if (existing) return existing;
+      if (item.status !== 'ready') return captureMissingProfileCallable(target, item, capture);
+      if (!source.callHandleId) throw new ExtensionError('gateway_capture_required', '候选缺少可复用的页面调用句柄，请重新执行 browser.crypto.inspect');
+      return createRecordedPageCallable(target, {
+        callHandleId: source.callHandleId,
+        name: name || item.summary.slice(0, 120) || 'Captured page transform',
+        dynamicInputPaths: source.dynamicInputPaths,
+      });
+    };
+    // Retain an already-recorded opposite direction before re-triggering the page.
+    const directions = [candidate, pairedCandidate].filter((item): item is BrowserProfileInferenceCandidate => Boolean(item))
+      .sort((left, right) => Number(right.status === 'ready') - Number(left.status === 'ready'));
+    let callable: BrowserPageCallable | undefined;
+    for (const direction of directions) {
+      const created = await ensureCallable(direction);
+      if (direction.id === candidate.id) callable = created;
+    }
+    return await validateInferredBrowserTransformProfile(target, candidate.id, callable!.id, packet, inputPaths, name);
+  } finally {
+    preparingTabs.delete(target.tabId);
   }
-  const existing = (await listPageCallables(target))
-    .find((item) => item.provenance.eventId === source.eventId);
-  const callable = existing || await createRecordedPageCallable(target, {
-    callHandleId: source.callHandleId,
-    name: name || candidate.summary.slice(0, 120) || 'Captured page transform',
-  });
-  return validateInferredBrowserTransformProfile(
-    target,
-    candidate.id,
-    callable.id,
-    packet,
-    inputPaths,
-    name,
-  );
 }

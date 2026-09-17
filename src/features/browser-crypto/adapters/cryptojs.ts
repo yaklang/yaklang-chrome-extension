@@ -60,6 +60,8 @@ function describe(
   const cryptoJs = (scope.window as unknown as { CryptoJS?: Record<string, unknown> }).CryptoJS || {};
   const normalized = path.toLowerCase();
   const encrypting = normalized.includes('encrypt');
+  const decrypting = normalized.includes('decrypt');
+  const outputEncoding = encrypting ? 'base64' : decrypting ? 'hex' : 'auto';
   const options = normalized.includes('encrypt') || normalized.includes('decrypt')
     ? optionsMetadata(cryptoJs, args[2], toolkit)
     : {};
@@ -68,6 +70,33 @@ function describe(
   else if (normalized.includes('pbkdf2') || normalized.includes('evpkdf')) roles = ['data', 'salt', 'options'];
   else if (normalized.includes('.encrypt') || normalized.includes('.decrypt')) roles = ['data', 'key', 'options'];
   const callableKind = callableOperationKind(path);
+  const adaptData = (value: unknown) => {
+    const originalInput = args[0];
+    if (originalInput && typeof originalInput === 'object'
+      && typeof (originalInput as { sigBytes?: unknown }).sigBytes === 'number') {
+      const bytes = toolkit.bytesForInput(value);
+      const encoder = (cryptoJs as { enc?: { Base64?: { parse?(input: string): unknown } } }).enc?.Base64;
+      if (bytes && typeof encoder?.parse === 'function') return encoder.parse(toolkit.bytesToBase64(bytes));
+    }
+    return toolkit.defaultAdaptInput(value, originalInput);
+  };
+  const adaptWordArray = (value: unknown, originalInput: unknown) => {
+    if (!originalInput || typeof originalInput !== 'object'
+      || typeof (originalInput as { sigBytes?: unknown }).sigBytes !== 'number') {
+      return toolkit.defaultAdaptInput(value, originalInput);
+    }
+    const enc = (cryptoJs as {
+      enc?: {
+        Hex?: { parse?(input: string): unknown };
+        Base64?: { parse?(input: string): unknown };
+      };
+    }).enc;
+    if (typeof value === 'string' && /^[0-9a-f]+$/i.test(value) && value.length % 2 === 0
+      && typeof enc?.Hex?.parse === 'function') return enc.Hex.parse(value);
+    const bytes = toolkit.bytesForInput(value);
+    if (bytes && typeof enc?.Base64?.parse === 'function') return enc.Base64.parse(toolkit.bytesToBase64(bytes));
+    return toolkit.defaultAdaptInput(value, originalInput);
+  };
   return {
     crypto: {
       adapterId: cryptoJsManifest.id,
@@ -78,12 +107,31 @@ function describe(
       mode: options.mode,
       padding: options.padding,
       inputEncoding: 'auto',
-      outputEncoding: encrypting ? 'base64' : 'auto',
+      outputEncoding,
       state: { model: 'stateless', phase: 'one-shot' },
     },
     inputIndex: 0,
     callableKind,
-    outputEncoding: encrypting ? 'base64' : 'auto',
+    outputEncoding,
+    replayInputs: decrypting ? [
+      {
+        path: '$input', name: 'data', role: 'data', originalInput: args[0],
+        apply: (nextArgs, value) => { nextArgs[0] = adaptData(value); },
+      },
+      {
+        path: '$input.key', name: 'key', role: 'key', originalInput: args[1],
+        apply: (nextArgs, value) => { nextArgs[1] = adaptWordArray(value, args[1]); },
+      },
+      {
+        path: '$input.iv', name: 'iv', role: 'iv', originalInput: ownValue(args[2], 'iv'),
+        apply: (nextArgs, value) => {
+          const options = nextArgs[2] && typeof nextArgs[2] === 'object'
+            ? nextArgs[2] as Record<string, unknown>
+            : {};
+          nextArgs[2] = { ...options, iv: adaptWordArray(value, ownValue(args[2], 'iv')) };
+        },
+      },
+    ] : undefined,
     arguments: args.slice(0, 8).map((value, index) => toolkit.argument(
       index,
       roles[index] || 'unknown',
@@ -121,14 +169,7 @@ function describe(
       return output.slice(0, 48);
     },
     adaptInput(value) {
-      const originalInput = args[0];
-      if (originalInput && typeof originalInput === 'object'
-        && typeof (originalInput as { sigBytes?: unknown }).sigBytes === 'number') {
-        const bytes = toolkit.bytesForInput(value);
-        const encoder = (cryptoJs as { enc?: { Base64?: { parse?(input: string): unknown } } }).enc?.Base64;
-        if (bytes && typeof encoder?.parse === 'function') return encoder.parse(toolkit.bytesToBase64(bytes));
-      }
-      return toolkit.defaultAdaptInput(value, originalInput);
+      return adaptData(value);
     },
   };
 }

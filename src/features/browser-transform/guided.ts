@@ -106,8 +106,21 @@ export function compileGuidedTransform(guide: GuidedTransformDraft, callable?: B
     callableId: guide.callableId,
     arguments: inputNodes.map((node) => ({ nodeId: node.id })),
   };
-  const callReference = { nodeId: callId, path: guide.resultPath?.trim() || undefined };
   const nodes: BrowserTransformPipelineNode[] = [...inputNodes, callNode];
+  let callReference = { nodeId: callId, path: guide.resultPath?.trim() || undefined };
+  if (callable?.crypto?.adapterId === 'cryptojs'
+    && callable.crypto.operation.toLowerCase().includes('decrypt')
+    && callable.output.encoding === 'hex') {
+    const decodeId = uid('decode');
+    nodes.push({
+      id: decodeId,
+      name: '还原 CryptoJS 解密字节',
+      kind: 'builtin',
+      operation: 'hex.decode',
+      inputs: [callReference],
+    });
+    callReference = { nodeId: decodeId, path: undefined };
+  }
   const bodyFormat = envelopeBodyFormat(callable);
 
   if (bodyFormat) {
@@ -243,8 +256,14 @@ export function parseGuidedTransform(
 
   if (bodyOutputs.length !== 1) return undefined;
   const output = bodyOutputs[0];
-  const resultPath = referenceFromCall(output.source.nodeId, output.source.path, call.id);
-  if (output.source.nodeId !== call.id) return undefined;
+  const decode = direction.nodes.find((node): node is Extract<BrowserTransformPipelineNode, { kind: 'builtin' }> => (
+    node.kind === 'builtin' && node.operation === 'hex.decode'
+      && node.inputs.length === 1 && node.id === output.source.nodeId
+  ));
+  const resultPath = decode
+    ? referenceFromCall(decode.inputs[0].nodeId, decode.inputs[0].path, call.id)
+    : referenceFromCall(output.source.nodeId, output.source.path, call.id);
+  if (decode ? decode.inputs[0].nodeId !== call.id : output.source.nodeId !== call.id) return undefined;
   if (output.destination === 'body') {
     return { callableId: call.callableId, inputPaths, resultPath, outputKind: 'body', outputField: '', setFormContentType: false };
   }

@@ -94,6 +94,10 @@ describe('Bridge v3 protocol', () => {
 
   it('accepts automatic selected-frame capture and rejects the legacy expression contract', () => {
     expect(parseCapabilityParams('browser.callable.create', {
+      source: 'recording', callHandleId: 'call-1', name: 'Dynamic decrypt',
+      dynamicInputPaths: ['$input', '$input.key', '$input.iv'],
+    })).toMatchObject({ dynamicInputPaths: ['$input', '$input.key', '$input.iv'] });
+    expect(parseCapabilityParams('browser.callable.create', {
       source: 'deep-capture', strategy: 'selected-frame', callFrameId: 'frame-1', name: 'Envelope',
       candidateId: 'candidate-envelope',
     })).toMatchObject({ strategy: 'selected-frame', callFrameId: 'frame-1', candidateId: 'candidate-envelope' });

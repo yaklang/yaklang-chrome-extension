@@ -91,7 +91,19 @@ export function createRecordingTraceRuntime(
   ): BrowserRecordingEvent | undefined => {
     const recordingId = host.recordingId();
     if (!host.active() || !recordingId) return undefined;
-    const eventContext = explicitContext || context();
+    // Values carry causality across await and intervening user interactions.
+    // Only a unique recorded origin can override the current interaction.
+    const fingerprints = new Set((input.inputs || [])
+      .filter((value) => value.byteLength >= 8).map((value) => value.fingerprint));
+    let origins: Map<string, RecordingTraceContext> | undefined;
+    for (const fingerprint of fingerprints) {
+      const matches = new Map(events.filter((event) => event.outputs.some((value) => value.fingerprint === fingerprint))
+        .map((event) => [event.traceId, { traceId: event.traceId, interactionId: event.interactionId }]));
+      if (!matches.size) continue;
+      origins = origins ? new Map([...origins].filter(([traceId]) => matches.has(traceId))) : matches;
+    }
+    const inherited = origins?.size === 1 ? origins.values().next().value : undefined;
+    const eventContext = explicitContext || inherited || context();
     sequence += 1;
     const item: BrowserRecordingEvent = {
       id: host.unique('event'),

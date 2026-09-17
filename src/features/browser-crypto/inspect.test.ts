@@ -53,6 +53,7 @@ describe('atomic page crypto inspection', () => {
       }],
       traces: [], links: [], callables: [], profileCandidates: [{
         id: 'candidate-1', direction: 'request', summary: 'login request',
+        status: 'ready',
         confidence: { score: 0.95, level: 'high' },
         source: { eventId: 'event-1', callHandleId: 'handle-1' },
         sources: [],
@@ -115,6 +116,35 @@ describe('atomic page crypto inspection', () => {
     expect(fixture.stopNetwork).toHaveBeenCalledOnce();
     expect(fixture.stageEvidence).toHaveBeenCalledOnce();
     expect(fixture.context).toHaveBeenCalledWith({ includeDom: true }, { tabId: 7, frameId: 0 });
+  });
+
+  it('prepares a response-only protocol when no request transform was observed', async () => {
+    fixture.stopRecording.mockResolvedValueOnce({
+      status: { target: { tabId: 7, frameId: 0, documentId: 'doc-1' }, active: false, documentAvailable: true, count: 1, droppedCount: 0 },
+      events: [{
+        id: 'decrypt-1', sequence: 1, timestamp: 1, recordingId: 'recording-1', traceId: 'trace-1',
+        kind: 'crypto', operation: 'AES.decrypt', inputs: [], outputs: [], sensitiveCaptured: true,
+      }],
+      traces: [], links: [], callables: [], profileCandidates: [{
+        id: 'candidate-response', recordingId: 'recording-1', traceId: 'trace-1', direction: 'response',
+        status: 'ready', confidence: { score: 100, level: 'high' },
+        source: { eventId: 'decrypt-1', callHandleId: 'handle-1' }, sources: [],
+        request: { method: 'POST', url: 'https://example.test/api', bodyFormat: 'json', mappings: [] },
+      }],
+    });
+    const { inspectPageCryptoOperation } = await import('./inspect');
+
+    const result = await inspectPageCryptoOperation(
+      { tabId: 7, frameId: 0, documentId: 'doc-1' },
+      { captureId: 'capture-1', nodeId: 'n1', settleMs: 250 },
+      { grantId: 'paired', expiresAt: Date.now() + 60_000 },
+    );
+
+    expect(result.gatewayPreparation).toMatchObject({
+      state: 'ready',
+      direction: 'response',
+      directions: { request: { status: 'absent' }, response: { candidateId: 'candidate-response', status: 'ready' } },
+    });
   });
 
   it('waits for a delayed request instead of treating an empty capture as idle', async () => {

@@ -15,6 +15,12 @@ interface RequestRouteSource {
   method?: string;
 }
 
+export interface BrowserTransformProfileBinding {
+  candidate: BrowserProfileInferenceCandidate;
+  callable: BrowserPageCallable;
+  packet?: BrowserTransformPacket;
+}
+
 function originOf(url?: string): string {
   try { return url ? new URL(url).origin : ''; } catch { return ''; }
 }
@@ -28,6 +34,32 @@ function emptyDirection(enabled = false): BrowserTransformDirection {
   return { enabled, nodes: [] };
 }
 
+function sameTarget(left: BrowserProfileInferenceCandidate, right: BrowserProfileInferenceCandidate): boolean {
+  return left.target.tabId === right.target.tabId
+    && left.target.frameId === right.target.frameId
+    && (!left.target.documentId || !right.target.documentId || left.target.documentId === right.target.documentId);
+}
+
+export function pairedBrowserTransformCandidate(
+  candidates: BrowserProfileInferenceCandidate[],
+  candidate: BrowserProfileInferenceCandidate,
+  requireUnambiguous = false,
+): BrowserProfileInferenceCandidate | undefined {
+  const opposite = candidates.filter((item) => item.id !== candidate.id
+    && item.recordingId === candidate.recordingId
+    && item.direction !== candidate.direction && sameTarget(item, candidate));
+  const matches = candidate.transactionId
+    ? opposite.filter((item) => item.transactionId === candidate.transactionId)
+    : opposite.filter((item) => !item.transactionId
+    && item.traceId === candidate.traceId
+    && item.request.method.toUpperCase() === candidate.request.method.toUpperCase()
+    && item.request.url === candidate.request.url);
+  if (requireUnambiguous && matches.length > 1) {
+    throw new ExtensionError('profile_evidence_ambiguous', `同一事务存在 ${matches.length} 个反方向候选，无法完整合并；尚未保存单向网关`);
+  }
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 function candidateGuidance(candidate?: BrowserProfileInferenceCandidate, callable?: BrowserPageCallable, packet?: BrowserTransformPacket): {
   inputPaths?: string[];
   outputKind?: GuidedTransformOutputKind;
@@ -37,7 +69,12 @@ function candidateGuidance(candidate?: BrowserProfileInferenceCandidate, callabl
   const serialization = candidate?.request.serialization;
   if (!destination) return {};
   if (candidate?.direction === 'response') {
-    return { inputPaths: [destination], outputKind: 'body' };
+    return {
+      inputPaths: candidate.request.mappings
+        .map((mapping) => mapping.destination)
+        .filter((path): path is string => Boolean(path)),
+      outputKind: 'body',
+    };
   }
   if (serialization === 'form-field') {
     let inputPaths: string[] | undefined;
@@ -68,6 +105,7 @@ export function createBrowserTransformProfileInput(
   callable?: BrowserPageCallable,
   candidate?: BrowserProfileInferenceCandidate,
   packet?: BrowserTransformPacket,
+  paired?: BrowserTransformProfileBinding,
 ): BrowserTransformProfileInput {
   const guide = defaultGuidedTransform(callable, candidateGuidance(candidate, callable, packet));
   const compiled = callable ? compileGuidedTransform(guide, callable) : emptyDirection(true);
@@ -76,9 +114,9 @@ export function createBrowserTransformProfileInput(
     url: candidate.request.url,
     method: candidate.request.method,
   } : event;
-  return {
+  const profile: BrowserTransformProfileInput = {
     name: routeEvent?.url
-      ? `${routeEvent.method || 'HTTP'} ${routeOf(routeEvent, tab)} ${responseDirection ? '响应' : '请求'}明文网关`
+      ? `${routeEvent.method || 'HTTP'} ${routeOf(routeEvent, tab)} 浏览器协议网关`
       : `${tab.title || '当前页面'} 明文网关`,
     enabled: true,
     target: { tabId: tab.id, frameId: 0 },
@@ -89,4 +127,16 @@ export function createBrowserTransformProfileInput(
     failMode: 'closed',
     maxConcurrency: callable?.kind === 'request-transaction' ? 1 : 2,
   };
+  if (!paired) return profile;
+  if (!candidate
+    || pairedBrowserTransformCandidate([candidate, paired.candidate], candidate)?.id !== paired.candidate.id) {
+    throw new ExtensionError('profile_evidence_mismatch', '请求与响应候选不属于同一个浏览器协议网关');
+  }
+  const pairedGuide = defaultGuidedTransform(
+    paired.callable,
+    candidateGuidance(paired.candidate, paired.callable, paired.packet),
+  );
+  profile[paired.candidate.direction] = compileGuidedTransform(pairedGuide, paired.callable);
+  if (paired.callable.kind === 'request-transaction') profile.maxConcurrency = 1;
+  return profile;
 }

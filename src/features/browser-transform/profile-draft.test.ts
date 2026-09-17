@@ -4,7 +4,7 @@ import type {
   BrowserPageCallable,
   BrowserProfileInferenceCandidate,
 } from '@/types/models';
-import { createBrowserTransformProfileInput } from './profile-draft';
+import { createBrowserTransformProfileInput, pairedBrowserTransformCandidate } from './profile-draft';
 import { executeTransformDirection } from './mapping';
 
 const tab: ActiveTabInfo = {
@@ -98,7 +98,106 @@ describe('browser transform profile draft', () => {
       expect.objectContaining({ kind: 'output.write', destination: 'body' }),
     ]));
     expect(profile.match).toEqual({ methods: ['GET'], urlPattern: '*/api/profile' });
-    expect(profile.name).toContain('响应明文网关');
+    expect(profile.name).toContain('浏览器协议网关');
+  });
+
+  it('maps response ciphertext, key, and iv into one decrypt callable', async () => {
+    const dynamicCallable: BrowserPageCallable = {
+      ...callable,
+      inputSlots: [
+        callable.inputSlots[0],
+        { id: 'key', name: 'key', index: 1, role: 'key', dataType: 'string', required: true, retained: false },
+        { id: 'iv', name: 'iv', index: 2, role: 'iv', dataType: 'string', required: true, retained: false },
+      ],
+    };
+    const dynamicCandidate: BrowserProfileInferenceCandidate = {
+      ...responseCandidate,
+      request: {
+        ...responseCandidate.request,
+        mappings: [
+          { sourceEventId: 'decrypt-event', destination: 'body.message', serialization: 'json-field' },
+          { sourceEventId: 'decrypt-event', destination: 'body.key', serialization: 'json-field' },
+          { sourceEventId: 'decrypt-event', destination: 'body.iv', serialization: 'json-field' },
+        ],
+      },
+    };
+    const profile = createBrowserTransformProfileInput(tab, undefined, dynamicCallable, dynamicCandidate);
+    const packet = {
+      method: 'POST', url: dynamicCandidate.request.url,
+      headers: [{ name: 'Content-Type', value: 'application/json' }],
+      bodyBase64: btoa(JSON.stringify({ message: 'cipher', key: '0011', iv: 'aabb' })),
+    };
+    let received: unknown[] = [];
+
+    await executeTransformDirection('test', 'response', profile.response, packet, async (callableId, args) => {
+      received = args;
+      return { callableId, type: 'string', preview: 'plain', value: 'plain', durationMs: 1 };
+    });
+
+    expect(received).toEqual(['cipher', '0011', 'aabb']);
+  });
+
+  it('pairs one browser transaction and compiles both directions into one profile', () => {
+    const requestCandidate: BrowserProfileInferenceCandidate = {
+      ...responseCandidate,
+      id: 'candidate-request',
+      transactionId: 'fetch-1',
+      direction: 'request',
+      request: { ...responseCandidate.request, eventId: 'request-event', method: 'POST' },
+    };
+    const pairedResponse: BrowserProfileInferenceCandidate = {
+      ...responseCandidate,
+      transactionId: 'fetch-1',
+      request: { ...responseCandidate.request, method: 'POST' },
+    };
+    const encryptCallable: BrowserPageCallable = {
+      ...callable,
+      id: 'encrypt-callable',
+      name: '页面 AES 加密',
+      operation: 'AES.encrypt',
+      provenance: { eventId: 'encrypt-event' },
+    };
+
+    expect(pairedBrowserTransformCandidate([requestCandidate, pairedResponse], requestCandidate)?.id)
+      .toBe(pairedResponse.id);
+    const profile = createBrowserTransformProfileInput(
+      tab,
+      undefined,
+      encryptCallable,
+      requestCandidate,
+      undefined,
+      { candidate: pairedResponse, callable },
+    );
+
+    expect(profile.request.enabled).toBe(true);
+    expect(profile.response.enabled).toBe(true);
+    expect(profile.request.nodes).toContainEqual(expect.objectContaining({ kind: 'page.call', callableId: encryptCallable.id }));
+    expect(profile.response.nodes).toContainEqual(expect.objectContaining({ kind: 'page.call', callableId: callable.id }));
+    expect(profile.name).toBe('POST */api/profile 浏览器协议网关');
+  });
+
+  it('does not guess when one trace contains multiple opposite candidates for the same route', () => {
+    const requestCandidate = { ...responseCandidate, id: 'request', direction: 'request' as const };
+    const responseA = { ...responseCandidate, id: 'response-a' };
+    const responseB = { ...responseCandidate, id: 'response-b' };
+
+    expect(pairedBrowserTransformCandidate([requestCandidate, responseA, responseB], requestCandidate)).toBeUndefined();
+    expect(() => pairedBrowserTransformCandidate([requestCandidate, responseA, responseB], requestCandidate, true))
+      .toThrow('尚未保存单向网关');
+  });
+
+  it('does not pair candidates from different recording sessions', () => {
+    const requestCandidate = { ...responseCandidate, id: 'request', transactionId: 'fetch-1', direction: 'request' as const };
+    const staleResponse = { ...responseCandidate, id: 'stale-response', transactionId: 'fetch-1', recordingId: 'recording-old' };
+
+    expect(pairedBrowserTransformCandidate([requestCandidate, staleResponse], requestCandidate)).toBeUndefined();
+  });
+
+  it('does not fall back to the route when transaction IDs disagree', () => {
+    const requestCandidate = { ...responseCandidate, id: 'request', transactionId: 'fetch-1', direction: 'request' as const };
+    const otherResponse = { ...responseCandidate, id: 'other-response', transactionId: 'fetch-2' };
+
+    expect(pairedBrowserTransformCandidate([requestCandidate, otherResponse], requestCandidate)).toBeUndefined();
   });
 
   it('serializes request-transaction profiles because they mutate one browser session', () => {

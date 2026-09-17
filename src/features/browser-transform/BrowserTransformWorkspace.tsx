@@ -56,7 +56,7 @@ interface BrowserTransformWorkspaceProps {
 export interface BrowserTransformSuggestionSeed {
   revision: number;
   candidate: BrowserProfileInferenceCandidate;
-  callable: BrowserPageCallable;
+  callables: BrowserPageCallable[];
   profile: BrowserTransformProfile;
   sampleBody?: string;
   sampleLabel?: string;
@@ -230,6 +230,11 @@ function callableKindLabel(callable: BrowserPageCallable): string {
   if (callable.kind === 'business-closure') return '业务闭包';
   if (callable.kind === 'request-transaction') return '请求事务';
   return '全局函数';
+}
+
+function profileDirectionLabel(profile: Pick<BrowserTransformProfileInput, 'request' | 'response'>): string {
+  if (profile.request.enabled && profile.response.enabled) return '双向协议网关';
+  return profile.request.enabled ? '仅请求转换' : '仅响应转换';
 }
 
 function referencesOf(node: BrowserTransformPipelineNode): BrowserTransformNodeReference[] {
@@ -516,8 +521,8 @@ export function BrowserTransformWorkspace({
       update: (current) => ({
         ...current,
         callables: [
-          ...current.callables.filter((item) => item.id !== suggestion.callable.id),
-          suggestion.callable,
+          ...current.callables.filter((item) => !suggestion.callables.some((callable) => callable.id === item.id)),
+          ...suggestion.callables,
         ],
         profiles: [
           suggestion.profile,
@@ -801,7 +806,7 @@ export function BrowserTransformWorkspace({
         <div>
           <small>Agent 已完成本地验证 · {pendingValidation.proofLevel === 'exact' ? '报文一致' : pendingValidation.proofLevel === 'structure' ? '结构一致' : '执行通过'}</small>
           <strong>{pendingValidation.profile.name}</strong>
-          <p>{pendingValidation.profile.origin} · {pendingValidation.profile.request.enabled ? '请求加密' : '响应解密'} · {Math.max(1, Math.ceil((pendingValidation.expiresAt - Date.now()) / 60_000))} 分钟后过期</p>
+          <p>{pendingValidation.profile.origin} · {profileDirectionLabel(pendingValidation.profile)} · {Math.max(1, Math.ceil((pendingValidation.expiresAt - Date.now()) / 60_000))} 分钟后过期</p>
         </div>
         <div className="transform-validation-pending__actions">
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => void resolvePendingValidation('discard')}>放弃</Button>

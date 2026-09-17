@@ -76,6 +76,38 @@ describe('guided browser transform compiler', () => {
     }).inputPaths).toEqual(['body', 'body.options']);
   });
 
+  it('decodes CryptoJS decrypt WordArray hex before writing the plaintext body', async () => {
+    const decryptCallable: BrowserPageCallable = {
+      ...callable,
+      id: 'decrypt-aes',
+      operation: 'cryptojs.AES.decrypt',
+      crypto: {
+        adapterId: 'cryptojs', providerKind: 'library', family: 'symmetric',
+        operation: 'AES.decrypt', algorithm: 'AES.decrypt', outputEncoding: 'hex',
+      },
+      output: { dataType: 'Object', encoding: 'hex', shape: 'value', paths: [] },
+    };
+    const direction = compileGuidedTransform(defaultGuidedTransform(decryptCallable), decryptCallable);
+    const result = await executeTransformDirection('profile-decrypt', 'response', direction, {
+      method: 'POST',
+      url: 'https://example.test/login',
+      headers: [],
+      bodyBase64: bodyBase64('cipher'),
+    }, async (callableId) => ({
+      callableId,
+      type: 'object',
+      preview: '7b226f6b223a747275657d',
+      value: '7b226f6b223a747275657d',
+      durationMs: 1,
+    }));
+
+    expect(decodeBody(result.bodyBase64)).toBe('{"ok":true}');
+    expect(parseGuidedTransform(direction, [decryptCallable])).toMatchObject({
+      callableId: decryptCallable.id,
+      outputKind: 'body',
+    });
+  });
+
   it('compiles a form field and its content type without exposing DAG details', async () => {
     const guide = {
       ...defaultGuidedTransform(callable, { outputKind: 'form-field', outputField: 'encryptedData' }),

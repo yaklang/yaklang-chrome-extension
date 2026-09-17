@@ -2,6 +2,7 @@ import type {
   BrowserTransformExecuteInput,
   BrowserTransformPacket,
   BrowserTransformValidationExecuteInput,
+  BrowserTransformProfileInput,
 } from '@/types/models';
 import type { CapabilityDomainHandler } from '../capability-context';
 import { allowedTarget, requireScope } from '../capability-context';
@@ -13,6 +14,7 @@ import {
   getBrowserTransformProfile,
   getBrowserTransformRecovery,
   listBrowserTransformProfiles,
+  saveBrowserTransformProfile,
   resetBrowserTransformRecovery,
   startBrowserTransformRecovery,
   validateBrowserTransformRecovery,
@@ -31,6 +33,19 @@ import { TRANSFORM_CAPABILITY_DOMAIN } from '../capability-domains';
 export const transformCapabilityHandler: CapabilityDomainHandler = {
   ...TRANSFORM_CAPABILITY_DOMAIN,
   async handle({ method, input, grant }) {
+    if (method === 'browser.transform.profile.save') {
+      const profile = input as unknown as BrowserTransformProfileInput;
+      await allowedTarget(grant, profile.target);
+      return saveBrowserTransformProfile(profile);
+    }
+    if (method === 'browser.transform.validation.get') {
+      const draft = await browserTransformValidationById(String(input.validationId || ''));
+      await allowedTarget(grant, draft.profile.target);
+      return {
+        id: draft.id, expiresAt: draft.expiresAt,
+        directions: { request: draft.profile.request.enabled, response: draft.profile.response.enabled },
+      };
+    }
     if (method === 'browser.transform.prepare') {
       requireScope(grant, 'browser.recording.read');
       requireScope(grant, 'browser.callable.execute');
@@ -40,6 +55,15 @@ export const transformCapabilityHandler: CapabilityDomainHandler = {
         input.packet as BrowserTransformPacket,
         Array.isArray(input.inputPaths) ? input.inputPaths.map(String) : undefined,
         typeof input.name === 'string' ? input.name : undefined,
+        {
+          owner: { kind: 'grant', grantId: grant.id, expiresAt: grant.expiresAt },
+          trigger: input.trigger as { captureId: string; nodeId: string } | undefined,
+          authorize: () => {
+            requireScope(grant, 'browser.debugger.control');
+            requireScope(grant, 'browser.dom.read');
+            requireScope(grant, 'browser.dom.write');
+          },
+        },
       );
     }
     if (method === 'browser.packet.compare') {

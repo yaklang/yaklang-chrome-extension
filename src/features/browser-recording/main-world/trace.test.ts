@@ -41,6 +41,18 @@ function environment() {
 }
 
 describe('recording trace runtime', () => {
+  it('inherits unique value provenance across a later interaction without guessing shared values', () => {
+    const { runtime, setMaxEntries } = environment();
+    setMaxEntries(20);
+    const value = { path: '$body', fingerprint: 'ciphertext', encoding: 'text' as const, byteLength: 32 };
+    const key = { ...value, fingerprint: 'shared-key' };
+    runtime.bindContext({ traceId: 'B' });
+    runtime.record({ kind: 'fetch', operation: 'response', outputs: [value, key] }, { traceId: 'A' });
+    runtime.record({ kind: 'fetch', operation: 'response', outputs: [key] }, { traceId: 'C' });
+    expect(runtime.record({ kind: 'crypto', operation: 'decrypt', inputs: [value, key] })?.traceId).toBe('A');
+    runtime.record({ kind: 'fetch', operation: 'response', outputs: [value] }, { traceId: 'C' });
+    expect(runtime.record({ kind: 'crypto', operation: 'decrypt', inputs: [value] })?.traceId).toBe('B');
+  });
   it('does not create events or trace state while recording is inactive', () => {
     const environmentState = environment();
     environmentState.setActive(false);

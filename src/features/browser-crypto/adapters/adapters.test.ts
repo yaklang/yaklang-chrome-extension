@@ -91,11 +91,15 @@ describe('page crypto adapters', () => {
     const CBC = {};
     const Pkcs7 = {};
     const parsed: string[] = [];
+    const hexParsed: string[] = [];
     const cryptoJs = {
-      AES: { encrypt() { return 'cipher'; } },
+      AES: { encrypt() { return 'cipher'; }, decrypt() { return 'plain'; } },
       mode: { CBC },
       pad: { Pkcs7 },
-      enc: { Base64: { parse(value: string) { parsed.push(value); return { wordArray: value }; } } },
+      enc: {
+        Base64: { parse(value: string) { parsed.push(value); return { wordArray: value }; } },
+        Hex: { parse(value: string) { hexParsed.push(value); return { hexWordArray: value }; } },
+      },
     };
     const scope = { window: { CryptoJS: cryptoJs } as unknown as Window } satisfies CryptoAdapterScope;
     const encrypt = cryptoJsAdapter.discover(scope).find((item) => item.operation === 'AES.encrypt');
@@ -117,6 +121,28 @@ describe('page crypto adapters', () => {
     ]);
     expect(plan?.adaptInput?.(new Uint8Array([4, 5, 6]))).toEqual({ wordArray: 'base64:4,5,6' });
     expect(parsed).toEqual(['base64:4,5,6']);
+
+    const decrypt = cryptoJsAdapter.discover(scope).find((item) => item.operation === 'AES.decrypt');
+    const decryptPlan = decrypt?.describe(cryptoJs.AES, [
+      'cipher',
+      { sigBytes: 16 },
+      { mode: CBC, padding: Pkcs7, iv: { sigBytes: 16 } },
+    ], toolkit());
+    expect(decryptPlan?.crypto.outputEncoding).toBe('hex');
+    expect(decryptPlan?.outputEncoding).toBe('hex');
+    expect(decryptPlan?.replayInputs?.map((input) => input.path)).toEqual([
+      '$input', '$input.key', '$input.iv',
+    ]);
+    const replayArgs: unknown[] = ['old-cipher', { oldKey: true }, { mode: CBC, padding: Pkcs7, iv: { oldIv: true } }];
+    decryptPlan?.replayInputs?.[0].apply(replayArgs, 'new-cipher');
+    decryptPlan?.replayInputs?.[1].apply(replayArgs, '00112233');
+    decryptPlan?.replayInputs?.[2].apply(replayArgs, 'aabbccdd');
+    expect(replayArgs).toEqual([
+      'new-cipher',
+      { hexWordArray: '00112233' },
+      { mode: CBC, padding: Pkcs7, iv: { hexWordArray: 'aabbccdd' } },
+    ]);
+    expect(hexParsed).toEqual(['00112233', 'aabbccdd']);
   });
 
   it('retains only bounded JSEncrypt receiver metadata', () => {

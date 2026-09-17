@@ -4,6 +4,7 @@ import type { BridgePublicKey } from '@/types/models';
 import {
   browserTransformExecuteSchema,
   browserTransformPacketSchema,
+  browserTransformProfileInputSchema,
 } from './transform';
 
 export const BRIDGE_PROTOCOL_VERSION = 3;
@@ -183,6 +184,7 @@ export const capabilityParams = {
     v.strictObject({
       ...targetFields, source: v.literal('recording'), callHandleId: id,
       name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120)),
+      dynamicInputPaths: v.optional(v.pipe(v.array(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160))), v.maxLength(16))),
     }),
     v.strictObject({
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,
@@ -239,10 +241,12 @@ export const capabilityParams = {
   'browser.transform.prepare': v.strictObject({
     ...targetFields,
     candidateId: id,
+    trigger: v.optional(v.strictObject({ captureId: id, nodeId: id })),
     inputPaths: v.optional(v.pipe(v.array(valuePath), v.maxLength(64))),
     name: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
     packet: browserTransformPacketSchema,
   }),
+  'browser.transform.validation.get': v.strictObject({ validationId: id }),
   'browser.deep_capture.start': v.strictObject({ ...targetFields, matcher: deepCaptureMatcher }),
   'browser.deep_capture.status': v.optional(v.strictObject(targetFields)),
   'browser.deep_capture.keepalive': v.optional(v.strictObject(targetFields)),
@@ -250,6 +254,7 @@ export const capabilityParams = {
   'browser.deep_capture.detach': v.optional(v.strictObject(targetFields)),
   'browser.transform.profile.list': v.optional(v.strictObject(targetFields)),
   'browser.transform.profile.delete': v.strictObject({ id }),
+  'browser.transform.profile.save': browserTransformProfileInputSchema,
   'browser.transform.recovery.get': v.strictObject({ id }),
   'browser.transform.recovery.start': v.strictObject({ id }),
   'browser.transform.recovery.capture': v.strictObject({

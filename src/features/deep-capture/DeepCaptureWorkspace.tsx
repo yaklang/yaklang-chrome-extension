@@ -11,7 +11,7 @@ import type {
   BrowserProfileInferenceCandidate, BrowserRecordingEvent,
 } from '@/types/models';
 import './deep-capture-workspace.css';
-import { cryptoDeepCaptureMatcher } from '@/features/browser-crypto/model';
+import { eventMatcher } from './matcher';
 import { capturedCallableSample, type CapturedCallableSample } from './callable-sample';
 
 type RunTask = (task: () => Promise<void>, success?: string) => Promise<void>;
@@ -42,32 +42,6 @@ const STATUS_LABELS: Record<BrowserDeepCaptureStatus['state'], string> = {
   captured: '现场已释放',
   error: '需要处理',
 };
-
-function eventMatcher(
-  event?: BrowserRecordingEvent,
-  candidate?: BrowserProfileInferenceCandidate,
-): BrowserDeepCaptureMatcher | undefined {
-  if (!event) return undefined;
-  const frameHints = candidate?.capturePlan?.matcherEventId === event.id
-    ? candidate.capturePlan.frameHints
-    : undefined;
-  const crypto = cryptoDeepCaptureMatcher(event);
-  if (crypto) return { ...crypto, frameHints };
-  if (['fetch', 'xhr', 'form'].includes(event.kind) && event.url) {
-    return { kind: 'request', urlPattern: event.url, frameHints };
-  }
-  if (['beacon', 'worker', 'message'].includes(event.kind) && event.wrapperHandleId) {
-    return {
-      kind: 'boundary',
-      eventKind: event.kind as 'beacon' | 'worker' | 'message',
-      operation: event.operation,
-      wrapperHandleId: event.wrapperHandleId,
-      scriptUrl: event.scriptUrl,
-      frameHints,
-    };
-  }
-  return undefined;
-}
 
 function compactUrl(value: string): string {
   if (!value) return '内联脚本';
@@ -416,8 +390,8 @@ export function DeepCaptureWorkspace({
     }, recoveryProfileId
       ? '新页面函数已捕获，旧网关继续停用；请完成本地回放验证'
       : captureStrategy === 'request-transaction'
-        ? '页面请求事务与明文网关已自动保存，真实发送将在回放时被截获'
-        : '完整业务加密流程与明文网关已自动保存');
+        ? '页面请求事务已捕获；存在响应方向时将继续完成同一个协议网关'
+        : '完整业务转换流程已捕获；存在配对方向时将继续完成同一个协议网关');
   }, [
     onRecoveryCaptured,
     onUseRecommendedCallable,
@@ -433,20 +407,23 @@ export function DeepCaptureWorkspace({
   const useRecordedRecommendation = () => run(async () => {
     if (!target || !recordedRecommendation?.source.callHandleId) throw new Error('推荐调用已经失效');
     setStatus(await request('deep.capture.resume', target));
-    let callable = callables.find((item) => item.provenance.eventId === recordedRecommendation.source.eventId);
+    const inputCount = recordedRecommendation.source.dynamicInputPaths?.length || 1;
+    let callable = callables.find((item) => item.provenance.eventId === recordedRecommendation.source.eventId
+      && item.inputSlots.filter((slot) => !slot.retained).length === inputCount);
     if (!callable) {
       callable = await request('callable.create', {
         ...target,
         source: 'recording',
         callHandleId: recordedRecommendation.source.callHandleId,
         name: `${recordedRecommendation.source.crypto?.algorithm || recordedRecommendation.source.crypto?.operation || recordedRecommendation.source.operation} 页面函数`,
+        dynamicInputPaths: recordedRecommendation.source.dynamicInputPaths,
       });
     }
     const selected = callable;
     setCallables((current) => [...current.filter((item) => item.id !== selected.id), selected]);
     setSelectedCallableId(selected.id);
     await onUseRecommendedCallable?.(recordedRecommendation, selected);
-  }, '已使用录制调用生成并保存明文网关');
+  }, '当前转换方向已完成；存在配对方向时将继续合并');
 
   const executeCallable = () => run(async () => {
     if (!target || !selectedCallableId) throw new Error('请选择页面函数');
@@ -605,7 +582,7 @@ export function DeepCaptureWorkspace({
           <header><Braces size={14} /><strong>函数评估</strong></header>
           <div className="deep-frame-summary"><strong>{selectedFrame?.functionName || '未选择调用帧'}</strong><small>{selectedFrame ? `${compactUrl(selectedFrame.url)}:${selectedFrame.lineNumber}:${selectedFrame.columnNumber}` : ''}</small>{selectedFrame?.sourceMapUrl && <small title={selectedFrame.sourceMapUrl}>Source Map 元数据 · {compactUrl(selectedFrame.sourceMapUrl)}</small>}<span>{selectedFrame?.thisPreview || ''}</span></div>
           {selectedFrame?.sourceKind === 'extension-hook' ? <div className="deep-function-assessment is-hook"><Bug size={15} /><span><strong>这是插件注入的观测帧</strong><small>它只负责记录或设置断点，不是页面业务代码。请选择调用栈中标记为“页面函数”的下游帧。</small></span></div> : selectedFrame?.functionInspection?.resolved ? <div className={`deep-function-assessment ${selectedFrame.functionInspection.riskFlags.length ? 'has-risk' : 'is-clean'}`}>
-            {selectedFrame.functionInspection.riskFlags.length ? <><ShieldAlert size={15} /><span><strong>已阻止注册为可回放函数</strong><small>{selectedFrame.functionInspection.riskFlags.map((risk) => RISK_LABELS[risk]).join(' · ')}。直接调用可能改变页面或发送真实请求。</small></span></> : <><Check size={15} /><span><strong>函数对象已自动解析</strong><small>{selectedFrame.functionInspection.parameterCount || 0} 个参数 · {selectedFrame.functionInspection.resolution === 'receiver-method' ? '页面方法' : selectedFrame.functionInspection.resolution === 'scope-binding' ? '闭包绑定' : '当前栈帧'} · 未发现明显副作用</small></span></>}
+            {selectedFrame.functionInspection.riskFlags.length ? <><ShieldAlert size={15} /><span><strong>已阻止注册为可回放函数</strong><small>{selectedFrame.functionInspection.riskFlags.map((risk) => RISK_LABELS[risk]).join(' · ')}。直接调用可能改变页面或发送真实请求。</small></span></> : <><Check size={15} /><span><strong>函数对象已自动解析</strong><small>{selectedFrame.functionInspection.parameterCount || 0} 个参数 · {selectedFrame.functionInspection.resolution === 'receiver-method' ? '页面方法' : selectedFrame.functionInspection.resolution === 'scope-binding' ? '闭包绑定' : selectedFrame.functionInspection.resolution === 'current-function' ? '当前函数' : '当前栈帧'} · 未发现明显副作用</small></span></>}
           </div> : <div className="deep-function-assessment has-risk"><AlertTriangle size={15} /><span><strong>无法唯一解析当前函数</strong><small>{selectedFrame?.functionInspection?.candidateCount ? `发现 ${selectedFrame.functionInspection.candidateCount} 个同分候选；` : ''}请选择其他业务栈帧，或在高级模式中指定闭包变量。</small></span></div>}
           <div className="deep-adapter-editor__primary">{recoveryProfileId
             ? <Button variant="primary" disabled={busy || !recoverySelectionReady} onClick={() => void captureRecovery(recoveryCaptureStrategy)}><RotateCcw size={14} />{recoveryCaptureStrategy === 'request-transaction' ? '按所选函数恢复请求事务' : '用所选函数恢复绑定'}</Button>

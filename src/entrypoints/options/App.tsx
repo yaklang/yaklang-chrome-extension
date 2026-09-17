@@ -682,7 +682,6 @@ function GatewayWorkspace({
       run={run}
       gatewayShared={bridge.state === 'connected'}
       onShareGateway={shareTransform}
-      initialMode="gateway"
     />
   </div>;
 }

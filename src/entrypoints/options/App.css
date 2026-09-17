@@ -484,6 +484,8 @@ input[type='checkbox'] { width: 15px; height: 15px; flex: 0 0 auto; padding: 0; 
 .recording-pipeline-step button > span:nth-child(2) { min-width: 0; }
 .recording-pipeline-step small, .recording-pipeline-step strong, .recording-pipeline-step em, .recording-pipeline-step b { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .recording-pipeline-step small { color: var(--muted); font-size: 10px; font-weight: 650; }
+.recording-pipeline-step small.is-request { color: var(--warning); }
+.recording-pipeline-step small.is-response { color: var(--primary); }
 .recording-pipeline-step strong { margin-top: 2px; font-size: var(--text-sm); font-weight: 650; }
 .recording-pipeline-step em { margin-top: 2px; color: var(--muted); font-size: var(--text-xs); font-style: normal; }
 .recording-pipeline-step b { margin-top: 4px; color: var(--warning); font-size: 10px; font-weight: 650; }
@@ -517,6 +519,12 @@ input[type='checkbox'] { width: 15px; height: 15px; flex: 0 0 auto; padding: 0; 
 .recording-evidence { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .recording-evidence summary { padding: 9px 0; color: var(--muted-strong); font-size: var(--text-sm); font-weight: 600; cursor: pointer; }
 .recording-evidence[open] { padding-bottom: 10px; }
+.recording-related-transform { padding: 10px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-subtle); }
+.recording-related-transform > div { min-width: 0; display: flex; align-items: center; gap: 8px; color: var(--primary); }
+.recording-related-transform > div span { min-width: 0; }
+.recording-related-transform strong, .recording-related-transform small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.recording-related-transform strong { color: var(--foreground); font-size: var(--text-sm); }
+.recording-related-transform small { margin-top: 2px; color: var(--muted); font-size: var(--text-xs); }
 .profile-inference { padding: 11px 0 0; display: grid; gap: 10px; border-top: 2px solid var(--primary); }
 .profile-inference.is-medium { border-top-color: var(--warning); }
 .profile-inference.is-low { border-top-color: var(--border-strong); }

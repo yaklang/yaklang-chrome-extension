@@ -20,6 +20,7 @@ import { normalizeCallable } from '@/features/page-callable/service';
 import { PAGE_CALLABLE_REGISTRY_KEY } from '@/features/page-callable/constants';
 import { rankBusinessFrames } from './business-frame-ranker';
 import { getTab } from '@/platform/browser/targets';
+import { serializeTabExecution, withPageNetworkGuard } from '@/features/page-callable/network-guard';
 
 interface Debuggee {
   tabId?: number;
@@ -58,6 +59,7 @@ interface InspectedFunctionCandidate {
   riskFlags: NonNullable<BrowserDeepCaptureFrame['functionInspection']>['riskFlags'];
   scriptId?: string;
   lineNumber?: number;
+  columnNumber?: number;
   score: number;
 }
 
@@ -71,6 +73,7 @@ interface CDPCallFrame {
   callFrameId?: string;
   functionName?: string;
   location?: { scriptId?: string; lineNumber?: number; columnNumber?: number };
+  functionLocation?: { scriptId: string; lineNumber: number; columnNumber: number };
   url?: string;
   scopeChain?: CDPScope[];
   this?: CDPRemoteObject;
@@ -114,6 +117,7 @@ const MAX_VALUE_PREVIEW = 512;
 const MAX_VARIABLE_DETAIL = 4_096;
 const MAX_SCOPE_DETAIL_BUDGET = 16_384;
 const MAX_FUNCTION_CANDIDATES = 24;
+const RETAINED_FUNCTIONS_KEY = '__YAKIT_DEEP_FUNCTIONS__';
 const MAX_WORKER_TARGETS = 16;
 const MAX_WORKER_SCRIPT_COUNT = 256;
 const acceptedScopeTypes = new Set<BrowserDeepCaptureScope['type']>([
@@ -288,6 +292,8 @@ function debuggerTarget(tabId: number): Debuggee {
 
 function assertSessionOwner(status: StoredDeepCaptureStatus, owner?: DeepCaptureOwner): void {
   if (!owner || owner.kind === 'local') return;
+  // Released local/Agent history is not a live debugger lock.
+  if (!status.pause && status.recovery?.page === 'running' && status.recovery.debugger === 'detached') return;
   if (status.owner.kind !== 'grant' || status.owner.grantId !== owner.grantId) {
     throw new ExtensionError('permission_denied', '该页面的深度捕获由另一个会话控制');
   }
@@ -616,7 +622,7 @@ async function inspectFunctionExpression(
   if (evaluated?.exceptionDetails || evaluated?.result?.type !== 'function' || !evaluated.result.objectId) return undefined;
   const objectId = evaluated.result.objectId;
   try {
-    const [metadata, location] = await Promise.all([
+    const [metadata, properties] = await Promise.all([
       sendCommand<{ result?: CDPRemoteObject }>(target, 'Runtime.callFunctionOn', {
         objectId,
         functionDeclaration: `function () {
@@ -640,8 +646,11 @@ async function inspectFunctionExpression(
         returnByValue: true,
         silent: true,
       }).catch(() => undefined),
-      sendCommand<{ location?: { scriptId?: string; lineNumber?: number } }>(target, 'Debugger.getFunctionLocation', {
-        functionId: objectId,
+      sendCommand<{ internalProperties?: Array<{ name?: string; value?: CDPRemoteObject }> }>(target, 'Runtime.getProperties', {
+        objectId,
+        ownProperties: false,
+        accessorPropertiesOnly: false,
+        generatePreview: false,
       }).catch(() => undefined),
     ]);
     const value = metadata?.result?.value;
@@ -652,14 +661,19 @@ async function inspectFunctionExpression(
     if (Array.isArray(input.riskFlags)) {
       riskFlags.push(...input.riskFlags.filter((item): item is typeof riskFlags[number] => typeof item === 'string' && allowed.has(item)));
     }
+    const rawLocation = properties?.internalProperties
+      ?.find((property) => property.name === '[[FunctionLocation]]')?.value?.value;
+    const location = rawLocation && typeof rawLocation === 'object'
+      ? rawLocation as { scriptId?: string; lineNumber?: number; columnNumber?: number }
+      : undefined;
     const functionName = typeof input.functionName === 'string' ? input.functionName.slice(0, 240) : '';
-    const sameScript = Boolean(location?.location?.scriptId && location.location.scriptId === frame.scriptId);
+    const sameScript = Boolean(location?.scriptId && location.scriptId === frame.scriptId);
     const nameMatch = functionName === frame.functionName || expression === frame.functionName;
-    let score = resolution === 'frame-name' ? 36 : resolution === 'receiver-method' ? 30 : 12;
+    let score = resolution === 'current-function' ? 48 : resolution === 'frame-name' ? 36 : resolution === 'receiver-method' ? 30 : 12;
     if (sameScript) score += 42;
     if (nameMatch) score += 28;
-    if (sameScript && Number.isFinite(location?.location?.lineNumber)) {
-      const distance = Math.max(0, frame.lineNumber - (Number(location?.location?.lineNumber) + 1));
+    if (sameScript && Number.isFinite(location?.lineNumber)) {
+      const distance = Math.max(0, frame.lineNumber - (Number(location?.lineNumber) + 1));
       score += Math.max(0, 12 - Math.min(12, Math.floor(distance / 20)));
     }
     return {
@@ -671,8 +685,9 @@ async function inspectFunctionExpression(
         ? input.parameterNames.filter((item): item is string => typeof item === 'string' && validIdentifier(item)).slice(0, 16)
         : [],
       riskFlags,
-      scriptId: location?.location?.scriptId,
-      lineNumber: Number.isFinite(location?.location?.lineNumber) ? Number(location?.location?.lineNumber) + 1 : undefined,
+      scriptId: location?.scriptId,
+      lineNumber: Number.isFinite(location?.lineNumber) ? Number(location?.lineNumber) + 1 : undefined,
+      columnNumber: Number.isFinite(location?.columnNumber) ? Number(location?.columnNumber) + 1 : undefined,
       score,
     };
   } finally {
@@ -689,8 +704,10 @@ async function inspectFrameFunction(
     expressions.push({ expression: frame.functionName, resolution: 'frame-name' });
     expressions.push({ expression: receiverFunctionExpression(frame.functionName), resolution: 'receiver-method' });
   }
-  if (!validIdentifier(frame.functionName) || frame.functionName === '(anonymous)') {
+  {
+    expressions.push({ expression: 'arguments.callee', resolution: 'current-function' });
     for (const variable of frame.scopes.flatMap((scope) => scope.variables)) {
+      if (expressions.length >= MAX_FUNCTION_CANDIDATES) break;
       if (variable.type !== 'function' || !validIdentifier(variable.name)) continue;
       expressions.push({ expression: variable.name, resolution: 'scope-binding' });
       if (expressions.length >= MAX_FUNCTION_CANDIDATES) break;
@@ -700,10 +717,19 @@ async function inspectFrameFunction(
   const inspected = (await Promise.all(unique.map((item) => inspectFunctionExpression(
     target, frame, item.expression, item.resolution,
   )))).filter((item): item is InspectedFunctionCandidate => Boolean(item))
-    .filter((item) => item.resolution !== 'scope-binding' || item.scriptId === frame.scriptId);
-  const candidates = [...new Map(inspected
-    .sort((left, right) => right.score - left.score || left.expression.localeCompare(right.expression))
-    .map((item) => [`${item.functionName}\n${item.scriptId || ''}\n${item.lineNumber || ''}\n${item.parameterCount}`, item])).values()]
+    .filter((item) => item.scriptId === frame.scriptId
+      && (!frame.functionLocation || (item.lineNumber === frame.functionLocation.lineNumber + 1
+        && item.columnNumber === frame.functionLocation.columnNumber + 1)));
+  if (!inspected.length && frame.functionLocation) {
+    const listener = await inspectPausedEventListener(target, frame);
+    if (listener) inspected.push(listener);
+  }
+  const distinct = new Map<string, InspectedFunctionCandidate>();
+  for (const item of inspected.sort((left, right) => right.score - left.score)) {
+    const key = `${item.scriptId}:${item.lineNumber}:${item.columnNumber}`;
+    if (!distinct.has(key)) distinct.set(key, item);
+  }
+  const candidates = [...distinct.values()]
     .sort((left, right) => right.score - left.score || left.expression.localeCompare(right.expression));
   const selected = candidates[0];
   const ambiguous = Boolean(selected && candidates[1] && selected.score - candidates[1].score < 8);
@@ -717,6 +743,54 @@ async function inspectFrameFunction(
     referenceExpression: selected.expression,
     candidateCount: candidates.length,
   };
+}
+
+async function inspectPausedEventListener(target: Debuggee, frame: BrowserDeepCaptureFrame): Promise<InspectedFunctionCandidate | undefined> {
+  const matches: CDPRemoteObject[] = [];
+  // Query the browser's listener registry, including delegated and shadow-tree listeners.
+  // Unlike arguments.callee this also works for strict functions and arrow functions.
+  for (const expression of ['document', 'window']) {
+    const evaluated = await sendCommand<{ result?: CDPRemoteObject }>(target, 'Debugger.evaluateOnCallFrame', {
+      callFrameId: frame.id, expression, objectGroup: 'yakit-deep-capture', silent: true,
+    }).catch(() => undefined);
+    if (!evaluated?.result?.objectId) continue;
+    try {
+      const result = await sendCommand<{ listeners?: Array<{
+        scriptId: string; lineNumber: number; columnNumber: number;
+        handler?: CDPRemoteObject; originalHandler?: CDPRemoteObject;
+      }> }>(target, 'DOMDebugger.getEventListeners', {
+        objectId: evaluated.result.objectId, depth: -1, pierce: true,
+      });
+      for (const listener of result.listeners || []) {
+        if (listener.scriptId !== frame.scriptId
+          || listener.lineNumber !== frame.functionLocation!.lineNumber
+          || listener.columnNumber !== frame.functionLocation!.columnNumber) continue;
+        const handler = listener.originalHandler || listener.handler;
+        if (handler?.objectId && handler.type === 'function') matches.push(handler);
+      }
+    } finally { await sendCommand(target, 'Runtime.releaseObject', { objectId: evaluated.result.objectId }).catch(() => undefined); }
+  }
+  if (!matches.length) return undefined;
+  const first = matches[0];
+  try {
+    for (const other of matches.slice(1)) {
+      const equal = await sendCommand<{ result?: CDPRemoteObject }>(target, 'Runtime.callFunctionOn', {
+        objectId: first.objectId, functionDeclaration: 'function(other) { return this === other; }',
+        arguments: [{ objectId: other.objectId }], returnByValue: true,
+      });
+      if (equal.result?.value !== true) return undefined;
+    }
+    const id = crypto.randomUUID();
+    await sendCommand(target, 'Runtime.callFunctionOn', {
+      objectId: first.objectId,
+      functionDeclaration: `function(id) { (globalThis[${JSON.stringify(RETAINED_FUNCTIONS_KEY)}] ||= Object.create(null))[id] = this; }`,
+      arguments: [{ value: id }],
+    });
+    return await inspectFunctionExpression(target, frame,
+      `globalThis[${JSON.stringify(RETAINED_FUNCTIONS_KEY)}][${JSON.stringify(id)}]`, 'event-listener');
+  } finally {
+    await Promise.all(matches.map((handler) => sendCommand(target, 'Runtime.releaseObject', { objectId: handler.objectId }).catch(() => undefined)));
+  }
 }
 
 function pauseSkeleton(
@@ -741,6 +815,9 @@ function pauseSkeleton(
       sourceMapUrl: script?.sourceMapUrl,
       lineNumber: Math.max(1, Number(frame.location?.lineNumber || 0) + 1),
       columnNumber: Math.max(1, Number(frame.location?.columnNumber || 0) + 1),
+      functionLocation: frame.functionLocation
+        ? { lineNumber: frame.functionLocation.lineNumber, columnNumber: frame.functionLocation.columnNumber }
+        : undefined,
       scopes: [],
       thisPreview: remotePreview(frame.this),
       sourceKind,
@@ -1352,6 +1429,7 @@ async function capturePageCallableWhilePaused(
     delete globalThis[${JSON.stringify(retainedCallKey)}];
     if (!retainedCall || !Array.isArray(retainedCall.args)) throw new Error("业务函数的暂停现场已经失效");
     const candidate = (${functionExpression});
+    delete globalThis[${JSON.stringify(RETAINED_FUNCTIONS_KEY)}];
     if (typeof candidate !== "function") throw new Error("选中的表达式不是函数");
     const source = Function.prototype.toString.call(candidate).slice(0, 65536);
     const transaction = ${JSON.stringify(requestTransaction || null)};
@@ -1367,31 +1445,6 @@ async function capturePageCallableWhilePaused(
     if (!(registry instanceof Map)) {
       registry = new Map();
       Object.defineProperty(globalThis, key, { value: registry, configurable: true, enumerable: false });
-    }
-    if (transaction && typeof globalThis.fetch === "function") {
-      const previousFetch = globalThis.fetch;
-      let restoreTimer;
-      const restoreFetch = () => {
-        if (globalThis.fetch === transactionCaptureFetch) globalThis.fetch = previousFetch;
-        if (restoreTimer) clearTimeout(restoreTimer);
-      };
-      const transactionCaptureFetch = async function(input, init) {
-        let request;
-        try { request = new Request(input, init); } catch { return Reflect.apply(previousFetch, this, [input, init]); }
-        const expectedURL = new URL(transaction.request.url, location.href).toString();
-        if (transaction.request.boundary !== "fetch"
-          || request.method.toUpperCase() !== transaction.request.method.toUpperCase()
-          || request.url !== expectedURL) {
-          return Reflect.apply(previousFetch, this, [input, init]);
-        }
-        restoreFetch();
-        return new Response(JSON.stringify({ success: false, error: "request captured before transaction replay" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" }
-        });
-      };
-      globalThis.fetch = transactionCaptureFetch;
-      restoreTimer = setTimeout(restoreFetch, 10000);
     }
     const metadata = {
       id: ${JSON.stringify(callableId)}, name: ${JSON.stringify(name)}, kind: ${JSON.stringify(callableKind)},
@@ -1472,6 +1525,20 @@ async function capturePageCallableWhilePaused(
 }
 
 export async function createCapturedPageCallable(
+  target: BrowserTarget,
+  callFrameId: string,
+  input: CapturedPageCallableInput,
+  owner?: DeepCaptureOwner,
+): Promise<BrowserPageCallable> {
+  if (input.strategy === 'request-transaction') {
+    return serializeTabExecution(target.tabId, () => withPageNetworkGuard(
+      target, [], () => captureAndResume(target, callFrameId, input, owner), input.transaction.request.url,
+    ));
+  }
+  return captureAndResume(target, callFrameId, input, owner);
+}
+
+async function captureAndResume(
   target: BrowserTarget,
   callFrameId: string,
   input: CapturedPageCallableInput,

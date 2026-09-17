@@ -27,6 +27,8 @@
     "verify:aesrsa": "node scripts/verify-aesrsa-transaction.mjs",
     "verify:aesserver": "node scripts/verify-aesserver-transaction.mjs",
     "verify:des": "node scripts/verify-des-transaction.mjs",
+    "verify:capture": "pnpm build:enterprise && node scripts/verify-capture-regressions.mjs && node scripts/verify-login-gateway.mjs",
+    "verify:agent-gateway": "pnpm build:enterprise && node scripts/verify-agent-gateway.mjs",
     "verify:agent-contract:aes": "node scripts/verify-aes-agent-contract.mjs",
     "verify:agent-contract:aesrsa": "node scripts/verify-aesrsa-transaction.mjs",
     "verify:agent-contract:holdout": "AGENT_CONTRACT_HOLDOUT_ONLY=1 EXTENSION_PATH=.output/chrome-mv3-enterprise node scripts/verify-ui.mjs",

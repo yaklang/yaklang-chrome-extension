@@ -19,6 +19,7 @@ import {
   restorePageDialogCapture,
 } from '@/features/page-context/dialogs';
 import { ExtensionError } from '@/shared/errors';
+import { pairedBrowserTransformCandidate } from '@/features/browser-transform/profile-draft';
 import type {
   BrowserRecordingEvent,
   BrowserRecordingSnapshot,
@@ -219,11 +220,23 @@ export async function inspectPageCryptoOperation(
   if (!snapshot || !action) {
     throw new ExtensionError('crypto_inspection_incomplete', '未能完整执行页面加解密检查');
   }
-  await stageBrowserProfileEvidence(snapshot);
+  await stageBrowserProfileEvidence(snapshot, action.node.semanticKey);
   const preparation = snapshot.profileCandidates
-    .filter((candidate) => candidate.direction === 'request' && [candidate.source, ...candidate.sources]
+    .filter((candidate) => [candidate.source, ...candidate.sources]
       .some((source) => Boolean(source.callHandleId)))
-    .sort((left, right) => right.confidence.score - left.confidence.score)[0];
+    .sort((left, right) => Number(right.direction === 'request') - Number(left.direction === 'request')
+      || right.confidence.score - left.confidence.score)[0];
+  const pairedPreparation = preparation
+    ? pairedBrowserTransformCandidate(snapshot.profileCandidates, preparation, true)
+    : undefined;
+  const directions = [preparation, pairedPreparation].filter(
+    (candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate),
+  );
+  const requestPreparation = directions.find((candidate) => candidate.direction === 'request');
+  const responsePreparation = directions.find((candidate) => candidate.direction === 'response');
+  const preparationReady = Boolean(preparation?.status === 'ready'
+    && directions.every((candidate) => candidate.status === 'ready'
+      && [candidate.source, ...candidate.sources].some((source) => Boolean(source.callHandleId))));
   const evidence = summarizeCryptoInspection(snapshot, requests);
   return {
     version: 1,
@@ -243,17 +256,27 @@ export async function inspectPageCryptoOperation(
     },
     postAction,
     gatewayPreparation: preparation ? {
-      state: 'ready',
+      state: preparationReady ? 'ready' : 'capture-required',
       candidateId: preparation.id,
       direction: preparation.direction,
       confidence: preparation.confidence,
+      directions: {
+        request: requestPreparation
+          ? { candidateId: requestPreparation.id, status: requestPreparation.status }
+          : { status: 'absent' },
+        response: responsePreparation
+          ? { candidateId: responsePreparation.id, status: responsePreparation.status }
+          : { status: 'absent' },
+      },
       request: {
         method: preparation.request.method,
         url: preparation.request.url,
         bodyFormat: preparation.request.bodyFormat,
         destinations: preparation.request.mappings.map((mapping) => mapping.destination).filter(Boolean),
       },
-      next: '需要明文 HTTP 测试时，直接调用 browser.transform.prepare；不要再调用 recording、callable、debugger 或 profile 底层能力',
+      next: preparationReady
+        ? '需要明文 HTTP 测试时，直接调用 browser.transform.prepare；同一事务的请求与响应会编译进一个 Profile'
+        : '调用 browser.transform.prepare，插件将自动重触发本次操作、捕获缺失的业务方向并验证完整网关；不需要打开插件 UI',
     } : {
       state: 'unavailable',
       next: '本次证据可用于分析，但不足以生成明文转换；继续使用当前页面，不要重新打开网站',

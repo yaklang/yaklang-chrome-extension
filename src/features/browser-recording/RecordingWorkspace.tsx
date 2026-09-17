@@ -19,7 +19,12 @@ import {
   BrowserTransformWorkspace,
   type BrowserTransformSuggestionSeed,
 } from '@/features/browser-transform/BrowserTransformWorkspace';
-import { createBrowserTransformProfileInput } from '@/features/browser-transform/profile-draft';
+import {
+  createBrowserTransformProfileInput,
+  pairedBrowserTransformCandidate,
+  type BrowserTransformProfileBinding,
+} from '@/features/browser-transform/profile-draft';
+import { browserGatewayNextStep, recordingEventDirection } from './presentation';
 
 type RunTask = (task: () => Promise<void>, success?: string) => Promise<void>;
 const DEEP_CAPTURE_AVAILABLE = !import.meta.env.FIREFOX;
@@ -30,7 +35,6 @@ interface RecordingWorkspaceProps {
   run: RunTask;
   gatewayShared: boolean;
   onShareGateway: () => Promise<void>;
-  initialMode?: 'gateway' | 'recording' | 'deep';
 }
 
 const KIND_LABELS: Record<BrowserRecordingEvent['kind'], string> = {
@@ -63,6 +67,14 @@ const ARGUMENT_LABELS: Record<BrowserRecordingArgumentRole, string> = {
 function confidenceLabel(candidate: BrowserProfileInferenceCandidate): string {
   const level = candidate.confidence.level === 'high' ? '高' : candidate.confidence.level === 'medium' ? '中' : '低';
   return `${level}置信度 · ${candidate.confidence.score}`;
+}
+
+function candidateStatusLabel(candidate?: BrowserProfileInferenceCandidate): string {
+  if (!candidate) return '未检测到';
+  if (candidate.status === 'ready') return '可直接生成';
+  if (candidate.status === 'capture-required') return '需要完整捕获';
+  if (candidate.status === 'mapping-required') return '需要确认映射';
+  return '证据不足';
 }
 
 function eventIcon(kind: BrowserRecordingEvent['kind']) {
@@ -183,9 +195,8 @@ export function RecordingWorkspace({
   run,
   gatewayShared,
   onShareGateway,
-  initialMode = 'recording',
 }: RecordingWorkspaceProps) {
-  const [workspaceMode, setWorkspaceMode] = useState<'gateway' | 'recording' | 'deep'>(initialMode);
+  const [workspaceMode, setWorkspaceMode] = useState<'gateway' | 'recording' | 'deep'>('recording');
   const [autoArmRequest, setAutoArmRequest] = useState(0);
   const [autoRecoveryRequest, setAutoRecoveryRequest] = useState(0);
   const [recoveryProfileId, setRecoveryProfileId] = useState('');
@@ -202,6 +213,9 @@ export function RecordingWorkspace({
   const [callableArguments, setCallableArguments] = useState('[]');
   const [callableResult, setCallableResult] = useState<BrowserPageCallableExecution>();
   const [gatewaySuggestion, setGatewaySuggestion] = useState<BrowserTransformSuggestionSeed>();
+  const [pendingGatewayBinding, setPendingGatewayBinding] = useState<BrowserTransformProfileBinding>();
+  const [captureCandidate, setCaptureCandidate] = useState<BrowserProfileInferenceCandidate>();
+  useEffect(() => { setCaptureCandidate(undefined); }, [tab?.id]);
 
   const load = useCallback(async () => {
     const tabId = tab?.id;
@@ -284,6 +298,8 @@ export function RecordingWorkspace({
     setSelectedTraceId('');
     setSelectedEventId('');
     setCallableResult(undefined);
+    setPendingGatewayBinding(undefined);
+    setCaptureCandidate(undefined);
   }, captureValues ? '录制已开始；短时样本仅保留在本次浏览器会话，页面跳转后会自动接续' : '录制已开始，将跨页面记录业务执行链');
 
   const stop = () => run(async () => {
@@ -295,6 +311,8 @@ export function RecordingWorkspace({
     if (!recordingTarget) return;
     setSnapshot(await request('recording.clear', recordingTarget));
     setCallableResult(undefined);
+    setPendingGatewayBinding(undefined);
+    setCaptureCandidate(undefined);
   }, '录制与录制型页面函数已清空');
 
   const createCallable = () => run(async () => {
@@ -357,9 +375,22 @@ export function RecordingWorkspace({
   const outgoingLinks = selectedEvent ? snapshot?.links.filter((link) => link.fromEventId === selectedEvent.id) || [] : [];
   const incomingLinks = selectedEvent ? snapshot?.links.filter((link) => link.toEventId === selectedEvent.id) || [] : [];
   const traceCandidates = snapshot?.profileCandidates.filter((candidate) => candidate.traceId === selectedTraceId) || [];
-  const selectedCandidate = traceCandidates.find((candidate) => (
-    candidate.sources.some((source) => source.eventId === selectedEventId) || candidate.request.eventId === selectedEventId
-  )) || traceCandidates[0];
+  const sourceCandidates = traceCandidates.filter((candidate) => candidate.source.eventId === selectedEventId);
+  const selectedCandidate = sourceCandidates.length === 1 ? sourceCandidates[0] : undefined;
+  const pairedCandidate = selectedCandidate
+    ? pairedBrowserTransformCandidate(snapshot?.profileCandidates || [], selectedCandidate)
+    : undefined;
+  const boundaryCandidates = selectedCandidate ? [] : traceCandidates.filter((candidate) => candidate.request.eventId === selectedEventId);
+  const relatedCandidate = boundaryCandidates.length === 1 ? boundaryCandidates[0] : undefined;
+  const relatedSourceEvent = relatedCandidate
+    ? snapshot?.events.find((event) => event.id === relatedCandidate.source.eventId)
+    : undefined;
+  const selectedEventDirection = selectedEvent
+    ? recordingEventDirection(selectedEvent, traceCandidates)
+    : undefined;
+  const gatewayNextStep = selectedCandidate
+    ? browserGatewayNextStep(selectedCandidate, pairedCandidate)
+    : undefined;
   const candidateSourceEvent = selectedCandidate
     ? snapshot?.events.find((event) => event.id === selectedCandidate.source.eventId)
     : undefined;
@@ -382,7 +413,9 @@ export function RecordingWorkspace({
   };
 
   const continueInference = (candidate: BrowserProfileInferenceCandidate) => {
+    setCaptureCandidate(candidate);
     setRecoveryProfileId('');
+    setSelectedTraceId(candidate.traceId);
     setSelectedEventId(candidate.capturePlan?.matcherEventId
       || (candidate.sources.length > 1 ? candidate.request.eventId : candidate.source.eventId));
     setAutoArmRequest((current) => current + 1);
@@ -390,6 +423,7 @@ export function RecordingWorkspace({
   };
 
   const openRecovery = (profileId: string) => {
+    setCaptureCandidate(undefined);
     setRecoveryProfileId(profileId);
     setAutoRecoveryRequest((current) => current + 1);
     setWorkspaceMode('deep');
@@ -407,6 +441,37 @@ export function RecordingWorkspace({
     capturedSample?: CapturedCallableSample,
   ) => {
     if (!tab) throw new Error('目标标签页已经关闭');
+    const binding: BrowserTransformProfileBinding = { candidate, callable };
+    const pair = pairedBrowserTransformCandidate(snapshot?.profileCandidates || [], candidate, true);
+    let pairedBinding = pendingGatewayBinding?.candidate.id === pair?.id ? pendingGatewayBinding : undefined;
+    if (!pairedBinding && pair) {
+      if (pair.status === 'capture-required') {
+        setPendingGatewayBinding(binding);
+        continueInference(pair);
+        return;
+      }
+      if (pair.status !== 'ready') {
+        throw new Error(`已检测到${pair.direction === 'request' ? '请求' : '响应'}方向，但${candidateStatusLabel(pair)}，不能静默保存为单向网关`);
+      }
+      const pairEvent = snapshot?.events.find((item) => item.id === pair.source.eventId);
+      if (!eventAvailableInDocument(pairEvent, currentDocumentId, documentAvailable) || !snapshot?.status.target) {
+        throw new Error('配对方向属于另一个页面文档，请返回对应页面现场后再生成');
+      }
+      const pairInputCount = pair.source.dynamicInputPaths?.length || 1;
+      let pairCallable = snapshot.callables.find((item) => item.provenance.eventId === pair.source.eventId
+        && item.inputSlots.filter((slot) => !slot.retained).length === pairInputCount);
+      if (!pairCallable) {
+        if (!pair.source.callHandleId) throw new Error('配对方向没有可复用的页面调用句柄');
+        pairCallable = await request('callable.create', {
+          ...snapshot.status.target,
+          source: 'recording',
+          callHandleId: pair.source.callHandleId,
+          name: `${pair.source.crypto?.algorithm || pair.source.crypto?.operation || pair.source.operation} 页面函数`,
+          dynamicInputPaths: pair.source.dynamicInputPaths,
+        });
+      }
+      pairedBinding = { candidate: pair, callable: pairCallable };
+    }
     const sourceEvent = snapshot?.events.find((item) => item.id === candidate.source.eventId);
     const boundaryEvent = snapshot?.events.find((item) => item.id === candidate.request.eventId);
     const profile = await request('transform.profile.save', createBrowserTransformProfileInput(
@@ -414,15 +479,21 @@ export function RecordingWorkspace({
       sourceEvent,
       callable,
       candidate,
+      undefined,
+      pairedBinding,
     ));
+    const callables = [callable, pairedBinding?.callable].filter((item): item is BrowserPageCallable => Boolean(item));
+    const callableIds = new Set(callables.map((item) => item.id));
     setSnapshot((current) => current ? {
       ...current,
-      callables: [...current.callables.filter((item) => item.id !== callable.id), callable],
+      callables: [...current.callables.filter((item) => !callableIds.has(item.id)), ...callables],
     } : current);
+    setPendingGatewayBinding(undefined);
+    setCaptureCandidate(undefined);
     setGatewaySuggestion((current) => ({
       revision: (current?.revision || 0) + 1,
       candidate,
-      callable,
+      callables,
       profile,
       sampleBody: capturedSample?.body || shortSample(candidate.direction === 'response' ? boundaryEvent : sourceEvent),
       sampleLabel: capturedSample?.label || (candidate.direction === 'response' && boundaryEvent
@@ -447,17 +518,20 @@ export function RecordingWorkspace({
     if (!currentSnapshot) throw new Error('没有可用的录制现场');
     const target = currentSnapshot.status.target;
     if (!target) throw new Error('录制文档已经失效');
-    let callable = currentSnapshot.callables.find((item) => item.provenance.eventId === candidate.source.eventId);
+    const inputCount = candidate.source.dynamicInputPaths?.length || 1;
+    let callable = currentSnapshot.callables.find((item) => item.provenance.eventId === candidate.source.eventId
+      && item.inputSlots.filter((slot) => !slot.retained).length === inputCount);
     if (!callable) {
       callable = await request('callable.create', {
         ...target,
         source: 'recording',
         callHandleId: candidate.source.callHandleId,
         name: `${candidate.source.crypto?.algorithm || candidate.source.crypto?.operation || candidate.source.operation} 页面函数`,
+        dynamicInputPaths: candidate.source.dynamicInputPaths,
       });
     }
     await openSuggestedGateway(candidate, callable);
-  }, '已根据录制证据生成并保存明文网关');
+  }, '当前方向已完成；存在配对方向时将继续捕获并合并为一个网关');
 
   return <section className="recording-section">
     <div className="recording-heading">
@@ -521,11 +595,12 @@ export function RecordingWorkspace({
               {!traceEvents.length ? <div className="recording-column-empty">当前 Trace 没有事件</div> : traceEvents.map((event, index) => {
                 const linked = snapshot?.links.some((link) => link.fromEventId === event.id || link.toEventId === event.id);
                 const callableAvailable = eventAvailableInDocument(event, currentDocumentId, documentAvailable);
+                const flowDirection = recordingEventDirection(event, traceCandidates);
                 return <div className={`recording-pipeline-step ${event.kind === 'navigation' ? 'is-navigation' : ''}`} key={event.id}>
                   <span className="recording-step-rail" aria-hidden="true"><i>{String(index + 1).padStart(2, '0')}</i>{index < traceEvents.length - 1 ? <span><ArrowDown size={11} /></span> : null}</span>
                   <button data-event-id={event.id} className={`${event.id === selectedEventId ? 'is-selected' : ''} ${linked ? 'is-linked' : ''}`} onClick={() => setSelectedEventId(event.id)}>
                     <span className={`recording-event-icon kind-${event.kind}`}>{eventIcon(event.kind)}</span>
-                    <span><small>{KIND_LABELS[event.kind]}</small><strong>{eventTitle(event)}</strong><em>{eventSubtitle(event)}</em>{event.kind === 'navigation' ? <b>{navigationPhaseLabel(event)}</b> : null}</span>
+                    <span><small className={flowDirection ? `is-${flowDirection}` : ''}>{flowDirection === 'request' ? '↑ 请求' : flowDirection === 'response' ? '↓ 响应' : KIND_LABELS[event.kind]}{flowDirection ? ` · ${KIND_LABELS[event.kind]}` : ''}</small><strong>{eventTitle(event)}</strong><em>{eventSubtitle(event)}</em>{event.kind === 'navigation' ? <b>{navigationPhaseLabel(event)}</b> : null}</span>
                     <span className="recording-event-meta">{event.callableCapable ? <i className={callableAvailable ? '' : 'is-history'}>{callableAvailable ? '当前可用' : '历史现场'}</i> : null}<time title={new Date(event.timestamp).toLocaleString()}>{relativeTime(event.timestamp, selectedTrace?.startedAt)}</time>{event.durationMs !== undefined ? <small>{event.durationMs.toFixed(1)} ms</small> : null}</span>
                   </button>
                 </div>;
@@ -535,7 +610,7 @@ export function RecordingWorkspace({
 
           <aside className="recording-inspector">
             {!selectedEvent ? <div className="recording-column-empty">选择一个 Pipeline 步骤</div> : <>
-              <header><div><span>{KIND_LABELS[selectedEvent.kind]}</span><strong>{eventTitle(selectedEvent)}</strong><small title={selectedEvent.url || selectedEvent.scriptUrl}>{selectedEvent.url || selectedEvent.scriptUrl || '页面主世界'}</small></div>{selectedEvent.error ? <i className="is-error">ERROR</i> : <i>#{selectedEvent.sequence}</i>}</header>
+              <header><div><span>{selectedEventDirection === 'request' ? '↑ 请求' : selectedEventDirection === 'response' ? '↓ 响应' : KIND_LABELS[selectedEvent.kind]}</span><strong>{eventTitle(selectedEvent)}</strong><small title={selectedEvent.url || selectedEvent.scriptUrl}>{selectedEvent.url || selectedEvent.scriptUrl || '页面主世界'}</small></div>{selectedEvent.error ? <i className="is-error">ERROR</i> : <i>#{selectedEvent.sequence}</i>}</header>
               {selectedEvent.kind === 'navigation' && selectedEvent.navigation
                 ? <dl className="recording-navigation-detail">
                   <div><dt>状态</dt><dd>{navigationPhaseLabel(selectedEvent)}</dd></div>
@@ -545,10 +620,15 @@ export function RecordingWorkspace({
                 </dl>
                 : <dl><div><dt>输入</dt><dd>{selectedEvent.byteLength === undefined ? `${selectedEvent.inputs.length} 个值` : `${selectedEvent.byteLength} B`}</dd></div><div><dt>输出</dt><dd>{selectedEvent.resultByteLength === undefined ? `${selectedEvent.outputs.length} 个值` : `${selectedEvent.resultByteLength} B`}</dd></div><div><dt>上游</dt><dd>{incomingLinks.length}</dd></div><div><dt>下游</dt><dd>{outgoingLinks.length}</dd></div></dl>}
 
+              {relatedCandidate && relatedSourceEvent && <section className="recording-related-transform">
+                <div><Link2 size={15} /><span><strong>已关联{relatedCandidate.direction === 'request' ? '请求' : '响应'}转换</strong><small>#{relatedSourceEvent.sequence} · {eventTitle(relatedSourceEvent)}</small></span></div>
+                <Button variant="ghost" onClick={() => setSelectedEventId(relatedSourceEvent.id)}>查看{relatedCandidate.direction === 'request' ? '请求' : '响应'}转换</Button>
+              </section>}
+
               {selectedCandidate && <section className={`profile-inference is-${selectedCandidate.confidence.level}`}>
                 <div className="profile-inference__heading">
                   <span className="profile-inference__mark"><Sparkles size={15} /></span>
-                  <span><small>自动推断 Profile</small><strong>{selectedCandidate.summary}</strong></span>
+                  <span><small>自动识别 · {selectedCandidate.direction === 'request' ? '请求转换' : '响应转换'}</small><strong>{selectedCandidate.summary}</strong></span>
                   <i><ShieldCheck size={12} />{confidenceLabel(selectedCandidate)}</i>
                 </div>
                 <div className="profile-inference__flow" aria-label="推断的数据流">
@@ -556,6 +636,11 @@ export function RecordingWorkspace({
                     <code>{item}</code>{index < selectedCandidate.flow.length - 1 ? <ChevronRight size={12} /> : null}
                   </span>)}
                 </div>
+                <dl className="profile-inference__arguments">
+                  <div><dt>请求转换</dt><dd>{candidateStatusLabel(selectedCandidate.direction === 'request' ? selectedCandidate : pairedCandidate?.direction === 'request' ? pairedCandidate : undefined)}</dd></div>
+                  <div><dt>响应转换</dt><dd>{candidateStatusLabel(selectedCandidate.direction === 'response' ? selectedCandidate : pairedCandidate?.direction === 'response' ? pairedCandidate : undefined)}</dd></div>
+                </dl>
+                {pendingGatewayBinding && <div className="profile-inference__next is-ready"><span>{pendingGatewayBinding.candidate.direction === 'request' ? '请求转换' : '响应转换'}已经捕获，正在完成配对方向；完成后会保存为一个双向网关。</span></div>}
                 {selectedCandidate.sources.length > 1 && <div className="profile-inference__sources">
                   {selectedCandidate.sources.map((source, index) => <div key={source.eventId}>
                     <span>{String(index + 1).padStart(2, '0')}</span>
@@ -573,27 +658,28 @@ export function RecordingWorkspace({
                   <summary>{selectedCandidate.evidence.length} 项证据</summary>
                   <ol>{selectedCandidate.evidence.map((item) => <li key={item.id} data-strength={item.strength}><i />{item.label}</li>)}</ol>
                 </details>
-                {selectedCandidate.missing[0] && <div className="profile-inference__next"><span>{selectedCandidate.missing[0].label}</span>
-                  {selectedCandidate.missing[0].action === 'capture-business-function' && DEEP_CAPTURE_AVAILABLE
-                    ? <Button variant="primary" onClick={() => continueInference(selectedCandidate)}><Sparkles size={14} />{selectedCandidate.direction === 'response' ? '自动捕获完整解密流程' : '自动捕获完整加密流程'}</Button>
-                    : null}
+                {gatewayNextStep && <div className={`profile-inference__next ${gatewayNextStep.kind === 'create' ? 'is-ready' : ''}`}><span>{candidateAvailable ? gatewayNextStep.description : '关联证据仍然保留；该页面函数属于另一个文档，返回对应页面现场后可以继续。'}</span>
+                  {gatewayNextStep.kind === 'capture' && DEEP_CAPTURE_AVAILABLE
+                    ? <Button variant="primary" disabled={busy || !candidateAvailable} onClick={() => continueInference(gatewayNextStep.candidate)}><Sparkles size={14} />{candidateAvailable ? gatewayNextStep.label : '等待对应页面'}</Button>
+                    : gatewayNextStep.kind === 'create'
+                      ? <Button variant="primary" disabled={busy || !candidateAvailable} onClick={() => void createSuggestedGateway(selectedCandidate)}><FileKey2 size={14} />{candidateAvailable ? gatewayNextStep.label : '等待对应页面'}</Button>
+                      : null}
                 </div>}
-                {selectedCandidate.status === 'ready' && <div className="profile-inference__next is-ready"><span>{candidateAvailable ? (selectedCandidate.direction === 'response' ? '线上响应字段与页面解密调用已经精确关联，可直接生成响应明文网关。' : '页面调用与线上字段已经精确关联，只需确认明文来源和输出形态。') : '关联证据仍然保留；该页面函数属于另一个文档，返回对应页面现场后可以继续生成。'}</span><Button variant="primary" disabled={busy || !candidateAvailable} onClick={() => void createSuggestedGateway(selectedCandidate)}><FileKey2 size={14} />{candidateAvailable ? '生成明文网关' : '等待对应页面'}</Button></div>}
               </section>}
 
               {(selectedEvent.inputPreview || selectedEvent.outputPreview) && <div className="recording-values"><strong>短时样本</strong>{selectedEvent.inputPreview && <pre>{selectedEvent.inputPreview}</pre>}{selectedEvent.outputPreview && <pre>{selectedEvent.outputPreview}</pre>}</div>}
               {selectedEvent.kind !== 'navigation' ? <details className="recording-evidence"><summary>调用证据</summary><pre>{selectedEvent.stack || selectedEvent.scriptUrl || '没有可用调用栈'}</pre></details> : null}
 
-              {canDeepCapture && !selectedCandidate && <section className="recording-deep-action">
+              {canDeepCapture && !selectedCandidate && !relatedCandidate && <section className="recording-deep-action">
                 <div><Bug size={15} /><span><strong>捕获真实业务上下文</strong><small>{selectedEvent.kind === 'crypto'
                   ? '下次命中当前加密调用时暂停'
                   : selectedEvent.kind === 'worker' || selectedEvent.kind === 'message' || selectedEvent.kind === 'beacon'
                     ? '下次命中当前页面通信边界时暂停'
                     : '下次发出当前请求时暂停'}</small></span></div>
-                <Button variant="primary" onClick={() => setWorkspaceMode('deep')}><Bug size={14} />深入当前调用</Button>
+                <Button variant="primary" onClick={() => { setCaptureCandidate(undefined); setWorkspaceMode('deep'); }}><Bug size={14} />深入当前调用</Button>
               </section>}
 
-              {selectedEvent.callableCapable && selectedEvent.callHandleId && <section className="recording-recipe-action">
+              {selectedEvent.callableCapable && selectedEvent.callHandleId && !selectedCandidate && <section className="recording-recipe-action">
                 <div><KeyRound size={15} /><span><strong>保存为页面函数</strong><small>{!selectedEventAvailable ? '该调用属于另一个页面文档，返回对应页面后可以恢复' : active ? '保存前会先停止录制，避免轮询继续改变调用现场' : '保留原函数、receiver 与固定参数，页面刷新后失效'}</small></span></div>
                 {!callableEditorOpen ? <Button variant="primary" disabled={busy || !selectedEventAvailable} onClick={prepareCallableEditor}><Save size={14} />{active ? '停止录制并保存' : '保存页面函数'}</Button> : <div className="recording-recipe-editor">
                   <label><span>名称</span><input value={callableName} onChange={(event) => setCallableName(event.target.value)} /></label>
@@ -614,7 +700,7 @@ export function RecordingWorkspace({
       <DeepCaptureWorkspace
         tab={tab}
         selectedEvent={selectedEvent}
-        selectedCandidate={selectedCandidate}
+        selectedCandidate={captureCandidate || selectedCandidate}
         autoArmRequest={autoArmRequest}
         recoveryProfileId={recoveryProfileId}
         autoRecoveryRequest={autoRecoveryRequest}
@@ -633,7 +719,7 @@ export function RecordingWorkspace({
         run={run}
         gatewayShared={gatewayShared}
         onShareGateway={onShareGateway}
-        onOpenCapture={() => { setRecoveryProfileId(''); setWorkspaceMode(DEEP_CAPTURE_AVAILABLE ? 'deep' : 'recording'); }}
+        onOpenCapture={() => { setCaptureCandidate(undefined); setRecoveryProfileId(''); setWorkspaceMode(DEEP_CAPTURE_AVAILABLE ? 'deep' : 'recording'); }}
         onOpenRecovery={DEEP_CAPTURE_AVAILABLE ? openRecovery : () => setWorkspaceMode('recording')}
         deepCaptureAvailable={DEEP_CAPTURE_AVAILABLE}
         recoveryRevision={recoveryRevision}

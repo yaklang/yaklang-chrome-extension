@@ -21,7 +21,12 @@ function comparableUrl(value?: string): string {
 }
 
 function nameMatches(frameName: string, hintName: string): boolean {
-  return frameName === hintName || frameName.endsWith(`.${hintName}`) || hintName.endsWith(`.${frameName}`);
+  const normalize = (value: string) => /^(?:\(anonymous\)|<anonymous>|anonymous)$/i.test(value.trim())
+    ? '(anonymous)'
+    : value;
+  const frame = normalize(frameName);
+  const hint = normalize(hintName);
+  return frame === hint || frame.endsWith(`.${hint}`) || hint.endsWith(`.${frame}`);
 }
 
 function matchingHint(frame: BrowserDeepCaptureFrame, hints: BrowserBusinessFrameHint[]): BrowserBusinessFrameHint | undefined {
@@ -30,10 +35,12 @@ function matchingHint(frame: BrowserDeepCaptureFrame, hints: BrowserBusinessFram
 }
 
 function isEventHandler(frame: BrowserDeepCaptureFrame): boolean {
+  if (frame.functionInspection?.resolution === 'event-listener') return true;
   if (EVENT_HANDLER_NAME.test(frame.functionName)) return true;
   const parameters = frame.functionInspection?.parameterNames || [];
-  return parameters.some((name) => /^(?:event|evt)$/i.test(name))
-    && /(?:Element|Document|Window)/.test(frame.thisPreview);
+  return parameters.some((name) => /^(?:e|event|evt)$/i.test(name))
+    && (/(?:Element|Document|Window|#[A-Za-z_$][\w$-]*)/.test(frame.thisPreview)
+      || frame.scopes.some((scope) => scope.variables.some((variable) => /Event\b/.test(variable.preview))));
 }
 
 function hintedFrameOrder(
@@ -121,9 +128,13 @@ export function rankBusinessFrames(
     .filter((frame) => frame.sourceKind === 'page' && frame.functionInspection?.resolved && matchingHint(frame, hints))
     .sort((left, right) => hintedFrameOrder(left, right, hints));
   const closestHinted = resolvedHinted[0];
-  const closestRisks = closestHinted?.functionInspection?.riskFlags || [];
-  const transactionRequired = Boolean(closestHinted
-    && (isEventHandler(closestHinted) || closestRisks.some((risk) => TRANSACTION_RISKS.has(risk))));
+  const unhintedEventHandler = hints.length ? undefined : ranked.find((frame) => (
+    frame.sourceKind === 'page' && frame.functionInspection?.resolved && isEventHandler(frame)
+  ));
+  const transactionFrame = closestHinted || unhintedEventHandler;
+  const closestRisks = transactionFrame?.functionInspection?.riskFlags || [];
+  const transactionRequired = Boolean(transactionFrame
+    && (isEventHandler(transactionFrame) || closestRisks.some((risk) => TRANSACTION_RISKS.has(risk))));
   const transactionBlocked = Boolean(transactionRequired && closestRisks.includes('storage'));
   const eligible = ordered.filter((frame) => frame.functionInspection?.resolved
     && !frame.functionInspection.riskFlags.length && !isEventHandler(frame));
@@ -133,19 +144,19 @@ export function rankBusinessFrames(
   const automatic = automaticEligible[0];
   const alternative = automaticEligible[1];
   let automaticCapture: RankedBusinessFrames['automaticCapture'];
-  if (transactionRequired && !transactionBlocked && closestHinted) {
+  if (transactionRequired && !transactionBlocked && transactionFrame) {
     automaticCapture = {
       state: 'ready',
       strategy: 'request-transaction',
-      frameId: closestHinted.id,
-      reason: isEventHandler(closestHinted)
+      frameId: transactionFrame.id,
+      reason: isEventHandler(transactionFrame)
         ? '共同业务入口是页面事件处理器，将在隔离事务中截获并取消真实请求'
         : '共同业务函数直接读取页面或发送请求，将以隔离事务保留完整动态参数关系',
     };
-  } else if (transactionBlocked && closestHinted) {
+  } else if (transactionBlocked && transactionFrame) {
     automaticCapture = {
       state: 'blocked',
-      frameId: closestHinted.id,
+      frameId: transactionFrame.id,
       reason: '共同业务函数会访问页面存储；当前事务回滚无法证明存储副作用已完全隔离',
     };
   } else if (automatic && alternative && (automatic.businessScore || 0) - (alternative.businessScore || 0) < 8) {

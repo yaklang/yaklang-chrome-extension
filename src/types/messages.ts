@@ -160,7 +160,7 @@ export interface ExtensionRequestMap {
   'recording.clear': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
   'recording.stop': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
   'callable.create': { input: ({ tabId?: number; frameId?: number; documentId?: string } & (
-    | { source: 'recording'; callHandleId: string; name: string }
+    | { source: 'recording'; callHandleId: string; name: string; dynamicInputPaths?: string[] }
     | { source: 'deep-capture'; strategy: 'selected-frame'; callFrameId: string; name?: string; candidateId?: string }
     | { source: 'deep-capture'; strategy: 'request-transaction'; callFrameId: string; name?: string; candidateId: string }
     | { source: 'deep-capture'; strategy: 'expression'; callFrameId: string; name: string; functionExpression: string }

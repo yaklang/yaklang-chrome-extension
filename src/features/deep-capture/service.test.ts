@@ -9,6 +9,7 @@ const attachedTabs = new Set<number>();
 const knownTabs = new Set<number>();
 let failResume = false;
 let failDetach = false;
+let commandHandler: ((method: string, params?: Record<string, unknown>) => unknown) | undefined;
 
 const STORAGE_KEY = 'session.deep-capture.v1';
 
@@ -27,9 +28,9 @@ const debuggerApi = {
   getTargets: vi.fn(async () => [...knownTabs].map((tabId) => ({
     attached: attachedTabs.has(tabId), tabId, id: `target-${tabId}`, type: 'page', url: 'https://example.test/',
   }))),
-  sendCommand: vi.fn(async (_target: { tabId?: number; sessionId?: string }, method: string) => {
+  sendCommand: vi.fn(async (_target: { tabId?: number; sessionId?: string }, method: string, params?: Record<string, unknown>) => {
     if (method === 'Debugger.resume' && failResume) throw new Error('fixture resume failed');
-    return {};
+    return commandHandler?.(method, params) || {};
   }),
   onEvent: { addListener: vi.fn((listener: typeof eventListeners[number]) => eventListeners.push(listener)) },
   onDetach: { addListener: vi.fn((listener: (source: { tabId?: number; sessionId?: string }, reason: string) => void) => detachListeners.push(listener)) },
@@ -125,6 +126,7 @@ describe('deep capture debugger lifecycle', () => {
     knownTabs.clear();
     failResume = false;
     failDetach = false;
+    commandHandler = undefined;
     vi.clearAllMocks();
   });
 
@@ -160,6 +162,17 @@ describe('deep capture debugger lifecycle', () => {
     )).rejects.toMatchObject({ code: 'grant_expired' });
 
     expect(debuggerApi.attach).not.toHaveBeenCalled();
+  });
+
+  it('allows Agent capture after local release but never takes over an active local session', async () => {
+    const target = { tabId: 39, frameId: 0 };
+    const matcher = { kind: 'request' as const, urlPattern: '/login' };
+    const owner = { kind: 'grant' as const, grantId: 'agent', expiresAt: Date.now() + 60_000 };
+    await startDeepCapture(target, matcher);
+    await expect(startDeepCapture(target, matcher, owner)).rejects.toMatchObject({ code: 'permission_denied' });
+    await resumeDeepCapture(target);
+    await expect(startDeepCapture(target, matcher, owner)).resolves.toMatchObject({ state: 'armed' });
+    await resumeDeepCapture(target, 'agent-done', owner);
   });
 
   it('restores a paused page when callable capture validation fails', async () => {
@@ -319,6 +332,67 @@ describe('deep capture debugger lifecycle', () => {
     expect(result.boundary).toEqual({
       target: 'main-document', sourceMaps: 'metadata-only', workers: 'evidence-only', wasm: 'scope-evidence-only',
     });
+    await resumeDeepCapture(target);
+  });
+
+  it('resolves an anonymous form handler through its paused SubmitEvent', async () => {
+    const target = { tabId: 30, frameId: 0 };
+    commandHandler = (method, params) => {
+      if (method === 'Runtime.getProperties' && params?.objectId === 'local-scope') {
+        return { result: [{ name: 'e', value: { type: 'object', description: 'SubmitEvent' } }] };
+      }
+      if (method === 'Runtime.getProperties' && params?.objectId === 'listener-1') {
+        return { internalProperties: [{
+          name: '[[FunctionLocation]]',
+          value: { type: 'object', value: { scriptId: 'page-script', lineNumber: 160 } },
+        }] };
+      }
+      if (method === 'Debugger.evaluateOnCallFrame') {
+        const expression = String(params?.expression || '');
+        return expression.includes('arguments.callee')
+          ? { result: { type: 'function', objectId: 'listener-1' } }
+          : { result: { type: 'undefined' } };
+      }
+      if (method === 'Runtime.callFunctionOn' && params?.objectId === 'listener-1') {
+        return { result: { value: {
+          functionName: '', parameterCount: 1, parameterNames: ['e'], riskFlags: ['network', 'dom'],
+        } } };
+      }
+      return {};
+    };
+    await startDeepCapture(target, {
+      kind: 'request',
+      urlPattern: '/crypto/sqli/aes-ecb/encrypt/login',
+      frameHints: [{
+        functionName: '<anonymous>', url: 'https://example.test/login', support: 1, averageDepth: 1,
+      }],
+    });
+    for (const listener of eventListeners) listener({ tabId: target.tabId }, 'Debugger.paused', {
+      reason: 'XHR',
+      callFrames: [{
+        callFrameId: 'hook-frame', functionName: 'recordedFetch',
+        url: 'chrome-extension://fixture/page-recorder-main-world.js',
+        location: { scriptId: 'hook-script', lineNumber: 10, columnNumber: 1 },
+        scopeChain: [], this: { type: 'object', description: 'Window' },
+      }, {
+        callFrameId: 'page-frame', functionName: '', url: 'https://example.test/login',
+        location: { scriptId: 'page-script', lineNumber: 162, columnNumber: 38 },
+        scopeChain: [{ type: 'local', object: { type: 'object', objectId: 'local-scope' } }],
+        this: { type: 'object', description: 'HTMLFormElement' },
+      }],
+    });
+
+    await vi.waitFor(async () => expect((await deepCaptureStatus(target)).pause?.collecting).toBe(false));
+    const result = await deepCaptureStatus(target);
+    expect(result.pause?.frames[1]?.functionInspection).toMatchObject({
+      resolved: true, resolution: 'current-function', referenceExpression: 'arguments.callee',
+    });
+    expect(result.pause?.automaticCapture).toMatchObject({
+      state: 'ready', strategy: 'request-transaction', frameId: 'page-frame',
+    });
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalledWith(
+      expect.anything(), 'Debugger.getFunctionLocation', expect.anything(),
+    );
     await resumeDeepCapture(target);
   });
 

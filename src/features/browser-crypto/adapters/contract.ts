@@ -47,6 +47,13 @@ export interface CryptoAdapterInvocationPlan {
   arguments: BrowserRecordingCallArgument[];
   callableKind?: CallableOperationKind;
   outputEncoding?: BrowserPageCallableValueEncoding;
+  replayInputs?: Array<{
+    path: string;
+    name: string;
+    role: BrowserRecordingCallArgument['role'];
+    originalInput: unknown;
+    apply(args: unknown[], value: unknown): void;
+  }>;
   inputEvidence?(value: unknown): BrowserRecordingValueEvidence[];
   outputEvidence?(value: unknown): BrowserRecordingValueEvidence[];
   outputError?(value: unknown): string | undefined;

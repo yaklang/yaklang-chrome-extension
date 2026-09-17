@@ -562,6 +562,7 @@ function buildCandidate(
     id: candidateId,
     recordingId: request.recordingId,
     traceId: request.traceId,
+    transactionId: request.channelId,
     target: { ...target },
     direction: 'request',
     request: {
@@ -698,6 +699,7 @@ function buildUnknownBoundaryCandidate(
     id: candidateId,
     recordingId: request.recordingId,
     traceId: request.traceId,
+    transactionId: request.channelId,
     target: { ...target },
     direction: 'request',
     request: {
@@ -812,6 +814,7 @@ function buildRequestGraphCandidate(
     id: candidateId,
     recordingId: request.recordingId,
     traceId: request.traceId,
+    transactionId: request.channelId,
     target: { ...target },
     direction: 'request',
     request: {
@@ -871,6 +874,7 @@ function buildRequestGraphCandidate(
 interface LinkedResponseSource {
   event: BrowserRecordingEvent;
   links: BrowserRecordingLink[];
+  inputChains: BrowserRecordingLink[][];
   stateLinks: BrowserRecordingLink[];
   stateEvents: BrowserRecordingEvent[];
 }
@@ -896,12 +900,23 @@ function linkedResponseSources(
       const chain = [...current.links, link];
       if (isReverseCryptoEvent(consumer)) {
         const previous = output.get(consumer.id);
-        if (!previous || chain.length < previous.links.length) {
+        if (!previous) {
           output.set(consumer.id, {
             event: consumer,
             links: chain,
+            inputChains: [chain],
             ...stateSequence(consumer, eventsById, incoming),
           });
+        } else {
+          const terminal = chain.at(-1)!;
+          if (!previous.inputChains.some((item) => item.at(-1)?.toPath === terminal.toPath)) {
+            previous.inputChains.push(chain);
+          }
+          const previousTarget = previous.links.at(-1)?.toPath;
+          if ((terminal.toPath === '$input' && previousTarget !== '$input')
+            || (terminal.toPath === previousTarget && chain.length < previous.links.length)) {
+            previous.links = chain;
+          }
         }
       }
       const depth = current.depth + 1;
@@ -920,12 +935,24 @@ function buildResponseCandidate(
   response: BrowserRecordingEvent,
   source: LinkedResponseSource,
 ): BrowserProfileInferenceCandidate {
-  const firstLink = source.links[0];
+  const dataChain = source.inputChains.find((chain) => chain.at(-1)?.toPath === '$input');
+  const primaryLinks = dataChain || source.links;
+  const firstLink = dataChain?.[0];
   const { destination: inputPath, serialization } = requestMapping(firstLink?.fromPath);
   const bodyFormat = responseBodyFormat(response, [serialization]);
-  const exact = source.links.length > 0 && source.links.every((link) => link.confidence === 'exact');
+  const responseLinks = [...new Map(source.inputChains.flat().map((link) => [link.id, link])).values()];
+  const dynamicInputChains = source.inputChains.filter((chain) => chain.at(-1)?.toPath !== '$input');
+  const dynamicInputs = dynamicInputChains
+    .map((chain) => chain.at(-1)?.toPath)
+    .filter((path): path is string => Boolean(path && path !== '$input'));
+  const replayInputPaths = ['$input', ...dynamicInputs];
+  const supportsDynamicInputs = source.event.crypto?.adapterId === 'cryptojs'
+    && source.event.crypto.operation.toLowerCase().includes('decrypt')
+    && dynamicInputs.every((path) => path === '$input.key' || path === '$input.iv');
+  const exact = responseLinks.length > 0 && responseLinks.every((link) => link.confidence === 'exact');
   const hasCallable = Boolean(source.event.callHandleId && source.event.callableCapable);
-  const replayReady = exact && source.links.length === 1 && Boolean(inputPath) && hasCallable;
+  const replayReady = exact && dataChain?.length === 1
+    && (dynamicInputs.length === 0 || supportsDynamicInputs) && Boolean(inputPath) && hasCallable;
   const argumentRoles = source.event.arguments || [];
   const responseName = requestLabel(response);
   const sourceName = sourceLabel(source.event);
@@ -938,7 +965,7 @@ function buildResponseCandidate(
     eventIds: [response.id],
     fromPath: firstLink?.fromPath,
   }];
-  source.links.forEach((link, index) => evidence.push({
+  responseLinks.forEach((link, index) => evidence.push({
     id: `evidence-response-link-${link.id || `${response.id}-${source.event.id}-${index}`}`,
     kind: link.confidence === 'exact' ? 'exact-value' : 'message-boundary',
     strength: link.confidence === 'exact' ? 'proven' : 'supported',
@@ -974,6 +1001,14 @@ function buildResponseCandidate(
     label: '页面仍保留本次解密调用的原函数、receiver 与固定参数模板',
     eventIds: [source.event.id],
   });
+  const responseMappings = (dataChain ? [dataChain, ...dynamicInputChains] : source.inputChains).map((chain) => {
+    const mapping = requestMapping(chain[0]?.fromPath);
+    return {
+      sourceEventId: source.event.id,
+      destination: mapping.destination,
+      serialization: mapping.serialization,
+    };
+  });
 
   let score = 20;
   if (exact) score += 40;
@@ -989,8 +1024,10 @@ function buildResponseCandidate(
   } else {
     missing.push({
       kind: 'business-callable',
-      label: exact && inputPath
-        ? '已定位响应解密链；还需捕获上层业务函数，才能保留解码、解压与多阶段解密关系'
+      label: dynamicInputs.length && !supportsDynamicInputs
+        ? `响应解密还依赖每次响应中的 ${dynamicInputs.map((path) => path.replace(/^\$input\.?/, '')).join('、')}；需捕获上层业务函数以保留动态参数关系`
+        : exact && inputPath
+          ? '已定位响应解密链；还需捕获上层业务函数，才能保留解码、解压与多阶段解密关系'
         : '响应字段与页面解密调用尚未形成可回放的直接值链，请继续捕获当前解密现场',
       action: 'capture-business-function',
     });
@@ -1000,6 +1037,7 @@ function buildResponseCandidate(
     id: candidateId,
     recordingId: response.recordingId,
     traceId: response.traceId,
+    transactionId: response.channelId,
     target: { ...target },
     direction: 'response',
     request: {
@@ -1009,7 +1047,7 @@ function buildResponseCandidate(
       bodyFormat,
       destination: inputPath,
       serialization,
-      mappings: [{ sourceEventId: source.event.id, destination: inputPath, serialization }],
+      mappings: responseMappings,
     },
     source: {
       eventId: source.event.id,
@@ -1017,6 +1055,7 @@ function buildResponseCandidate(
       operation: source.event.operation,
       crypto: source.event.crypto,
       callHandleId: source.event.callHandleId,
+      dynamicInputPaths: replayReady ? replayInputPaths : undefined,
       arguments: argumentRoles,
       destination: inputPath,
       serialization,
@@ -1027,6 +1066,7 @@ function buildResponseCandidate(
       operation: source.event.operation,
       crypto: source.event.crypto,
       callHandleId: source.event.callHandleId,
+      dynamicInputPaths: replayReady ? replayInputPaths : undefined,
       arguments: argumentRoles,
       destination: inputPath,
       serialization,
@@ -1038,7 +1078,7 @@ function buildResponseCandidate(
       : `已定位 ${responseName} 到 ${sourceName} 的响应解密链`,
     flow: [
       inputPath ? `${responseName} · ${inputPath}` : responseName,
-      ...(source.links.length > 1 ? [`${source.links.length - 1} 个响应准备步骤`] : []),
+      ...(primaryLinks.length > 1 ? [`${primaryLinks.length - 1} 个响应准备步骤`] : []),
       sourceName,
       '明文响应',
     ],

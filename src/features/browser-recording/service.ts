@@ -1010,7 +1010,7 @@ export async function stopBrowserRecording(target: BrowserTarget, allowSensitive
 
 export async function createRecordedPageCallable(
   target: BrowserTarget,
-  input: { callHandleId: string; name: string },
+  input: { callHandleId: string; name: string; dynamicInputPaths?: string[] },
 ): Promise<BrowserPageCallable> {
   const raw = await executeCommand(target, 'callable.create', input);
   const callable = normalizeCallable(raw, target);

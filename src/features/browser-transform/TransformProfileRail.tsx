@@ -54,6 +54,9 @@ export function TransformProfileRail({
     <header><div><strong>明文网关</strong><span>{profiles.length}</span></div><Button size="icon" variant="ghost" aria-label="新建 Pipeline" title="新建 Pipeline" disabled={!tab} onClick={onCreate}><Plus size={15} /></Button></header>
     <div className="transform-profile-list">
       {profiles.map((profile) => {
+        const directionLabel = profile.request.enabled && profile.response.enabled
+          ? '双向'
+          : profile.request.enabled ? '仅请求' : '仅响应';
         const ready = (!profile.recovery || profile.recovery.state === 'ready')
           && originOf(tab?.url) === profile.origin && [profile.request, profile.response]
           .flatMap((item) => item.enabled ? item.nodes : [])
@@ -61,7 +64,7 @@ export function TransformProfileRail({
           .every((node) => callableIds.has(node.callableId));
         return <button key={profile.id} className={selectedProfileId === profile.id ? 'is-selected' : ''} onClick={() => onSelect(profile)}>
           <span className={`transform-profile-mark ${ready ? 'is-ready' : ''}`}><FileKey2 size={14} /></span>
-          <span><strong>{profile.name}</strong><small>{profile.match.methods.join(' / ') || 'ANY'} · {profile.match.urlPattern}</small></span>
+          <span><strong>{profile.name}</strong><small>{directionLabel} · {profile.match.methods.join(' / ') || 'ANY'} · {profile.match.urlPattern}</small></span>
           <i title={ready ? '页面绑定可用' : '页面函数已失效'}>{ready ? <CheckCircle2 size={13} /> : <Unplug size={13} />}</i>
         </button>;
       })}

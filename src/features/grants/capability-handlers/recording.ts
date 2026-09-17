@@ -158,6 +158,9 @@ export const recordingCapabilityHandler: CapabilityDomainHandler = {
         return createRecordedPageCallable(target, {
           callHandleId: String(input.callHandleId || ''),
           name: String(input.name || ''),
+          dynamicInputPaths: Array.isArray(input.dynamicInputPaths)
+            ? input.dynamicInputPaths.map(String)
+            : undefined,
         });
       }
       if (method === 'browser.callable.execute') {

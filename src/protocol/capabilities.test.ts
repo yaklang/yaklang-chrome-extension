@@ -64,7 +64,13 @@ describe('versioned Bridge capability catalog', () => {
     expect(capabilityVisibleToAgent('browser.handoff.resolve')).toBe(false);
     expect(capabilityVisibleToAgent('browser.thumbnail')).toBe(false);
     expect(capabilityVisibleToAgent('browser.context')).toBe(true);
-    expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.profile.save')).toBeUndefined();
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.profile.save')).toMatchObject({
+      access: 'write', scopes: ['browser.transform.manage'],
+    });
+    expect(capabilityVisibleToAgent('browser.transform.profile.save')).toBe(true);
+    expect(catalog.capabilities.find((capability) => capability.method === 'browser.transform.validation.get')).toMatchObject({
+      access: 'read', scopes: ['browser.transform.read'],
+    });
     expect(catalog.capabilities.find((capability) => capability.method === 'proxy.switch')?.summary)
       .toContain('不会生成、启用或执行 Transform Profile');
     expect(catalog.capabilities.find((capability) => capability.method === 'browser.profile.validate')?.summary)

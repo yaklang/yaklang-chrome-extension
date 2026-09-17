@@ -7,7 +7,7 @@ import {
   type PageRecorderBridgeResponse,
 } from '@/features/browser-recording/bridge-protocol';
 import { PAGE_CALLABLE_REGISTRY_KEY } from '@/features/page-callable/constants';
-import { executeRequestTransaction, executeSideEffectFreeCallable } from '@/features/page-callable/request-transaction';
+import { executeRequestTransaction, executeSideEffectFreeCallable, observeCallableInput } from '@/features/page-callable/request-transaction';
 import { callableExecutionPolicy, settleCallableResult } from '@/features/page-callable/execution';
 import {
   createCryptoAdapterRuntime,
@@ -200,8 +200,13 @@ interface RecordedCallHandle {
   original: Function;
   thisArg: unknown;
   args: unknown[];
-  inputIndex: number;
-  originalInput: unknown;
+  replayInputs: Array<{
+    path: string;
+    name: string;
+    role: CallArgumentRole;
+    originalInput: unknown;
+    apply(args: unknown[], value: unknown): void;
+  }>;
   eventId?: string;
   traceId?: string;
   recordingId?: string;
@@ -209,7 +214,6 @@ interface RecordedCallHandle {
   outputDataType?: string;
   outputEncoding?: PageCallableMetadata['output']['encoding'];
   resultMode: 'sync' | 'promise';
-  adaptInput(value: unknown): unknown;
 }
 
 interface RecorderController {
@@ -485,6 +489,7 @@ export default defineUnlistedScript(() => {
     }
     const started = performance.now();
     const inputIndex = plan.inputIndex;
+    if (inputIndex >= 0) observeCallableInput(args[inputIndex]);
     const callHandleId = plan.callableKind && inputIndex >= 0 ? registerHandle({
       kind: plan.callableKind,
       operation: `${plan.crypto.adapterId}.${plan.crypto.operation}`,
@@ -492,11 +497,17 @@ export default defineUnlistedScript(() => {
       original,
       thisArg,
       args: [...args],
-      inputIndex,
-      originalInput: args[inputIndex],
+      replayInputs: plan.replayInputs || [{
+        path: '$input',
+        name: 'data',
+        role: 'data',
+        originalInput: args[inputIndex],
+        apply: (nextArgs, value) => {
+          nextArgs[inputIndex] = (plan.adaptInput || ((input) => defaultAdaptInput(input, args[inputIndex])))(value);
+        },
+      }],
       outputEncoding: plan.outputEncoding || plan.crypto.outputEncoding,
       resultMode: operation.resultMode,
-      adaptInput: plan.adaptInput || ((value) => defaultAdaptInput(value, args[inputIndex])),
     }) : undefined;
     const item = observe(() => ({
       kind: 'crypto',
@@ -728,8 +739,13 @@ export default defineUnlistedScript(() => {
     return value;
   }
 
-  function createRecordedCallable(handle: RecordedCallHandle, name: string): PageCallableMetadata {
+  function createRecordedCallable(handle: RecordedCallHandle, name: string, inputPaths?: string[]): PageCallableMetadata {
     const id = unique('callable');
+    const replayInputs = inputPaths?.length
+      ? inputPaths.map((path) => handle.replayInputs.find((item) => item.path === path))
+      : [handle.replayInputs[0]];
+    if (replayInputs.some((item) => !item)) throw new Error('页面调用不支持请求的动态输入');
+    const resolvedInputs = replayInputs as RecordedCallHandle['replayInputs'];
     const metadata: PageCallableMetadata = {
       id,
       name: name.trim().slice(0, 120) || handle.operation,
@@ -740,15 +756,15 @@ export default defineUnlistedScript(() => {
       origin: location.origin,
       lifecycle: 'document',
       execution: callableExecutionPolicy(handle.resultMode),
-      inputSlots: [{
-        id: 'data',
-        name: 'data',
-        index: 0,
-        role: 'data',
-        dataType: dataType(handle.originalInput),
+      inputSlots: resolvedInputs.map((input, index) => ({
+        id: input.name,
+        name: input.name,
+        index,
+        role: input.role,
+        dataType: dataType(input.originalInput),
         required: true,
         retained: false,
-      }],
+      })),
       output: {
         dataType: handle.outputDataType || 'unknown',
         encoding: handle.outputEncoding || 'auto',
@@ -767,9 +783,9 @@ export default defineUnlistedScript(() => {
     pageCallableRegistry().set(id, {
       metadata,
       invoke(values) {
-        if (!values.length) throw new Error('页面函数缺少 data 参数');
+        if (values.length < resolvedInputs.length) throw new Error(`页面函数需要 ${resolvedInputs.length} 个动态参数`);
         const args = [...handle.args];
-        args[handle.inputIndex] = handle.adaptInput(values[0]);
+        resolvedInputs.forEach((input, index) => input.apply(args, values[index]));
         return Reflect.apply(handle.original, handle.thisArg, args);
       },
     });
@@ -786,6 +802,11 @@ export default defineUnlistedScript(() => {
         logicalInput: values[0],
         invoke: (context) => entry.invoke(values, context),
         timeoutMs: entry.metadata.execution.timeoutMs,
+        observeInputs: () => {
+          const recording = active || Boolean(deepBreakMatcher);
+          cryptoAdapterRuntime.start();
+          return () => { if (!recording) cryptoAdapterRuntime.stop(); };
+        },
       })
       : entry.metadata.kind === 'business-closure' || entry.metadata.kind === 'global-function'
         ? await executeSideEffectFreeCallable(() => entry.invoke(values), entry.metadata.execution)
@@ -941,7 +962,11 @@ export default defineUnlistedScript(() => {
         const callHandleId = String(input.callHandleId || '');
         const handle = handles.get(callHandleId);
         if (!handle) throw new Error('加解密调用句柄不存在或已经失效');
-        return createRecordedCallable(handle, String(input.name || handle.operation));
+        return createRecordedCallable(
+          handle,
+          String(input.name || handle.operation),
+          Array.isArray(input.dynamicInputPaths) ? input.dynamicInputPaths.map(String) : undefined,
+        );
       }
       if (command === 'callable.list') return callableMetadata();
       if (command === 'callable.execute') {

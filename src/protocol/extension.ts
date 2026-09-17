@@ -413,6 +413,7 @@ const payloadSchemas = {
     v.strictObject({
       ...targetFields, source: v.literal('recording'), callHandleId: id,
       name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120)),
+      dynamicInputPaths: v.optional(v.pipe(v.array(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160))), v.maxLength(16))),
     }),
     v.strictObject({
       ...targetFields, source: v.literal('deep-capture'), callFrameId: id,

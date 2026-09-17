@@ -2,6 +2,7 @@ import type {
   BrowserRecordingEventKind,
   BrowserRecordingValueEvidence,
 } from '@/types/models';
+import { readRequestBody } from '@/shared/request-body';
 
 type NetworkKind = Extract<BrowserRecordingEventKind, 'fetch' | 'xhr' | 'form' | 'websocket'>;
 
@@ -333,8 +334,9 @@ export function createNetworkBoundaryRuntime(
       const request = RequestConstructor && input instanceof RequestConstructor ? input : undefined;
       const url = absoluteRequestUrl(request || input);
       const method = (init?.method || request?.method || 'GET').toUpperCase().slice(0, 32);
-      bestEffort(() => {
-        const body = init?.body;
+      let stack: ReturnType<NetworkBoundaryHost['stackInfo']> = {};
+      bestEffort(() => { stack = host.stackInfo(); });
+      const emitRequest = (body: unknown) => bestEffort(() => {
         host.emit({
           kind: 'fetch',
           operation: 'request',
@@ -350,9 +352,15 @@ export function createNetworkBoundaryRuntime(
             ...headerEvidence(init?.headers || request?.headers, '$headers'),
             ...queryEvidence(request || input),
           ],
-          ...host.stackInfo(),
+          ...stack,
         }, context);
       });
+      if (request && init?.body === undefined) {
+        void readRequestBody(request, MAX_ASYNC_BINARY_BYTES).then(
+          (body) => emitRequest(body.value),
+          () => emitRequest(undefined),
+        );
+      } else emitRequest(init?.body);
       let result: ReturnType<typeof scope.fetch>;
       try {
         result = Reflect.apply(original, this, [input, init]);
