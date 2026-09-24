@@ -857,6 +857,7 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
       bridge,
       transport: state.bridge.transport,
       endpoint: pairingEndpoint,
+      paired: Boolean(state.bridge.pairedEngine),
       managedInstance: state.bridge.managedInstance,
     }, null, 2));
   }, '配对排查信息已复制');
@@ -869,7 +870,7 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
         <div className="pairing-workspace__heading"><span className="pairing-icon"><KeyRound size={19} /></span><div><h2>{state.bridge.pairedEngine ? '浏览器已安全配对' : pairing.state === 'pending' ? '等待 Yakit 确认' : '连接本机 Yakit'}</h2><p>{state.bridge.pairedEngine ? '设备身份已锁定到首次批准的 Yak 引擎。' : pairing.message}</p></div></div>
         {pairing.state === 'pending' && <div className="pairing-code" aria-live="polite"><span>配对验证码</span><strong>{pairing.code?.slice(0, 3)} {pairing.code?.slice(3)}</strong><small>{pairing.expiresAt ? `${Math.max(0, Math.ceil((pairing.expiresAt - Date.now()) / 1000))} 秒内有效` : ''}</small></div>}
         {state.bridge.pairedEngine && <div className="paired-engine-meta"><div><span>引擎身份</span><code title={state.bridge.pairedEngine.engineIdentityId}>{state.bridge.pairedEngine.engineIdentityId.slice(0, 24)}</code></div><div><span>设备 ID</span><code title={state.bridge.pairedEngine.deviceId}>{state.bridge.pairedEngine.deviceId.slice(0, 24)}</code></div></div>}
-        {!state.bridge.pairedEngine && <div className="pairing-diagnostics"><div><span>当前阶段</span><code>{pairing.state}</code></div><div><span>配对地址</span><code title={pairingEndpoint}>{pairingEndpoint}</code></div><Button size="sm" variant="ghost" disabled={busy} onClick={() => void copyPairingDiagnostics()}><Copy size={14} />复制排查信息</Button></div>}
+        <div className="pairing-diagnostics"><div><span>当前阶段</span><code>{state.bridge.pairedEngine ? 'paired' : pairing.state}</code></div><div><span>配对地址</span><code title={pairingEndpoint}>{pairingEndpoint}</code></div><Button size="sm" variant="ghost" disabled={busy} onClick={() => void copyPairingDiagnostics()}><Copy size={14} />复制排查信息</Button></div>
         <div className="editor-actions">
           {!state.bridge.pairedEngine && pairing.state !== 'pending' && <Button variant="primary" disabled={busy || pairing.state === 'requesting'} onClick={() => void run(async () => setPairing(await request('bridge.pair')))}><Power size={16} />{pairing.state === 'requesting' ? '正在查找' : '查找本机 Yakit'}</Button>}
           {!state.bridge.pairedEngine && pairing.state === 'pending' && <Button disabled={busy} onClick={() => void run(async () => setPairing(await request('bridge.pair.cancel')))}><X size={16} />取消申请</Button>}
