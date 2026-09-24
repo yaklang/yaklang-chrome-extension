@@ -838,6 +838,28 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
     setState(next);
     setPanelDraft(next.floatingPanel);
   }, '悬浮面板策略已保存');
+  const pairingEndpoint = (() => {
+    try {
+      const value = new URL(state.bridge.endpoint);
+      value.pathname = '/pairing';
+      value.search = '';
+      value.hash = '';
+      return value.toString();
+    } catch {
+      return state.bridge.endpoint;
+    }
+  })();
+  const copyPairingDiagnostics = () => run(async () => {
+    const { code, ...safePairing } = pairing;
+    await navigator.clipboard.writeText(JSON.stringify({
+      extensionVersion: browser.runtime.getManifest().version,
+      pairing: { ...safePairing, hasVerificationCode: Boolean(code) },
+      bridge,
+      transport: state.bridge.transport,
+      endpoint: pairingEndpoint,
+      managedInstance: state.bridge.managedInstance,
+    }, null, 2));
+  }, '配对排查信息已复制');
   return <div className="section-view engine-view">
     <div className="page-heading"><div><h1>Yak 引擎连接</h1><p>扩展主动连接本机 Bridge，网页无法直接访问此通道。</p></div><span className={`large-status ${bridge.state}`}><Radio size={16} />{bridge.message}</span></div>
     {policy.managed && <div className="managed-policy-banner"><ShieldCheck size={16} /><span><strong>此浏览器由组织策略管理</strong><small>{policy.policy.disableWebSocket ? '必须使用 Native Messaging' : policy.policy.bridgeTransport ? `传输锁定为 ${policy.policy.bridgeTransport}` : '连接与授权限制已应用'}{policy.policy.maxGrantMinutes ? ` · 授权最长 ${policy.policy.maxGrantMinutes} 分钟` : ''}{policy.policy.allowProgramEval === false ? ' · 程序 Eval 已禁用' : ''}</small>{policy.warnings.map((warning) => <i key={warning}>{warning}</i>)}</span></div>}
@@ -847,6 +869,7 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
         <div className="pairing-workspace__heading"><span className="pairing-icon"><KeyRound size={19} /></span><div><h2>{state.bridge.pairedEngine ? '浏览器已安全配对' : pairing.state === 'pending' ? '等待 Yakit 确认' : '连接本机 Yakit'}</h2><p>{state.bridge.pairedEngine ? '设备身份已锁定到首次批准的 Yak 引擎。' : pairing.message}</p></div></div>
         {pairing.state === 'pending' && <div className="pairing-code" aria-live="polite"><span>配对验证码</span><strong>{pairing.code?.slice(0, 3)} {pairing.code?.slice(3)}</strong><small>{pairing.expiresAt ? `${Math.max(0, Math.ceil((pairing.expiresAt - Date.now()) / 1000))} 秒内有效` : ''}</small></div>}
         {state.bridge.pairedEngine && <div className="paired-engine-meta"><div><span>引擎身份</span><code title={state.bridge.pairedEngine.engineIdentityId}>{state.bridge.pairedEngine.engineIdentityId.slice(0, 24)}</code></div><div><span>设备 ID</span><code title={state.bridge.pairedEngine.deviceId}>{state.bridge.pairedEngine.deviceId.slice(0, 24)}</code></div></div>}
+        {!state.bridge.pairedEngine && <div className="pairing-diagnostics"><div><span>当前阶段</span><code>{pairing.state}</code></div><div><span>配对地址</span><code title={pairingEndpoint}>{pairingEndpoint}</code></div><Button size="sm" variant="ghost" disabled={busy} onClick={() => void copyPairingDiagnostics()}><Copy size={14} />复制排查信息</Button></div>}
         <div className="editor-actions">
           {!state.bridge.pairedEngine && pairing.state !== 'pending' && <Button variant="primary" disabled={busy || pairing.state === 'requesting'} onClick={() => void run(async () => setPairing(await request('bridge.pair')))}><Power size={16} />{pairing.state === 'requesting' ? '正在查找' : '查找本机 Yakit'}</Button>}
           {!state.bridge.pairedEngine && pairing.state === 'pending' && <Button disabled={busy} onClick={() => void run(async () => setPairing(await request('bridge.pair.cancel')))}><X size={16} />取消申请</Button>}

@@ -716,6 +716,10 @@ input[type='checkbox'] { width: 15px; height: 15px; flex: 0 0 auto; padding: 0; 
 .pairing-code span { color: var(--muted); font-size: var(--text-xs); font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
 .pairing-code strong { font-family: var(--font-mono); font-size: 30px; font-weight: 700; letter-spacing: .12em; }
 .pairing-code small { color: var(--muted); font-size: var(--text-sm); }
+.pairing-diagnostics { padding: 10px 12px; display: grid; grid-template-columns: minmax(90px, .35fr) minmax(0, 1fr) auto; gap: 12px; align-items: center; border-radius: var(--radius-md); background: var(--surface-subtle); text-align: left; }
+.pairing-diagnostics > div { min-width: 0; }
+.pairing-diagnostics span { display: block; color: var(--muted); font-size: var(--text-xs); }
+.pairing-diagnostics code { display: block; margin-top: 2px; overflow: hidden; font-size: var(--text-sm); white-space: nowrap; text-overflow: ellipsis; }
 .paired-engine-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .paired-engine-meta > div { min-width: 0; }
 .paired-engine-meta span { color: var(--muted); font-size: var(--text-xs); font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
@@ -795,6 +799,8 @@ input[type='checkbox'] { width: 15px; height: 15px; flex: 0 0 auto; padding: 0; 
   .ua-assignment-list code { display: none; }
   .task-command-bar, .agent-runtime-summary { flex-direction: column; display: flex; align-items: stretch; }
   .task-status-grid, .context-session-strip, .diff-summary, .context-inventory-grid, .grant-options, .panel-policy-grid, .form-grid, .paired-engine-meta { grid-template-columns: minmax(0, 1fr); }
+  .pairing-diagnostics { grid-template-columns: minmax(0, 1fr); }
+  .pairing-diagnostics .ui-button { justify-self: start; }
   .agent-action-row { grid-template-columns: 12px 76px minmax(0, 1fr) 76px; }
   .agent-action-row span:nth-child(4), .agent-action-row span:last-child { display: none; }
   .activity-table__head, .activity-table__row { grid-template-columns: 120px minmax(0, 1fr) 80px; }

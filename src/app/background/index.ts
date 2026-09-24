@@ -409,7 +409,10 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     }
     case 'agent.actions.clear': return ok(await clearAgentActions());
     case 'policy.status': return ok(await getEnterprisePolicy());
-    case 'diagnostics.export': return ok(await createDiagnosticsBundle(engineBridge.getStatus()));
+    case 'diagnostics.export': return ok(await createDiagnosticsBundle(
+      engineBridge.getStatus(),
+      engineBridge.getPairingStatus(),
+    ));
     case 'metrics.get': return ok(await getRuntimeMetrics());
     case 'metrics.reset': return ok(await resetRuntimeMetrics());
     case 'bridge.config.save': {
@@ -451,9 +454,25 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       return ok(engineBridge.getStatus());
     }
     case 'bridge.pair': {
-      const status = await engineBridge.startPairing();
-      void appendAuditEvent({ category: 'bridge', action: 'bridge.pair', outcome: 'success' });
-      return ok(status);
+      const startedAt = Date.now();
+      try {
+        const status = await engineBridge.startPairing();
+        void appendAuditEvent({
+          category: 'bridge', action: 'bridge.pair',
+          outcome: status.state === 'rejected'
+            ? 'denied'
+            : status.state === 'pending' || status.state === 'approved' ? 'success' : 'error',
+          durationMs: Date.now() - startedAt, summary: `${status.state}: ${status.message}`,
+        });
+        return ok(status);
+      } catch (error) {
+        void appendAuditEvent({
+          category: 'bridge', action: 'bridge.pair', outcome: 'error',
+          durationMs: Date.now() - startedAt, errorCode: errorCode(error),
+          summary: (error instanceof Error ? error.message : String(error)).slice(0, 512),
+        });
+        throw error;
+      }
     }
     case 'bridge.pair.cancel': return ok(engineBridge.cancelPairing());
     case 'bridge.pair.status': return ok(engineBridge.getPairingStatus());

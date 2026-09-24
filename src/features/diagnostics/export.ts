@@ -1,12 +1,15 @@
 import { browser } from 'wxt/browser';
 import { STATE_STORAGE_KEYS } from '@/protocol/storage';
-import type { BridgeStatus, DiagnosticsBundle } from '@/types/models';
+import type { BridgePairingStatus, BridgeStatus, DiagnosticsBundle } from '@/types/models';
 import { listAuditEvents } from '@/features/diagnostics/audit';
 import { getState } from '@/platform/storage/state';
 import { getEnterprisePolicy } from '@/platform/policy/managed';
 import { getRuntimeMetrics } from './metrics';
 
-export async function createDiagnosticsBundle(bridge: BridgeStatus): Promise<DiagnosticsBundle> {
+export async function createDiagnosticsBundle(
+  bridge: BridgeStatus,
+  pairing: BridgePairingStatus,
+): Promise<DiagnosticsBundle> {
   const manifest = browser.runtime.getManifest();
   const sessionArea = (browser.storage as unknown as { session?: { get(keys: string[]): Promise<Record<string, unknown>> } }).session;
   const [state, platform, policy, metrics, audit, local, session] = await Promise.all([
@@ -15,6 +18,7 @@ export async function createDiagnosticsBundle(bridge: BridgeStatus): Promise<Dia
     sessionArea?.get([...STATE_STORAGE_KEYS]) || Promise.resolve({}),
   ]);
   const { taskId: _taskId, grantId: _grantId, ...safeBridge } = bridge;
+  const { code, ...safePairing } = pairing;
   return {
     schemaVersion: 1,
     generatedAt: Date.now(),
@@ -26,6 +30,15 @@ export async function createDiagnosticsBundle(bridge: BridgeStatus): Promise<Dia
     },
     platform: { os: platform.os, arch: platform.arch },
     bridge: safeBridge,
+    pairing: { ...safePairing, hasVerificationCode: Boolean(code) },
+    bridgeConfiguration: {
+      transport: state.bridge.transport,
+      endpoint: state.bridge.endpoint,
+      nativeHost: state.bridge.nativeHost,
+      autoConnect: state.bridge.autoConnect,
+      paired: Boolean(state.bridge.pairedEngine),
+      managedInstance: state.bridge.managedInstance,
+    },
     policy,
     state: {
       proxyProfiles: state.proxyProfiles.length,

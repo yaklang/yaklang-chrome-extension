@@ -110,7 +110,7 @@ function App() {
 
   const toggleEngine = () => run(async () => {
     if (!state!.bridge.pairedEngine) {
-      await request('bridge.pair');
+      void request('bridge.pair').catch(() => undefined);
       await openTool('engine');
       return;
     }
