@@ -80,6 +80,7 @@ input, select, textarea {
   color: var(--foreground);
   font-size: var(--text-md);
 }
+select option, select optgroup { background: var(--surface); color: var(--foreground); }
 input, select { height: 36px; padding: 0 11px; }
 textarea { min-height: 78px; padding: 9px 11px; line-height: 1.5; resize: vertical; }
 input::placeholder, textarea::placeholder { color: var(--muted); }

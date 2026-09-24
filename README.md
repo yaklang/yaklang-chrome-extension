@@ -338,7 +338,9 @@ Chrome Store 构建声明 Chrome 138+。用户需要在扩展详情页开启“�
 https://aliyun-oss.yaklang.com/chrome-extension/manifest.json
 ```
 
-manifest 的 `latest` 指向最新版本，`versions[0]` 为完整记录，最多保留 10 个历史版本。每个版本按 `variant`（`chrome-store` / `chrome-enterprise` / `firefox` / `firefox-amo`）匹配 artifact，字段包括 `url`、`filename`、`sha256`、`size` 与 `checksum_url`；manifest 自身的 SHA-256 在同目录的 `manifest.json.sha256.txt`。
+manifest 的 `latest` 指向最新版本，`versions[0]` 为完整记录，最多保留 10 个历史版本。每个版本的 `notes` 是面向用户的真实更新说明，按 `variant`（`chrome-store` / `chrome-enterprise` / `firefox` / `firefox-amo`）匹配 artifact，字段包括 `url`、`filename`、`sha256`、`size` 与 `checksum_url`；manifest 自身的 SHA-256 在同目录的 `manifest.json.sha256.txt`。
+
+每次修改 `package.json` 的版本时，必须同步在 `release-notes.json` 中增加该版本的更新说明；缺失或内容为空会让打包和发布直接失败。YTray 等消费方会原样展示这些说明。
 
 推荐的消费流程：
 

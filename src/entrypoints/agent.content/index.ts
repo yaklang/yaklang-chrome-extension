@@ -63,6 +63,7 @@ async function send<T>(action: string, payload?: unknown): Promise<T> {
 
 export default defineContentScript({
   matches: ['http://*/*', 'https://*/*'],
+  allFrames: true,
   runAt: 'document_start',
 
   async main(ctx) {
@@ -77,6 +78,7 @@ export default defineContentScript({
         console.warn('[Yakit Browser Agent] MAIN-world bridge is unavailable; continuing without page Eval/Invoke.', error);
       });
     }
+    if (window.top !== window) return;
 
     const host = document.createElement('yakit-browser-agent');
     const shadow = host.attachShadow({ mode: 'open' });

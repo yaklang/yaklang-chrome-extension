@@ -154,11 +154,11 @@ export interface ExtensionRequestMap {
   'network.capture.send': { input: { id: string; tabId?: number; frameId?: number; documentId?: string }; output: YakitFuzzerOpenResult };
   'network.capture.poc': { input: { id: string; tabId?: number; frameId?: number; documentId?: string }; output: YakPocGenerateResult };
   'network.capture.analysis': { input: { id: string; tabId?: number; frameId?: number; documentId?: string }; output: BrowserRequestAnalysisBundle };
-  'recording.start': { input: { tabId?: number; frameId?: number; documentId?: string; captureValues?: boolean; maxEntries?: number; maxValueBytes?: number }; output: BrowserRecordingSnapshot };
-  'recording.status': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingStatus };
-  'recording.get': { input: { tabId?: number; frameId?: number; documentId?: string; limit?: number }; output: BrowserRecordingSnapshot };
-  'recording.clear': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
-  'recording.stop': { input: { tabId?: number; frameId?: number; documentId?: string }; output: BrowserRecordingSnapshot };
+  'recording.start': { input: { tabId?: number; frameId?: number; documentId?: string; scope?: 'frame' | 'tab'; captureValues?: boolean; maxEntries?: number; maxValueBytes?: number }; output: BrowserRecordingSnapshot };
+  'recording.status': { input: { tabId?: number; frameId?: number; documentId?: string; scope?: 'frame' | 'tab' }; output: BrowserRecordingStatus };
+  'recording.get': { input: { tabId?: number; frameId?: number; documentId?: string; scope?: 'frame' | 'tab'; limit?: number }; output: BrowserRecordingSnapshot };
+  'recording.clear': { input: { tabId?: number; frameId?: number; documentId?: string; scope?: 'frame' | 'tab' }; output: BrowserRecordingSnapshot };
+  'recording.stop': { input: { tabId?: number; frameId?: number; documentId?: string; scope?: 'frame' | 'tab' }; output: BrowserRecordingSnapshot };
   'callable.create': { input: ({ tabId?: number; frameId?: number; documentId?: string } & (
     | { source: 'recording'; callHandleId: string; name: string; dynamicInputPaths?: string[] }
     | { source: 'deep-capture'; strategy: 'selected-frame'; callFrameId: string; name?: string; candidateId?: string }

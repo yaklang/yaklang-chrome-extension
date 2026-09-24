@@ -89,6 +89,8 @@ const manifest = JSON.parse(manifestBytes.toString('utf8'));
 assert(manifest.latest === entry.version, `manifest.latest ${manifest.latest} != ${entry.version}`);
 const versionEntry = manifest.versions.find((v) => v.version === entry.version);
 assert(versionEntry, `manifest has no entry for version ${entry.version}`);
+assert(JSON.stringify(versionEntry.notes) === JSON.stringify(entry.notes),
+  `manifest release notes do not match release entry for ${entry.version}`);
 assert(versionEntry.artifacts.length === entry.artifacts.length,
   `manifest artifacts count ${versionEntry.artifacts.length} != ${entry.artifacts.length}`);
 for (const artifact of entry.artifacts) {

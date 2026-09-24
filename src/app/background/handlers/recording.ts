@@ -3,11 +3,16 @@ import { ok } from '../response';
 import { requiredDebuggerTarget, requiredRequestTarget } from '../request-context';
 import {
   browserRecordingStatus,
+  clearTabBrowserRecording,
   clearBrowserRecording,
   createRecordedPageCallable,
   getBrowserRecording,
+  getTabBrowserRecording,
+  startTabBrowserRecording,
   startBrowserRecording,
+  stopTabBrowserRecording,
   stopBrowserRecording,
+  tabBrowserRecordingStatus,
 } from '@/features/browser-recording/service';
 import {
   createCapturedPageCallable,
@@ -35,7 +40,9 @@ export const handleRecordingRequest: BackgroundRequestHandler = async (request, 
     case 'recording.start': {
       const input = request.payload;
       const target = await requiredRequestTarget(input, sender);
-      const snapshot = await startBrowserRecording(target, input);
+      const snapshot = input.scope === 'tab'
+        ? await startTabBrowserRecording(target.tabId, input)
+        : await startBrowserRecording(target, input);
       void appendAuditEvent({
         category: 'capability',
         action: 'recording.start',
@@ -45,18 +52,25 @@ export const handleRecordingRequest: BackgroundRequestHandler = async (request, 
       });
       return ok(snapshot);
     }
-    case 'recording.status': return ok(await browserRecordingStatus(
-      await requiredRequestTarget(request.payload, sender),
-    ));
+    case 'recording.status': {
+      const target = await requiredRequestTarget(request.payload, sender);
+      return ok(request.payload.scope === 'tab'
+        ? await tabBrowserRecordingStatus(target.tabId)
+        : await browserRecordingStatus(target));
+    }
     case 'recording.get': {
       const target = await requiredRequestTarget(request.payload, sender);
-      const snapshot = await getBrowserRecording(target, request.payload.limit, true);
+      const snapshot = request.payload.scope === 'tab'
+        ? await getTabBrowserRecording(target.tabId, request.payload.limit, true)
+        : await getBrowserRecording(target, request.payload.limit, true);
       await stageBrowserProfileEvidence(snapshot);
       return ok(snapshot);
     }
     case 'recording.clear': {
       const target = await requiredRequestTarget(request.payload, sender);
-      const snapshot = await clearBrowserRecording(target, true);
+      const snapshot = request.payload.scope === 'tab'
+        ? await clearTabBrowserRecording(target.tabId, true)
+        : await clearBrowserRecording(target, true);
       void appendAuditEvent({
         category: 'capability',
         action: 'recording.clear',
@@ -67,7 +81,9 @@ export const handleRecordingRequest: BackgroundRequestHandler = async (request, 
     }
     case 'recording.stop': {
       const target = await requiredRequestTarget(request.payload, sender);
-      const snapshot = await stopBrowserRecording(target, true);
+      const snapshot = request.payload.scope === 'tab'
+        ? await stopTabBrowserRecording(target.tabId, true)
+        : await stopBrowserRecording(target, true);
       await stageBrowserProfileEvidence(snapshot);
       void appendAuditEvent({
         category: 'capability',

@@ -31,6 +31,10 @@ export function proxyProfileDetail(profile: ProxyProfile): string {
   return PROXY_KIND_LABELS[profile.kind];
 }
 
+export function normalizeBypass(items: string[]): string[] {
+  return items.map((item) => item.trim()).filter(Boolean);
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes > 100 * 1024 ? 0 : 1)} KB`;

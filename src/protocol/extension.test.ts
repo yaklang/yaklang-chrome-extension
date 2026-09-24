@@ -142,7 +142,7 @@ describe('extension request schemas', () => {
   it('validates recording bounds and recorded page callables', () => {
     expect(parseExtensionRequest({
       action: 'recording.start',
-      payload: { tabId: 12, frameId: 0, captureValues: false, maxEntries: 500, maxValueBytes: 8_192 },
+      payload: { tabId: 12, frameId: 0, scope: 'tab', captureValues: false, maxEntries: 500, maxValueBytes: 8_192 },
     }).action).toBe('recording.start');
     expect(() => parseExtensionRequest({
       action: 'recording.start', payload: { tabId: 12, maxEntries: 501 },

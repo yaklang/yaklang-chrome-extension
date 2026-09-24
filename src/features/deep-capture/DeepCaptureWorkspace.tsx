@@ -8,7 +8,7 @@ import { errorMessage, request } from '@/platform/messaging/runtime';
 import type {
   ActiveTabInfo, BrowserDeepCaptureFrame, BrowserDeepCaptureMatcher, BrowserDeepCaptureStatus,
   BrowserPageCallable, BrowserPageCallableExecution,
-  BrowserProfileInferenceCandidate, BrowserRecordingEvent,
+  BrowserProfileInferenceCandidate, BrowserRecordingEvent, BrowserTarget,
 } from '@/types/models';
 import './deep-capture-workspace.css';
 import { eventMatcher } from './matcher';
@@ -18,6 +18,7 @@ type RunTask = (task: () => Promise<void>, success?: string) => Promise<void>;
 
 interface DeepCaptureWorkspaceProps {
   tab?: ActiveTabInfo;
+  recordingTarget?: BrowserTarget;
   selectedEvent?: BrowserRecordingEvent;
   selectedCandidate?: BrowserProfileInferenceCandidate;
   autoArmRequest?: number;
@@ -76,6 +77,7 @@ const FRAME_SOURCE_LABELS: Record<BrowserDeepCaptureFrame['sourceKind'], string>
 
 export function DeepCaptureWorkspace({
   tab,
+  recordingTarget,
   selectedEvent,
   selectedCandidate,
   autoArmRequest = 0,
@@ -115,7 +117,13 @@ export function DeepCaptureWorkspace({
   const handledAutoCapturePause = useRef(0);
   const automaticFlowRequested = useRef(false);
 
-  const target = status?.target || (tab ? { tabId: tab.id, frameId: 0 } : undefined);
+  const baseTarget = useMemo(() => recordingTarget
+    ? { ...recordingTarget }
+    : tab ? { tabId: tab.id, frameId: 0 } : undefined,
+  [recordingTarget?.documentId, recordingTarget?.frameId, recordingTarget?.tabId, tab?.id]);
+  const target = status && baseTarget
+    && status.target.tabId === baseTarget.tabId && status.target.frameId === baseTarget.frameId
+    ? status.target : baseTarget;
   const paused = status?.state === 'paused' && Boolean(status.pause);
 
   useEffect(() => { statusRef.current = status; }, [status]);
@@ -151,15 +159,15 @@ export function DeepCaptureWorkspace({
       return;
     }
     try {
-      const nextStatus = await request('deep.capture.status', { tabId: tab.id, frameId: 0 });
+      const nextStatus = await request('deep.capture.status', baseTarget!);
       setStatus(nextStatus);
-      const nextCallables = await request('callable.list', { tabId: tab.id, frameId: 0 }).catch(() => []);
+      const nextCallables = await request('callable.list', baseTarget!).catch(() => []);
       setCallables(nextCallables);
       setLoadError('');
     } catch (error) {
       setLoadError(errorMessage(error));
     }
-  }, [tab]);
+  }, [baseTarget?.documentId, baseTarget?.frameId, baseTarget?.tabId, tab]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -183,11 +191,11 @@ export function DeepCaptureWorkspace({
     }
     void run(async () => {
       setExecution(undefined);
-      const next = await request('deep.capture.start', { tabId: tab.id, frameId: 0, matcher: suggestedMatcher });
+      const next = await request('deep.capture.start', { ...baseTarget!, matcher: suggestedMatcher });
       automaticFlowRequested.current = true;
       setStatus(next);
     }, '自动分析已武装，请在目标页面重复刚才的操作');
-  }, [autoArmRequest, busy, run, status, suggestedMatcher, tab]);
+  }, [autoArmRequest, baseTarget, busy, run, status, suggestedMatcher, tab]);
 
   useEffect(() => {
     if (!autoRecoveryRequest || handledAutoRecoveryRequest.current >= autoRecoveryRequest
@@ -208,10 +216,10 @@ export function DeepCaptureWorkspace({
 
   useEffect(() => {
     if (!tab || !['armed', 'paused', 'attached'].includes(status?.state || '')) return undefined;
-    const interval = window.setInterval(() => void request('deep.capture.status', { tabId: tab.id, frameId: 0 })
+    const interval = window.setInterval(() => void request('deep.capture.status', baseTarget!)
       .then(setStatus).catch((error) => setLoadError(errorMessage(error))), status?.state === 'armed' ? 450 : 1_200);
     return () => window.clearInterval(interval);
-  }, [status?.state, tab]);
+  }, [baseTarget, status?.state, tab]);
 
   useEffect(() => {
     if (!paused || !target) return undefined;
@@ -273,7 +281,7 @@ export function DeepCaptureWorkspace({
         : { kind: 'request', urlPattern: urlPattern.trim(), frameHints };
     setExecution(undefined);
     automaticFlowRequested.current = false;
-    setStatus(await request('deep.capture.start', { tabId: tab.id, frameId: 0, matcher }));
+    setStatus(await request('deep.capture.start', { ...baseTarget!, matcher }));
   }, '深度捕获已武装，请在目标页面重现一次操作');
 
   const resume = () => run(async () => {

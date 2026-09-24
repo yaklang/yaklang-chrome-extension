@@ -34,8 +34,13 @@ function artifactFingerprint(artifacts) {
 }
 
 function toVersionEntry(entry) {
+  if (!Array.isArray(entry.notes) || entry.notes.length === 0
+      || entry.notes.some((note) => typeof note !== 'string' || note.trim() === '')) {
+    throw new Error(`release ${entry.version} must contain non-empty notes`);
+  }
   return {
     version: entry.version,
+    notes: entry.notes,
     published_at: entry.built_at,
     commit: entry.commit ?? null,
     artifacts: entry.artifacts.map((a) => ({
@@ -64,6 +69,11 @@ function validate(manifest) {
     seen.add(versionEntry.version);
     if (!Array.isArray(versionEntry.artifacts) || versionEntry.artifacts.length === 0) {
       throw new Error(`version ${versionEntry.version} has no artifacts`);
+    }
+    if (versionEntry.notes !== undefined
+        && (!Array.isArray(versionEntry.notes) || versionEntry.notes.length === 0
+          || versionEntry.notes.some((note) => typeof note !== 'string' || note.trim() === ''))) {
+      throw new Error(`version ${versionEntry.version} has invalid notes`);
     }
     const variants = new Set();
     for (const artifact of versionEntry.artifacts) {
@@ -103,8 +113,10 @@ if (args['existing-manifest']) {
 const newEntry = toVersionEntry(entry);
 const idx = versions.findIndex((v) => v.version === entry.version);
 if (idx >= 0 && artifactFingerprint(versions[idx].artifacts) === artifactFingerprint(entry.artifacts)) {
-  // Idempotent rerun: keep the original entry (published_at stays stable).
-  console.log(`version ${entry.version} already in manifest with identical artifacts; kept as-is`);
+  // An idempotent rerun may backfill release notes without changing immutable
+  // artifacts or their original publication metadata.
+  versions[idx] = { ...versions[idx], notes: newEntry.notes };
+  console.log(`version ${entry.version} already in manifest with identical artifacts; release notes synchronized`);
 } else {
   if (idx >= 0) {
     versions.splice(idx, 1);

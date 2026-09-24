@@ -9,6 +9,7 @@ import { ExtensionError } from '@/shared/errors';
 import { inferBrowserTransformProfiles } from '@/features/browser-inference/inference';
 import { normalizeBrowserRecordingCrypto } from '@/features/browser-crypto/model';
 import { normalizeCallable } from '@/features/page-callable/service';
+import { getFrameInventory } from '@/features/page-context/frames';
 import { PAGE_RECORDER_PROTOCOL_VERSION, PAGE_RECORDER_REGISTRY_KEY } from './constants';
 import {
   buildRecordingLinks,
@@ -543,6 +544,7 @@ function normalizeEvent(value: unknown, allowSensitive: boolean): BrowserRecordi
     parentEventId: optionalString(input.parentEventId, 160),
     kind: input.kind as BrowserRecordingEvent['kind'],
     source: input.source === 'browser' ? 'browser' : 'page',
+    frameId: Number.isSafeInteger(input.frameId) && Number(input.frameId) >= 0 ? Number(input.frameId) : undefined,
     documentId: optionalString(input.documentId, 160),
     operation: input.operation.slice(0, 160),
     inputs: Array.isArray(input.inputs)
@@ -744,9 +746,11 @@ function snapshotFromEvents(
 }
 
 function snapshotFrom(target: BrowserTarget, raw: RawRecorderSnapshot): BrowserRecordingSnapshot {
-  const events = raw.events.map((event) => event.documentId || !target.documentId
-    ? event
-    : { ...event, documentId: target.documentId });
+  const events = raw.events.map((event) => ({
+    ...event,
+    frameId: target.frameId,
+    documentId: event.documentId || target.documentId,
+  }));
   const callables = raw.callables
     .map((item) => normalizeCallable(item, target))
     .filter((item): item is BrowserPageCallable => Boolean(item));
@@ -792,6 +796,7 @@ function mergeSessionSnapshot(
       globalSessionCount: previous?.status.globalSessionCount,
       persistence: previous?.status.persistence,
       persistenceError: previous?.status.persistenceError,
+      scope: previous?.status.scope || current.status.scope,
     } : {}),
     ...status,
   }, events, current.callables);
@@ -875,6 +880,7 @@ function applyNavigation(
     parentEventId: existing?.parentEventId,
     kind: 'navigation',
     source: 'browser',
+    frameId: target.frameId,
     documentId: navigation.previousDocumentId || existing?.documentId,
     operation: navigationOperation(navigation),
     label: navigationLabel(navigation),
@@ -904,6 +910,7 @@ export async function startBrowserRecording(
   target: BrowserTarget,
   input?: Partial<BrowserRecordingOptions>,
   owner: OwnedRecording['owner'] = { kind: 'local' },
+  scope: BrowserRecordingStatus['scope'] = 'frame',
 ): Promise<BrowserRecordingSnapshot> {
   if (expiredGrantOwner(owner)) throw new ExtensionError('grant_expired', '浏览器共享会话不存在或已经过期');
   const options = normalizeOptions(input);
@@ -918,6 +925,7 @@ export async function startBrowserRecording(
   if (!raw.startedAt) throw new ExtensionError('recorder_unavailable', '页面录制器尚未在目标文档就绪');
   ownedRecordings.set(targetKey(target), { target, owner });
   const snapshot = snapshotFrom(target, raw);
+  snapshot.status.scope = scope;
   snapshot.status.isolationContextId = tab.isolationContextId;
   snapshot.status.cookieStoreId = tab.cookieStoreId;
   snapshot.status.pageUrl = await currentPageUrl(target);
@@ -978,6 +986,167 @@ export async function getBrowserRecording(target: BrowserTarget, limit = MAX_ENT
   }
   await writeSession(snapshot, session?.owner);
   return recordingSnapshotForScope(snapshot, allowSensitive);
+}
+
+function emptyTabRecording(tabId: number): BrowserRecordingSnapshot {
+  return {
+    status: {
+      active: false,
+      scope: 'tab',
+      target: { tabId, frameId: 0 },
+      documentAvailable: true,
+      count: 0,
+      droppedCount: 0,
+    },
+    events: [],
+    traces: [],
+    links: [],
+    callables: [],
+    profileCandidates: [],
+  };
+}
+
+function localTabSnapshots(tabId: number): BrowserRecordingSnapshot[] {
+  return [...latestSnapshots.entries()].flatMap(([key, snapshot]) => {
+    if (snapshot.status.target.tabId !== tabId) return [];
+    const owner = ownedRecordings.get(key)?.owner || sessionOwners.get(key);
+    return owner?.kind === 'grant' ? [] : [snapshot];
+  });
+}
+
+async function tabFrameTargets(tabId: number): Promise<BrowserTarget[]> {
+  const frames = await getFrameInventory(tabId);
+  return frames
+    .filter((frame) => frame.accessible && /^https?:/i.test(frame.url))
+    .slice(0, RECORDING_MAX_SESSIONS)
+    .map(({ frameId, documentId }) => ({ tabId, frameId, documentId }));
+}
+
+function summedStatus(
+  snapshots: BrowserRecordingSnapshot[],
+  key: 'droppedCount' | 'budgetDroppedCount' | 'previewDroppedCount' | 'retainedBytes'
+    | 'retainedPreviewBytes' | 'retainedCallCount' | 'retainedCallBytes' | 'retainedCallDroppedCount',
+): number {
+  return snapshots.reduce((total, snapshot) => total + (snapshot.status[key] || 0), 0);
+}
+
+function mergedPersistence(snapshots: BrowserRecordingSnapshot[]): BrowserRecordingStatus['persistence'] {
+  const states = snapshots.map((snapshot) => snapshot.status.persistence);
+  if (states.includes('degraded')) return 'degraded';
+  if (states.includes('memory-only')) return 'memory-only';
+  if (states.includes('pending')) return 'pending';
+  return states.includes('persisted') ? 'persisted' : undefined;
+}
+
+export function mergeTabRecordingSnapshots(
+  tabId: number,
+  snapshots: BrowserRecordingSnapshot[],
+  limit = MAX_ENTRIES,
+): BrowserRecordingSnapshot {
+  if (!snapshots.length) return emptyTabRecording(tabId);
+  const primary = snapshots.find((snapshot) => snapshot.status.target.frameId === 0) || snapshots[0];
+  const byEventId = new Map<string, BrowserRecordingEvent>();
+  for (const snapshot of snapshots) {
+    for (const event of snapshot.events) {
+      byEventId.set(event.id, { ...event, frameId: event.frameId ?? snapshot.status.target.frameId });
+    }
+  }
+  const events = [...byEventId.values()]
+    .sort((left, right) => left.timestamp - right.timestamp || left.sequence - right.sequence || left.id.localeCompare(right.id))
+    .slice(-Math.max(1, Math.min(Math.floor(limit), MAX_ENTRIES)));
+  const eventIds = new Set(events.map((event) => event.id));
+  const links = buildRecordingLinks(events);
+  const callables = [...new Map(snapshots.flatMap((snapshot) => snapshot.callables).map((item) => [item.id, item])).values()];
+  const profileCandidates = [...new Map(snapshots.flatMap((snapshot) => snapshot.profileCandidates)
+    .filter((candidate) => eventIds.has(candidate.request.eventId) && candidate.sources.every((source) => eventIds.has(source.eventId)))
+    .map((candidate) => [candidate.id, candidate])).values()];
+  const startedAt = snapshots.reduce<number | undefined>((oldest, snapshot) => {
+    const next = snapshot.status.startedAt;
+    return next === undefined ? oldest : oldest === undefined ? next : Math.min(oldest, next);
+  }, undefined);
+  return {
+    status: {
+      ...primary.status,
+      active: snapshots.some((snapshot) => snapshot.status.active),
+      scope: 'tab',
+      target: primary.status.target,
+      startedAt,
+      count: events.length,
+      droppedCount: summedStatus(snapshots, 'droppedCount'),
+      budgetDroppedCount: summedStatus(snapshots, 'budgetDroppedCount'),
+      previewDroppedCount: summedStatus(snapshots, 'previewDroppedCount'),
+      retainedBytes: summedStatus(snapshots, 'retainedBytes'),
+      retainedPreviewBytes: summedStatus(snapshots, 'retainedPreviewBytes'),
+      retainedCallCount: summedStatus(snapshots, 'retainedCallCount'),
+      retainedCallBytes: summedStatus(snapshots, 'retainedCallBytes'),
+      retainedCallDroppedCount: summedStatus(snapshots, 'retainedCallDroppedCount'),
+      globalRetainedBytes: Math.max(...snapshots.map((snapshot) => snapshot.status.globalRetainedBytes || 0)),
+      globalSessionCount: Math.max(...snapshots.map((snapshot) => snapshot.status.globalSessionCount || 0)),
+      persistence: mergedPersistence(snapshots),
+      persistenceError: snapshots.find((snapshot) => snapshot.status.persistenceError)?.status.persistenceError,
+      endedReason: snapshots.some((snapshot) => snapshot.status.active) ? undefined : primary.status.endedReason,
+    },
+    events,
+    links,
+    traces: buildRecordingTraces(events, links),
+    callables,
+    profileCandidates,
+  };
+}
+
+export async function startTabBrowserRecording(
+  tabId: number,
+  input?: Partial<BrowserRecordingOptions>,
+): Promise<BrowserRecordingSnapshot> {
+  await ensureSessionsRestored();
+  await Promise.all(localTabSnapshots(tabId).map((snapshot) => clearBrowserRecording(snapshot.status.target)));
+  const targets = await tabFrameTargets(tabId);
+  const top = targets.find((target) => target.frameId === 0);
+  if (!top) throw new ExtensionError('target_unavailable', '标签页主文档当前不可录制');
+  const snapshots = [await startBrowserRecording(top, input, { kind: 'local' }, 'tab')];
+  const children = await Promise.allSettled(targets
+    .filter((target) => target.frameId !== 0)
+    .map((target) => startBrowserRecording(target, input, { kind: 'local' }, 'tab')));
+  snapshots.push(...children.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
+  return mergeTabRecordingSnapshots(tabId, snapshots);
+}
+
+export async function getTabBrowserRecording(
+  tabId: number,
+  limit = MAX_ENTRIES,
+  allowSensitive = false,
+): Promise<BrowserRecordingSnapshot> {
+  await ensureSessionsRestored();
+  const stored = localTabSnapshots(tabId);
+  const snapshots = await Promise.all(stored.map(async (snapshot) => (
+    getBrowserRecording(snapshot.status.target, limit, allowSensitive).catch(() => recordingSnapshotForScope(snapshot, allowSensitive))
+  )));
+  return mergeTabRecordingSnapshots(tabId, snapshots, limit);
+}
+
+export async function tabBrowserRecordingStatus(tabId: number): Promise<BrowserRecordingStatus> {
+  return (await getTabBrowserRecording(tabId, MAX_ENTRIES, false)).status;
+}
+
+export async function stopTabBrowserRecording(
+  tabId: number,
+  allowSensitive = false,
+): Promise<BrowserRecordingSnapshot> {
+  await ensureSessionsRestored();
+  const snapshots = await Promise.all(localTabSnapshots(tabId).map((snapshot) => (
+    stopBrowserRecording(snapshot.status.target, allowSensitive)
+  )));
+  return mergeTabRecordingSnapshots(tabId, snapshots);
+}
+
+export async function clearTabBrowserRecording(
+  tabId: number,
+  allowSensitive = false,
+): Promise<BrowserRecordingSnapshot> {
+  await ensureSessionsRestored();
+  const snapshots = localTabSnapshots(tabId);
+  await Promise.all(snapshots.map((snapshot) => clearBrowserRecording(snapshot.status.target, allowSensitive)));
+  return emptyTabRecording(tabId);
 }
 
 export async function clearBrowserRecording(target: BrowserTarget, allowSensitive = false): Promise<BrowserRecordingSnapshot> {
@@ -1151,9 +1320,22 @@ async function continueRecordingOnDocument(
     documentId: details.documentId,
   };
   const key = targetKey(target);
-  const stored = await readSession(target);
+  let stored = await readSession(target);
+  if (!stored && details.frameId !== 0 && /^https?:/i.test(details.url)) {
+    const top = await readSession({ tabId: details.tabId, frameId: 0 });
+    const topKey = targetKey({ tabId: details.tabId, frameId: 0 });
+    const owner = ownedRecordings.get(topKey)?.owner || top?.owner;
+    if (top?.snapshot.status.active && top.snapshot.status.scope === 'tab' && owner?.kind !== 'grant') {
+      const snapshot = await startBrowserRecording(target, top.snapshot.status.options, { kind: 'local' }, 'tab');
+      notifyRecordingChanged(details.tabId, 'updated');
+      stored = { snapshot, owner: { kind: 'local' } };
+    }
+  }
   if (!stored?.snapshot.status.active || !stored.snapshot.status.recordingId) return;
   const previous = stored.snapshot;
+  if (!previous.status.navigation
+    && previous.status.target.documentId === details.documentId
+    && previous.status.pageUrl === details.url) return;
   const previousNavigation = previous.status.navigation;
   const hasTransitionEvidence = Boolean(details.transitionType || details.transitionQualifiers?.length);
   const kind = hasTransitionEvidence

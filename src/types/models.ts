@@ -559,6 +559,7 @@ export interface BrowserRecordingEvent {
   parentEventId?: string;
   kind: BrowserRecordingEventKind;
   source?: 'page' | 'browser';
+  frameId?: number;
   documentId?: string;
   operation: string;
   label?: string;
@@ -591,6 +592,7 @@ export interface BrowserRecordingEvent {
 export interface BrowserRecordingStatus {
   active: boolean;
   target: BrowserTarget;
+  scope?: 'frame' | 'tab';
   isolationContextId?: string;
   cookieStoreId?: string;
   documentAvailable: boolean;

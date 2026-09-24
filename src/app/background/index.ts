@@ -441,8 +441,12 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       await syncManagedInstanceBadge(state.bridge.managedInstance);
       if (state.bridge.autoConnect && state.bridge.pairedEngine) {
         engineBridge.disconnect();
-        await stopPairedBrowserTasks();
-        await engineBridge.connect(state.bridge);
+        void stopPairedBrowserTasks()
+          .then(() => engineBridge.connect(state.bridge))
+          .catch((error) => console.error('Managed browser reconnect failed', error));
+      } else if (!state.bridge.pairedEngine) {
+        void engineBridge.startPairing()
+          .catch((error) => console.error('Managed browser pairing failed', error));
       }
       return ok(engineBridge.getStatus());
     }

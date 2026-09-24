@@ -401,14 +401,15 @@ const payloadSchemas = {
   'network.capture.analysis': v.strictObject({ ...targetFields, id }),
   'recording.start': v.strictObject({
     ...targetFields,
+    scope: v.optional(v.picklist(['frame', 'tab'])),
     captureValues: v.optional(v.boolean()),
     maxEntries: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(20), v.maxValue(500))),
     maxValueBytes: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(256), v.maxValue(8_192))),
   }),
-  'recording.status': v.strictObject(targetFields),
-  'recording.get': v.strictObject({ ...targetFields, limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500))) }),
-  'recording.clear': v.strictObject(targetFields),
-  'recording.stop': v.strictObject(targetFields),
+  'recording.status': v.strictObject({ ...targetFields, scope: v.optional(v.picklist(['frame', 'tab'])) }),
+  'recording.get': v.strictObject({ ...targetFields, scope: v.optional(v.picklist(['frame', 'tab'])), limit: v.optional(v.pipe(v.number(), v.safeInteger(), v.minValue(1), v.maxValue(500))) }),
+  'recording.clear': v.strictObject({ ...targetFields, scope: v.optional(v.picklist(['frame', 'tab'])) }),
+  'recording.stop': v.strictObject({ ...targetFields, scope: v.optional(v.picklist(['frame', 'tab'])) }),
   'callable.create': v.union([
     v.strictObject({
       ...targetFields, source: v.literal('recording'), callHandleId: id,

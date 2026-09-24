@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import type {
   ActiveTabInfo, BrowserPageCallable, BrowserPageCallableExecution, BrowserRecordingEvent,
-  BrowserProfileInferenceCandidate, BrowserRecordingArgumentRole, BrowserRecordingSnapshot,
+  BrowserProfileInferenceCandidate, BrowserRecordingArgumentRole, BrowserRecordingSnapshot, BrowserTarget,
 } from '@/types/models';
 import type { CapturedCallableSample } from '@/features/deep-capture/callable-sample';
 import { DeepCaptureWorkspace } from '@/features/deep-capture/DeepCaptureWorkspace';
@@ -167,13 +167,6 @@ function navigationPhaseLabel(event: BrowserRecordingEvent): string {
   return '浏览器文档边界';
 }
 
-function emptySnapshot(tabId: number): BrowserRecordingSnapshot {
-  return {
-    status: { active: false, target: { tabId, frameId: 0 }, documentAvailable: true, count: 0, droppedCount: 0 },
-    events: [], traces: [], links: [], callables: [], profileCandidates: [],
-  };
-}
-
 function shortSample(event?: BrowserRecordingEvent): string | undefined {
   const value = event?.inputPreview || event?.inputs.find((item) => item.preview)?.preview;
   return value?.trim() || undefined;
@@ -181,12 +174,19 @@ function shortSample(event?: BrowserRecordingEvent): string | undefined {
 
 function eventAvailableInDocument(
   event: BrowserRecordingEvent | undefined,
-  currentDocumentId: string | undefined,
+  target: BrowserTarget | undefined,
   documentAvailable: boolean,
 ): boolean {
   return documentAvailable && Boolean(event) && (
-    !event?.documentId || !currentDocumentId || event.documentId === currentDocumentId
+    (event?.frameId === undefined || !target || event.frameId === target.frameId)
+    && (!event?.documentId || !target?.documentId || event.documentId === target.documentId)
   );
+}
+
+function recordingEventTarget(tabId: number | undefined, event?: BrowserRecordingEvent): BrowserTarget | undefined {
+  return tabId !== undefined && event
+    ? { tabId, frameId: event.frameId ?? 0, documentId: event.documentId }
+    : undefined;
 }
 
 export function RecordingWorkspace({
@@ -224,11 +224,8 @@ export function RecordingWorkspace({
       return;
     }
     try {
-      const target = { tabId, frameId: 0 };
-      const status = await request('recording.status', target);
-      const next = status.startedAt
-        ? await request('recording.get', { ...target, limit: 500 })
-        : emptySnapshot(tabId);
+      const target = { tabId, frameId: 0, scope: 'tab' as const };
+      const next = await request('recording.get', { ...target, limit: 500 });
       setSnapshot(next);
       if (next.status.options) setCaptureValues(next.status.options.captureValues);
       setLoadError('');
@@ -272,8 +269,8 @@ export function RecordingWorkspace({
   const selectedEvent = snapshot?.events.find((event) => event.id === selectedEventId);
   const selectedCallable = snapshot?.callables.find((callable) => callable.id === selectedCallableId);
   const recordingTarget = tab ? { tabId: tab.id, frameId: 0 } : undefined;
-  const documentAvailable = snapshot?.status.documentAvailable !== false;
-  const callableTarget = snapshot?.status.startedAt && documentAvailable ? snapshot.status.target : undefined;
+  const tabRecordingTarget = recordingTarget ? { ...recordingTarget, scope: 'tab' as const } : undefined;
+  const selectedEventTarget = recordingEventTarget(tab?.id, selectedEvent);
 
   useEffect(() => {
     if (!selectedEvent) return;
@@ -292,7 +289,7 @@ export function RecordingWorkspace({
   const start = () => run(async () => {
     if (!tab) throw new Error('请选择目标标签页');
     const next = await request('recording.start', {
-      tabId: tab.id, captureValues, maxEntries: 500, maxValueBytes: 8_192,
+      tabId: tab.id, scope: 'tab', captureValues, maxEntries: 500, maxValueBytes: 8_192,
     });
     setSnapshot(next);
     setSelectedTraceId('');
@@ -300,16 +297,16 @@ export function RecordingWorkspace({
     setCallableResult(undefined);
     setPendingGatewayBinding(undefined);
     setCaptureCandidate(undefined);
-  }, captureValues ? '录制已开始；短时样本仅保留在本次浏览器会话，页面跳转后会自动接续' : '录制已开始，将跨页面记录业务执行链');
+  }, captureValues ? '录制已开始；已覆盖标签页内所有页面，短时样本仅保留在本次浏览器会话' : '录制已开始；已覆盖标签页内所有页面与后续登录 frame');
 
   const stop = () => run(async () => {
-    if (!recordingTarget) return;
-    setSnapshot(await request('recording.stop', recordingTarget));
+    if (!tabRecordingTarget) return;
+    setSnapshot(await request('recording.stop', tabRecordingTarget));
   }, '录制已停止，可以继续验证页面函数');
 
   const clear = () => run(async () => {
-    if (!recordingTarget) return;
-    setSnapshot(await request('recording.clear', recordingTarget));
+    if (!tabRecordingTarget) return;
+    setSnapshot(await request('recording.clear', tabRecordingTarget));
     setCallableResult(undefined);
     setPendingGatewayBinding(undefined);
     setCaptureCandidate(undefined);
@@ -317,11 +314,11 @@ export function RecordingWorkspace({
 
   const createCallable = () => run(async () => {
     if (snapshot?.status.active) throw new Error('请先停止录制，再保存页面函数');
-    if (!selectedEventAvailable || !callableTarget || !selectedEvent?.callHandleId) {
+    if (!selectedEventAvailable || !selectedEventTarget || !selectedEvent?.callHandleId) {
       throw new Error(selectedEvent ? '该调用属于另一个页面文档；返回对应页面现场后才能保存' : '当前事件没有可执行调用句柄');
     }
     const callable = await request('callable.create', {
-      ...callableTarget, source: 'recording', callHandleId: selectedEvent.callHandleId, name: callableName,
+      ...selectedEventTarget, source: 'recording', callHandleId: selectedEvent.callHandleId, name: callableName,
     });
     setSnapshot((current) => current ? { ...current, callables: [...current.callables.filter((item) => item.id !== callable.id), callable] } : current);
     setSelectedCallableId(callable.id);
@@ -330,17 +327,23 @@ export function RecordingWorkspace({
   }, '页面函数已创建');
 
   const executeCallable = () => run(async () => {
-    if (!callableTarget || !selectedCallable) throw new Error(documentAvailable ? '请选择页面函数' : '页面已经导航，旧文档的页面函数不可再执行');
+    if (!selectedCallable) throw new Error('请选择页面函数');
     let args: unknown;
     try { args = JSON.parse(callableArguments); } catch { throw new Error('调用参数必须是有效的 JSON 数组'); }
     if (!Array.isArray(args)) throw new Error('调用参数必须是 JSON 数组');
-    setCallableResult(await request('callable.execute', { ...callableTarget, callableId: selectedCallable.id, args }));
+    setCallableResult(await request('callable.execute', { ...selectedCallable.target, callableId: selectedCallable.id, args }));
   }, '页面函数验证完成');
 
   const deleteCallable = () => run(async () => {
-    if (!callableTarget || !selectedCallable) return;
-    const callables = await request('callable.delete', { ...callableTarget, callableId: selectedCallable.id });
-    setSnapshot((current) => current ? { ...current, callables } : current);
+    if (!selectedCallable) return;
+    const callables = await request('callable.delete', { ...selectedCallable.target, callableId: selectedCallable.id });
+    setSnapshot((current) => current ? {
+      ...current,
+      callables: [
+        ...current.callables.filter((item) => item.target.frameId !== selectedCallable.target.frameId),
+        ...callables,
+      ],
+    } : current);
     setCallableResult(undefined);
   }, '页面函数已删除');
 
@@ -370,8 +373,7 @@ export function RecordingWorkspace({
       ? `页面函数句柄 ${(snapshot.status.retainedCallBytes / 1024).toFixed(1)} KiB`
       : undefined,
   ].filter(Boolean).join(' · ');
-  const currentDocumentId = snapshot?.status.target.documentId;
-  const selectedEventAvailable = eventAvailableInDocument(selectedEvent, currentDocumentId, documentAvailable);
+  const documentAvailable = snapshot?.status.documentAvailable !== false;
   const outgoingLinks = selectedEvent ? snapshot?.links.filter((link) => link.fromEventId === selectedEvent.id) || [] : [];
   const incomingLinks = selectedEvent ? snapshot?.links.filter((link) => link.toEventId === selectedEvent.id) || [] : [];
   const traceCandidates = snapshot?.profileCandidates.filter((candidate) => candidate.traceId === selectedTraceId) || [];
@@ -382,6 +384,11 @@ export function RecordingWorkspace({
     : undefined;
   const boundaryCandidates = selectedCandidate ? [] : traceCandidates.filter((candidate) => candidate.request.eventId === selectedEventId);
   const relatedCandidate = boundaryCandidates.length === 1 ? boundaryCandidates[0] : undefined;
+  const selectedEventAvailable = eventAvailableInDocument(
+    selectedEvent,
+    selectedCandidate?.target || relatedCandidate?.target || selectedEventTarget,
+    selectedEvent?.frameId === 0 ? documentAvailable : true,
+  );
   const relatedSourceEvent = relatedCandidate
     ? snapshot?.events.find((event) => event.id === relatedCandidate.source.eventId)
     : undefined;
@@ -394,7 +401,7 @@ export function RecordingWorkspace({
   const candidateSourceEvent = selectedCandidate
     ? snapshot?.events.find((event) => event.id === selectedCandidate.source.eventId)
     : undefined;
-  const candidateAvailable = eventAvailableInDocument(candidateSourceEvent, currentDocumentId, documentAvailable);
+  const candidateAvailable = eventAvailableInDocument(candidateSourceEvent, selectedCandidate?.target, true);
   const canDeepCapture = DEEP_CAPTURE_AVAILABLE && selectedEventAvailable && Boolean(selectedEvent
     && ['crypto', 'fetch', 'xhr', 'form', 'beacon', 'worker', 'message'].includes(selectedEvent.kind)
     && (selectedEvent.url || selectedEvent.wrapperHandleId));
@@ -406,8 +413,8 @@ export function RecordingWorkspace({
       return;
     }
     void run(async () => {
-      if (!recordingTarget) throw new Error('目标标签页不可用');
-      setSnapshot(await request('recording.stop', recordingTarget));
+      if (!tabRecordingTarget) throw new Error('目标标签页不可用');
+      setSnapshot(await request('recording.stop', tabRecordingTarget));
       setCallableEditorOpen(true);
     }, '录制已停止，请确认页面函数名称');
   };
@@ -454,7 +461,7 @@ export function RecordingWorkspace({
         throw new Error(`已检测到${pair.direction === 'request' ? '请求' : '响应'}方向，但${candidateStatusLabel(pair)}，不能静默保存为单向网关`);
       }
       const pairEvent = snapshot?.events.find((item) => item.id === pair.source.eventId);
-      if (!eventAvailableInDocument(pairEvent, currentDocumentId, documentAvailable) || !snapshot?.status.target) {
+      if (!snapshot || !eventAvailableInDocument(pairEvent, pair.target, true)) {
         throw new Error('配对方向属于另一个页面文档，请返回对应页面现场后再生成');
       }
       const pairInputCount = pair.source.dynamicInputPaths?.length || 1;
@@ -463,7 +470,7 @@ export function RecordingWorkspace({
       if (!pairCallable) {
         if (!pair.source.callHandleId) throw new Error('配对方向没有可复用的页面调用句柄');
         pairCallable = await request('callable.create', {
-          ...snapshot.status.target,
+          ...pair.target,
           source: 'recording',
           callHandleId: pair.source.callHandleId,
           name: `${pair.source.crypto?.algorithm || pair.source.crypto?.operation || pair.source.operation} 页面函数`,
@@ -507,16 +514,16 @@ export function RecordingWorkspace({
     if (candidate.sources.length !== 1) {
       throw new Error('多调用请求需要先捕获上层业务函数，不能把相互依赖的低层调用拆开回放');
     }
-    if (!candidateAvailable || !recordingTarget || !candidate.source.callHandleId) {
+    if (!candidateAvailable || !tabRecordingTarget || !candidate.source.callHandleId) {
       throw new Error(candidateAvailable ? '推断候选没有可复用的页面调用句柄' : '该函数属于另一个页面文档，请返回对应页面现场后再生成');
     }
     let currentSnapshot = snapshot;
     if (currentSnapshot?.status.active) {
-      currentSnapshot = await request('recording.stop', recordingTarget);
+      currentSnapshot = await request('recording.stop', tabRecordingTarget);
       setSnapshot(currentSnapshot);
     }
     if (!currentSnapshot) throw new Error('没有可用的录制现场');
-    const target = currentSnapshot.status.target;
+    const target = candidate.target;
     if (!target) throw new Error('录制文档已经失效');
     const inputCount = candidate.source.dynamicInputPaths?.length || 1;
     let callable = currentSnapshot.callables.find((item) => item.provenance.eventId === candidate.source.eventId
@@ -550,7 +557,7 @@ export function RecordingWorkspace({
     </div>
 
     <div id="recording-mode-panel" className="recording-mode-panel" role="tabpanel" aria-labelledby="recording-mode-tab" hidden={workspaceMode !== 'recording'}><div className="recording-controls">
-      <label><Switch checked={captureValues} disabled={active || busy} onCheckedChange={setCaptureValues} /><span><strong>保留短时样本</strong><small>关闭时仅保留本次录制的关联指纹</small></span></label>
+      <label><Switch checked={captureValues} disabled={active || busy} onCheckedChange={setCaptureValues} /><span><strong>保留短时样本</strong><small>自动覆盖当前标签页内所有 frame；关闭时仅保留关联指纹</small></span></label>
       <span className="recording-summary" title={persistenceTitle}>{snapshot?.traces.length || 0} 个 Trace · {snapshot?.links.length || 0} 条值关联 · {snapshot?.callables.length || 0} 个页面函数 · {persistenceLabel}{retentionDrops ? ` · ${retentionDrops} 项按预算丢弃` : ''}</span>
       <Button size="icon" variant="ghost" aria-label="刷新录制" title="刷新录制" disabled={!tab} onClick={() => void load()}><RefreshCw size={15} /></Button>
       <Button size="icon" variant="ghost" aria-label="清空录制" title="清空录制" disabled={!hasRecording || busy} onClick={() => void clear()}><Trash2 size={15} /></Button>
@@ -594,7 +601,12 @@ export function RecordingWorkspace({
             <div className="recording-pipeline__body">
               {!traceEvents.length ? <div className="recording-column-empty">当前 Trace 没有事件</div> : traceEvents.map((event, index) => {
                 const linked = snapshot?.links.some((link) => link.fromEventId === event.id || link.toEventId === event.id);
-                const callableAvailable = eventAvailableInDocument(event, currentDocumentId, documentAvailable);
+                const callableAvailable = eventAvailableInDocument(
+                  event,
+                  snapshot?.profileCandidates.find((candidate) => candidate.source.eventId === event.id)?.target
+                    || recordingEventTarget(tab?.id, event),
+                  event.frameId === 0 ? documentAvailable : true,
+                );
                 const flowDirection = recordingEventDirection(event, traceCandidates);
                 return <div className={`recording-pipeline-step ${event.kind === 'navigation' ? 'is-navigation' : ''}`} key={event.id}>
                   <span className="recording-step-rail" aria-hidden="true"><i>{String(index + 1).padStart(2, '0')}</i>{index < traceEvents.length - 1 ? <span><ArrowDown size={11} /></span> : null}</span>
@@ -699,6 +711,7 @@ export function RecordingWorkspace({
     {DEEP_CAPTURE_AVAILABLE && <div id="deep-mode-panel" className="recording-mode-panel" role="tabpanel" aria-labelledby="deep-mode-tab" hidden={workspaceMode !== 'deep'}>
       <DeepCaptureWorkspace
         tab={tab}
+        recordingTarget={selectedCandidate?.target || relatedCandidate?.target || selectedEventTarget}
         selectedEvent={selectedEvent}
         selectedCandidate={captureCandidate || selectedCandidate}
         autoArmRequest={autoArmRequest}

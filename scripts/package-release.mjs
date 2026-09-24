@@ -65,6 +65,11 @@ const distDir = resolve(root, String(args.dist ?? 'dist'));
 
 const pkg = JSON.parse(await readFile(resolve(root, 'package.json'), 'utf8'));
 const { version } = pkg;
+const notesByVersion = JSON.parse(await readFile(resolve(root, 'release-notes.json'), 'utf8'));
+const notes = notesByVersion[version]?.map((note) => String(note).trim()).filter(Boolean);
+if (!Array.isArray(notes) || notes.length === 0) {
+  throw new Error(`release-notes.json must contain at least one note for version ${version}`);
+}
 
 let commit = null;
 try {
@@ -138,6 +143,6 @@ for (const target of VARIANTS) {
   console.log(`packaged ${filename} (${size} bytes, sha256 ${sha256.slice(0, 12)}…)`);
 }
 
-const entry = { version, commit, built_at: new Date().toISOString(), artifacts };
+const entry = { version, notes, commit, built_at: new Date().toISOString(), artifacts };
 await writeFile(resolve(distDir, 'release-entry.json'), `${JSON.stringify(entry, null, 2)}\n`);
 console.log(`release entry written: ${resolve(distDir, 'release-entry.json').slice(root.length + 1)} (version ${version})`);

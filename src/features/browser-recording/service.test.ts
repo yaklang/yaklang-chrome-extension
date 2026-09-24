@@ -20,7 +20,8 @@ interface RawSnapshot {
 const fixture = vi.hoisted(() => ({
   storage: new Map<string, unknown>(),
   storageFailure: undefined as Error | undefined,
-  pages: new Map<number, RawSnapshot>(),
+  pages: new Map<number | string, RawSnapshot>(),
+  frames: new Map<number, Array<{ tabId: number; frameId: number; documentId: string; url: string; accessible: boolean }>>(),
   listeners: {} as Record<string, Listener>,
   storageSet: vi.fn(),
 }));
@@ -48,11 +49,16 @@ vi.mock('wxt/browser', () => {
       runtime: { sendMessage: vi.fn(async () => undefined) },
       scripting: {
         executeScript: vi.fn(async (details: Record<string, any>) => {
-          if (details.files) return [{ frameId: 0 }];
           const tabId = details.target.tabId as number;
+          const documentId = details.target.documentIds?.[0] as string | undefined;
+          const frameId = details.target.frameIds?.[0]
+            ?? fixture.frames.get(tabId)?.find((frame) => frame.documentId === documentId)?.frameId
+            ?? 0;
+          if (details.files) return [{ frameId }];
           const command = details.args?.[2] as string;
           const input = (details.args?.[3] || {}) as Record<string, unknown>;
-          const current = fixture.pages.get(tabId) || rawSnapshot(tabId);
+          const pageKey = frameId === 0 ? tabId : `${tabId}:${frameId}`;
+          const current = fixture.pages.get(pageKey) || rawSnapshot(tabId);
           if (command === 'start') {
             current.active = true;
             current.recordingId = typeof input.recordingId === 'string' ? input.recordingId : `recording-${tabId}`;
@@ -67,8 +73,8 @@ vi.mock('wxt/browser', () => {
           } else if (command === 'clear') {
             Object.assign(current, rawSnapshot(tabId));
           }
-          fixture.pages.set(tabId, current);
-          return [{ frameId: 0, result: clone(current) }];
+          fixture.pages.set(pageKey, current);
+          return [{ frameId, result: clone(current) }];
         }),
       },
       tabs: {
@@ -84,13 +90,19 @@ vi.mock('wxt/browser', () => {
         onCreated: event('created'),
       },
       cookies: {
-        getAllCookieStores: vi.fn(async () => [{ id: 'store-default', tabIds: [...fixture.pages.keys()] }]),
+        getAllCookieStores: vi.fn(async () => [{
+          id: 'store-default',
+          tabIds: [...new Set([...fixture.pages.keys()].map((key) => Number(String(key).split(':')[0])))],
+        }]),
       },
       webNavigation: {
-        getFrame: vi.fn(async ({ tabId }: { tabId: number }) => ({
-          url: `https://site-${tabId}.example.test/page`,
-          documentId: `document-${tabId}`,
-        })),
+        getFrame: vi.fn(async ({ tabId, frameId = 0 }: { tabId: number; frameId?: number }) => {
+          const frame = fixture.frames.get(tabId)?.find((item) => item.frameId === frameId);
+          return frame || {
+            url: `https://site-${tabId}.example.test/page`,
+            documentId: `document-${tabId}`,
+          };
+        }),
         onBeforeNavigate: event('beforeNavigate'),
         onCommitted: event('committed'),
         onDOMContentLoaded: event('domContentLoaded'),
@@ -102,6 +114,25 @@ vi.mock('wxt/browser', () => {
     },
   };
 });
+
+vi.mock('@/features/page-context/frames', () => ({
+  getFrameInventory: vi.fn(async (tabId: number) => fixture.frames.get(tabId) || [{
+    tabId,
+    frameId: 0,
+    documentId: `document-${tabId}`,
+    parentFrameId: -1,
+    url: `https://site-${tabId}.example.test/page`,
+    origin: `https://site-${tabId}.example.test`,
+    title: 'Main frame',
+    name: '',
+    frameType: 'outermost_frame',
+    documentLifecycle: 'active',
+    isTop: true,
+    sameOrigin: true,
+    accessible: true,
+    sandbox: [],
+  }]),
+}));
 
 function rawSnapshot(tabId: number, events: Array<Record<string, unknown>> = []): RawSnapshot {
   return {
@@ -159,6 +190,7 @@ describe('browser recording storage, snapshot and retained-value budgets', () =>
     vi.setSystemTime(4_102_444_800_000);
     fixture.storage.clear();
     fixture.pages.clear();
+    fixture.frames.clear();
     fixture.storageFailure = undefined;
     fixture.storageSet.mockClear();
   });
@@ -255,5 +287,70 @@ describe('browser recording storage, snapshot and retained-value budgets', () =>
       persistence: 'persisted',
       globalSessionCount: 1,
     });
+  });
+
+  it('records and merges requests from cross-origin child frames at tab scope', async () => {
+    const tabId = 30;
+    fixture.frames.set(tabId, [
+      {
+        tabId, frameId: 0, documentId: 'document-30', url: 'https://www.jd.com/', accessible: true,
+      },
+      {
+        tabId, frameId: 4, documentId: 'document-passport', url: 'https://passport.jd.com/new/login.aspx', accessible: true,
+      },
+    ]);
+    fixture.pages.set(tabId, rawSnapshot(tabId, [recordingEvent(1)]));
+    fixture.pages.set(`${tabId}:4`, rawSnapshot(tabId, [{
+      ...recordingEvent(2),
+      traceId: 'trace-passport-login',
+      url: 'https://passport.jd.com/uc/loginService?aksParamsU=redacted',
+    }]));
+
+    const service = await freshService();
+    const snapshot = await service.startTabBrowserRecording(tabId, { captureValues: true });
+
+    expect(snapshot.status).toMatchObject({ active: true, scope: 'tab' });
+    expect(snapshot.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ frameId: 0 }),
+      expect.objectContaining({
+        frameId: 4,
+        url: 'https://passport.jd.com/uc/loginService?aksParamsU=redacted',
+      }),
+    ]));
+    expect(snapshot.traces.some((trace) => trace.label === 'POST /uc/loginService')).toBe(true);
+  });
+
+  it('automatically attaches a login frame created after recording starts', async () => {
+    const tabId = 31;
+    const top = {
+      tabId, frameId: 0, documentId: 'document-31', url: 'https://www.jd.com/', accessible: true,
+    };
+    fixture.frames.set(tabId, [top]);
+    fixture.pages.set(tabId, rawSnapshot(tabId));
+    const service = await freshService();
+    await service.startTabBrowserRecording(tabId);
+
+    fixture.frames.set(tabId, [top, {
+      tabId, frameId: 7, documentId: 'document-passport-late', url: 'https://passport.jd.com/new/login.aspx', accessible: true,
+    }]);
+    fixture.pages.set(`${tabId}:7`, rawSnapshot(tabId, [{
+      ...recordingEvent(3),
+      traceId: 'trace-late-passport-login',
+      url: 'https://passport.jd.com/uc/loginService?aksParamsU=redacted',
+    }]));
+    fixture.listeners.committed({
+      tabId,
+      frameId: 7,
+      documentId: 'document-passport-late',
+      url: 'https://passport.jd.com/new/login.aspx',
+      timeStamp: Date.now(),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const snapshot = await service.getTabBrowserRecording(tabId, 500, true);
+    expect(snapshot.events).toContainEqual(expect.objectContaining({
+      frameId: 7,
+      url: 'https://passport.jd.com/uc/loginService?aksParamsU=redacted',
+    }));
   });
 });

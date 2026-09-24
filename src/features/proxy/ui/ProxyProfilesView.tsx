@@ -6,7 +6,7 @@ import { Field } from '@/components/ui/field';
 import { Switch } from '@/components/ui/switch';
 import { request } from '@/platform/messaging/runtime';
 import type { ProxyProfile } from '@/types/models';
-import { PROXY_KIND_LABELS, proxyProfileDetail } from './presentation';
+import { normalizeBypass, PROXY_KIND_LABELS, proxyProfileDetail } from './presentation';
 import type { ProxyViewProps } from './types';
 import './proxy-workspace.css';
 import { ProxyStatusBar, StartupProxyOption, useProxyStatus } from './ProxyStatusBar';
@@ -34,7 +34,7 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
   }, [draft.id]);
 
   const persistDraft = async () => {
-    const saved = await request('proxy.save', draft);
+    const saved = await request('proxy.save', { ...draft, bypass: normalizeBypass(draft.bypass) });
     setState(saved);
     if (draft.authEnabled) {
       if (password) await request('proxy.auth.set', { profileId: draft.id, password });
@@ -98,7 +98,7 @@ export function ProxyProfilesView({ state, setState, run, busy }: ProxyViewProps
             <Field label="协议"><select value={draft.scheme || 'http'} onChange={(event) => setDraft({ ...draft, scheme: event.target.value as ProxyProfile['scheme'] })}><option value="http">HTTP</option><option value="https">HTTPS</option><option value="socks4">SOCKS4</option><option value="socks5">SOCKS5</option></select></Field>
             <Field label="主机"><input value={draft.host || ''} onChange={(event) => setDraft({ ...draft, host: event.target.value })} /></Field>
             <Field label="端口"><input type="number" min="1" max="65535" value={draft.port || ''} onChange={(event) => setDraft({ ...draft, port: Number(event.target.value) })} /></Field>
-            <Field label="绕过列表" hint="每行一个域名、IP 或 &lt;local&gt;"><textarea rows={5} value={draft.bypass.join('\n')} onChange={(event) => setDraft({ ...draft, bypass: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) })} /></Field>
+            <Field label="绕过列表" hint="每行一个域名、IP 或 &lt;local&gt;"><textarea rows={5} value={draft.bypass.join('\n')} onChange={(event) => setDraft({ ...draft, bypass: event.target.value.split(/\r?\n/) })} /></Field>
           </>}
           {draft.kind === 'pac_script' && <>
             <Field label="PAC URL"><input value={draft.pacUrl || ''} onChange={(event) => setDraft({ ...draft, pacUrl: event.target.value, pacScript: '' })} placeholder="https://example.com/proxy.pac" /></Field>
