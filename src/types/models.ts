@@ -246,6 +246,13 @@ export interface BridgePairingStatus {
   expiresAt?: number;
 }
 
+export interface DiscoveredYakEngine {
+  protocolVersion: number;
+  engineIdentityId: string;
+  engineInstanceId: string;
+  endpoint: string;
+}
+
 export type CapabilityScope =
   | 'browser.tabs.read'
   | 'browser.tabs.write'

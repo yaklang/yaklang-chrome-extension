@@ -23,6 +23,7 @@ import { AuthorizationTestingWorkspace } from '@/features/authorization-testing/
 import { AGENT_RUNTIME_STORAGE_KEY, AUDIT_STORAGE_KEY, isStateStorageChange } from '@/protocol/storage';
 import type {
   ActiveTabInfo, AgentRuntime, AuditEvent, BridgePairingStatus, BridgeStatus, BrowserCookie, BrowserRequestAnalysisBundle, CookieInput, CookieTransferFormat, EnterprisePolicyStatus, ExtensionState, HumanHandoff,
+  DiscoveredYakEngine,
   NetworkCaptureStatus, NetworkRequestExport, NetworkRequestRecord, PageContext, PageEvalResult,
   PageFrameSummary, PageNodeDetails, PageNodeSummary,
   UserAgentProfile, UserAgentProfileInput, YakPocGenerateResult,
@@ -810,7 +811,8 @@ function ContextTool({ tab, run, busy }: { tab?: ActiveTabInfo; run: (task: () =
 
 function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }: { state: ExtensionState; setState: (state: ExtensionState) => void; bridge: BridgeStatus; setBridge: (status: BridgeStatus) => void; tabs: ActiveTabInfo[]; run: (task: () => Promise<void>, success?: string) => Promise<void>; busy: boolean }) {
   const [draft, setDraft] = useState(state.bridge);
-  const [pairing, setPairing] = useState<BridgePairingStatus>({ state: 'idle', message: state.bridge.pairedEngine ? '当前浏览器已配对' : '尚未配对' });
+  const [pairing, setPairing] = useState<BridgePairingStatus>({ state: 'idle', message: state.bridge.pairedEngine ? '当前浏览器已配对' : '点击下方按钮查找正在运行的 Yakit' });
+  const [engines, setEngines] = useState<DiscoveredYakEngine[]>([]);
   const [panelDraft, setPanelDraft] = useState(state.floatingPanel);
   const [policy, setPolicy] = useState<EnterprisePolicyStatus>({ managed: false, policy: {}, warnings: [] });
   useEffect(() => {
@@ -838,8 +840,27 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
     setState(next);
     setPanelDraft(next.floatingPanel);
   }, '悬浮面板策略已保存');
+  const pairWithEngine = async (engine: DiscoveredYakEngine) => {
+    const next = await request('bridge.config.save', { ...state.bridge, transport: 'websocket', endpoint: engine.endpoint });
+    setState(next);
+    setDraft(next.bridge);
+    setEngines([]);
+    setPairing(await request('bridge.pair'));
+  };
+  const findLocalEngines = () => run(async () => {
+    setEngines([]);
+    const found = await request('bridge.discover');
+    if (found.length === 1) {
+      await pairWithEngine(found[0]);
+    } else if (found.length > 1) {
+      setEngines(found);
+      setPairing({ state: 'idle', message: `发现 ${found.length} 个正在运行的 Yakit，请选择一个连接` });
+    } else {
+      setPairing(await request('bridge.pair'));
+    }
+  });
   return <div className="section-view engine-view">
-    <div className="page-heading"><div><h1>Yak 引擎连接</h1><p>扩展主动连接本机 Bridge，网页无法直接访问此通道。</p></div><span className={`large-status ${bridge.state}`}><Radio size={16} />{bridge.message}</span></div>
+    <div className="page-heading"><div><h1>连接 Yakit</h1><p>查找并连接正在本机运行的 Yakit。</p></div><span className={`large-status ${bridge.state}`}><Radio size={16} />{bridge.message}</span></div>
     {policy.managed && <div className="managed-policy-banner"><ShieldCheck size={16} /><span><strong>此浏览器由组织策略管理</strong><small>{policy.policy.disableWebSocket ? '必须使用 Native Messaging' : policy.policy.bridgeTransport ? `传输锁定为 ${policy.policy.bridgeTransport}` : '连接与授权限制已应用'}{policy.policy.maxGrantMinutes ? ` · 授权最长 ${policy.policy.maxGrantMinutes} 分钟` : ''}{policy.policy.allowProgramEval === false ? ' · 程序 Eval 已禁用' : ''}</small>{policy.warnings.map((warning) => <i key={warning}>{warning}</i>)}</span></div>}
     {bridge.state === 'connected' && <div className="bridge-identity-strip"><div><span>引擎实例</span><code title={bridge.engineInstanceId}>{bridge.engineInstanceId?.slice(0, 18)}</code></div><div><span>连接</span><code title={bridge.connectionId}>{bridge.connectionId?.slice(0, 18)}</code></div><div><span>会话</span><code title={bridge.sessionId}>{bridge.sessionId?.slice(0, 18)}</code></div><div><span>心跳</span><strong>{bridge.latencyMs === undefined ? '等待首个回执' : `${bridge.latencyMs} ms`}</strong></div><div><span>恢复</span><strong>{bridge.resumed ? '已恢复 task session' : '新会话'}</strong></div></div>}
     <div className="engine-layout"><div className="settings-form">
@@ -847,8 +868,9 @@ function EngineSettings({ state, setState, bridge, setBridge, tabs, run, busy }:
         <div className="pairing-workspace__heading"><span className="pairing-icon"><KeyRound size={19} /></span><div><h2>{state.bridge.pairedEngine ? '浏览器已安全配对' : pairing.state === 'pending' ? '等待 Yakit 确认' : '连接本机 Yakit'}</h2><p>{state.bridge.pairedEngine ? '设备身份已锁定到首次批准的 Yak 引擎。' : pairing.message}</p></div></div>
         {pairing.state === 'pending' && <div className="pairing-code" aria-live="polite"><span>配对验证码</span><strong>{pairing.code?.slice(0, 3)} {pairing.code?.slice(3)}</strong><small>{pairing.expiresAt ? `${Math.max(0, Math.ceil((pairing.expiresAt - Date.now()) / 1000))} 秒内有效` : ''}</small></div>}
         {state.bridge.pairedEngine && <div className="paired-engine-meta"><div><span>引擎身份</span><code title={state.bridge.pairedEngine.engineIdentityId}>{state.bridge.pairedEngine.engineIdentityId.slice(0, 24)}</code></div><div><span>设备 ID</span><code title={state.bridge.pairedEngine.deviceId}>{state.bridge.pairedEngine.deviceId.slice(0, 24)}</code></div></div>}
+        {engines.length > 1 && <div className="engine-discovery-list" aria-live="polite">{engines.map((engine, index) => <div className="engine-discovery-row" key={`${engine.engineIdentityId}:${engine.engineInstanceId}`}><span className="engine-discovery-icon"><Server size={17} /></span><div><strong>本机 Yakit {index + 1}</strong><small>端口 {new URL(engine.endpoint).port}</small></div><Button size="sm" variant="primary" disabled={busy} onClick={() => void run(() => pairWithEngine(engine))}>连接</Button></div>)}</div>}
         <div className="editor-actions">
-          {!state.bridge.pairedEngine && pairing.state !== 'pending' && <Button variant="primary" disabled={busy || pairing.state === 'requesting'} onClick={() => void run(async () => setPairing(await request('bridge.pair')))}><Power size={16} />{pairing.state === 'requesting' ? '正在查找' : '查找本机 Yakit'}</Button>}
+          {!state.bridge.pairedEngine && pairing.state !== 'pending' && <Button variant="primary" disabled={busy || pairing.state === 'requesting'} onClick={() => void findLocalEngines()}><Search size={16} />{busy ? '正在查找' : '查找本机 Yakit'}</Button>}
           {!state.bridge.pairedEngine && pairing.state === 'pending' && <Button disabled={busy} onClick={() => void run(async () => setPairing(await request('bridge.pair.cancel')))}><X size={16} />取消申请</Button>}
           {state.bridge.pairedEngine && <Button variant="primary" disabled={busy} onClick={() => void run(async () => { if (bridge.state === 'connected') await request('bridge.disconnect'); else await request('bridge.connect'); setBridge(await request('bridge.status')); }, bridge.state === 'connected' ? 'Bridge 已断开' : 'Bridge 正在连接')}><Power size={16} />{bridge.state === 'connected' ? '断开连接' : '连接引擎'}</Button>}
           {state.bridge.pairedEngine && <Button variant="ghost" disabled={busy} onClick={() => { if (window.confirm('解除当前 Yak 引擎的本地配对？浏览器安装身份会保留，重新配对时 Yakit 将更新原可信记录。')) void run(async () => { const next = await request('bridge.unpair'); setState(next); setDraft(next.bridge); }, '本地配对凭据已清除'); }}><Trash2 size={16} />解除配对</Button>}

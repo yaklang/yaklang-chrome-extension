@@ -6,6 +6,7 @@ import type {
   BridgeStatus,
   BridgeConfig,
   BridgePairingStatus,
+  DiscoveredYakEngine,
   BridgePublicKey,
   CapabilityScope,
   BrowserCookie,
@@ -258,6 +259,7 @@ export interface ExtensionRequestMap {
     output: BridgeStatus;
   };
   'bridge.pair': { input: undefined; output: BridgePairingStatus };
+  'bridge.discover': { input: undefined; output: DiscoveredYakEngine[] };
   'bridge.pair.cancel': { input: undefined; output: BridgePairingStatus };
   'bridge.pair.status': { input: undefined; output: BridgePairingStatus };
   'bridge.unpair': { input: undefined; output: ExtensionState };
