@@ -246,6 +246,13 @@ export interface BridgePairingStatus {
   expiresAt?: number;
 }
 
+export interface DiscoveredYakEngine {
+  protocolVersion: number;
+  engineIdentityId: string;
+  engineInstanceId: string;
+  endpoint: string;
+}
+
 export type CapabilityScope =
   | 'browser.tabs.read'
   | 'browser.tabs.write'
@@ -1482,15 +1489,6 @@ export interface DiagnosticsBundle {
   extension: { version: string; manifestVersion: number; buildChannel: string; permissions: string[] };
   platform: { os: string; arch: string };
   bridge: Omit<BridgeStatus, 'taskId' | 'grantId'>;
-  pairing: Omit<BridgePairingStatus, 'code'> & { hasVerificationCode: boolean };
-  bridgeConfiguration: {
-    transport: BridgeConfig['transport'];
-    endpoint: string;
-    nativeHost: string;
-    autoConnect: boolean;
-    paired: boolean;
-    managedInstance?: BridgeConfig['managedInstance'];
-  };
   policy: EnterprisePolicyStatus;
   state: {
     proxyProfiles: number;

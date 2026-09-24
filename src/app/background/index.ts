@@ -409,10 +409,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
     }
     case 'agent.actions.clear': return ok(await clearAgentActions());
     case 'policy.status': return ok(await getEnterprisePolicy());
-    case 'diagnostics.export': return ok(await createDiagnosticsBundle(
-      engineBridge.getStatus(),
-      engineBridge.getPairingStatus(),
-    ));
+    case 'diagnostics.export': return ok(await createDiagnosticsBundle(engineBridge.getStatus()));
     case 'metrics.get': return ok(await getRuntimeMetrics());
     case 'metrics.reset': return ok(await resetRuntimeMetrics());
     case 'bridge.config.save': {
@@ -474,6 +471,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
         throw error;
       }
     }
+    case 'bridge.discover': return ok(await engineBridge.discoverLocalEngines());
     case 'bridge.pair.cancel': return ok(engineBridge.cancelPairing());
     case 'bridge.pair.status': return ok(engineBridge.getPairingStatus());
     case 'bridge.unpair': {

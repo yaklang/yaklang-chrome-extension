@@ -396,6 +396,33 @@ describe('Engine Bridge transport lifecycle', () => {
     });
   });
 
+  it('finds every local Yak engine in the bridge port range', async () => {
+    fixture.state.bridge = bridgeConfig(false);
+    const bridge = new EngineBridge();
+    const pending = bridge.discoverLocalEngines();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(FakeWebSocket.instances).toHaveLength(16);
+    for (const index of [0, 2]) {
+      const socket = FakeWebSocket.instances[index];
+      socket.open();
+      socket.receive({
+        type: 'engine',
+        protocolVersion: BRIDGE_PROTOCOL_VERSION,
+        engineIdentityId: `engine-identity-${index}`,
+        engineInstanceId: `engine-instance-${index}`,
+        endpoint: `ws://127.0.0.1:${64333 + index}/extension`,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(801);
+
+    await expect(pending).resolves.toEqual([
+      expect.objectContaining({ endpoint: 'ws://127.0.0.1:64333/extension' }),
+      expect.objectContaining({ endpoint: 'ws://127.0.0.1:64335/extension' }),
+    ]);
+  });
+
   it('uses the engine pairing deadline locally after pair_pending', async () => {
     fixture.state.bridge = bridgeConfig(false);
     const bridge = new EngineBridge();

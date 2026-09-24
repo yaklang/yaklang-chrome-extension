@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import type { BridgeEnvelope } from '@/types/messages';
-import type { BridgePublicKey } from '@/types/models';
+import type { BridgePublicKey, DiscoveredYakEngine } from '@/types/models';
 import {
   browserTransformExecuteSchema,
   browserTransformPacketSchema,
@@ -30,6 +30,32 @@ export interface BridgePairingEnvelope {
   expiresAt?: number;
   deviceId?: string;
   message?: string;
+}
+
+export function parseBridgeDiscoveryEnvelope(raw: unknown): DiscoveredYakEngine {
+  const input = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Yak 引擎发现消息无效');
+  const message = input as Record<string, unknown>;
+  const allowed = new Set(['type', 'protocolVersion', 'engineIdentityId', 'engineInstanceId', 'endpoint']);
+  const unexpected = Object.keys(message).find((key) => !allowed.has(key));
+  if (unexpected) throw new Error(`Yak 引擎发现消息包含未声明字段 $.${unexpected}`);
+  if (message.type !== 'engine' || message.protocolVersion !== BRIDGE_PROTOCOL_VERSION) throw new Error('Yak 引擎版本不兼容');
+  for (const key of ['engineIdentityId', 'engineInstanceId'] as const) {
+    if (typeof message[key] !== 'string' || !message[key] || message[key].length > 160) throw new Error(`Yak 引擎 ${key} 无效`);
+  }
+  if (typeof message.endpoint !== 'string' || message.endpoint.length > 2_048) throw new Error('Yak 引擎地址无效');
+  const endpoint = new URL(message.endpoint);
+  if (!['ws:', 'wss:'].includes(endpoint.protocol)
+    || !['127.0.0.1', 'localhost', '[::1]', '::1'].includes(endpoint.hostname)
+    || endpoint.pathname !== '/extension' || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+    throw new Error('Yak 引擎地址必须是本机 Bridge');
+  }
+  return {
+    protocolVersion: message.protocolVersion,
+    engineIdentityId: message.engineIdentityId,
+    engineInstanceId: message.engineInstanceId,
+    endpoint: message.endpoint,
+  } as DiscoveredYakEngine;
 }
 
 const id = v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(160));

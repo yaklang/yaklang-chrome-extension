@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import type { BridgeEnvelope } from '@/types/messages';
-import type { BridgeConfig, BridgePairingStatus, BridgePublicKey, BridgeStatus } from '@/types/models';
+import type { BridgeConfig, BridgePairingStatus, BridgePublicKey, BridgeStatus, DiscoveredYakEngine } from '@/types/models';
 import {
   BRIDGE_CAPABILITIES,
   capabilityVisibleToAgent,
@@ -9,7 +9,7 @@ import {
 import {
   BRIDGE_CHUNK_BYTES, BRIDGE_CHUNK_THRESHOLD_BYTES, BRIDGE_CHUNK_TIMEOUT_MS,
   BRIDGE_MAX_CHUNK_TRANSFERS, BRIDGE_MAX_MESSAGE_BYTES, BRIDGE_PROTOCOL_VERSION, parseBridgeEnvelope,
-  parseBridgePairingEnvelope, type BridgePairingEnvelope,
+  parseBridgeDiscoveryEnvelope, parseBridgePairingEnvelope, type BridgePairingEnvelope,
 } from '@/protocol/bridge';
 import { getBridgeRuntimeSession, getState, setBridgeRuntimeSession, updateState } from '@/platform/storage/state';
 import { routeCapability } from '@/features/grants/service';
@@ -32,6 +32,8 @@ const HANDSHAKE_TIMEOUT = 5_000;
 const MAX_CONCURRENT_REQUESTS = 8;
 const ENGINE_REQUEST_TIMEOUT = 10_000;
 const MAX_OUTGOING_REQUESTS = 4;
+const DISCOVERY_PORTS = 16;
+const DISCOVERY_TIMEOUT = 800;
 
 export function browserClientIdentity(
   config: BridgeConfig,
@@ -134,6 +136,45 @@ export class EngineBridge {
       this.expirePairing(this.pairingStatus.requestId);
     }
     return this.pairingStatus;
+  }
+
+  async discoverLocalEngines(): Promise<DiscoveredYakEngine[]> {
+    const config = (await getState()).bridge;
+    if (config.transport !== 'websocket' || !isLoopbackEndpoint(config.endpoint)) return [];
+    const configured = new URL(config.endpoint);
+    const firstPort = Number(configured.port) || (configured.protocol === 'wss:' ? 443 : 80);
+    const candidates = Array.from(
+      { length: Math.min(DISCOVERY_PORTS, 65_536 - firstPort) },
+      (_, offset) => {
+        const url = new URL(configured);
+        url.port = String(firstPort + offset);
+        url.pathname = '/discovery';
+        url.search = '';
+        url.hash = '';
+        return url.toString();
+      },
+    );
+    const results = await Promise.all(candidates.map((url) => new Promise<DiscoveredYakEngine | undefined>((resolve) => {
+      let socket: WebSocket;
+      try { socket = new WebSocket(url); } catch { resolve(undefined); return; }
+      let settled = false;
+      const finish = (engine?: DiscoveredYakEngine) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        if (socket.readyState !== WebSocket.CLOSED) socket.close();
+        resolve(engine);
+      };
+      const timer = globalThis.setTimeout(() => finish(), DISCOVERY_TIMEOUT);
+      socket.addEventListener('message', (event) => {
+        try { finish(parseBridgeDiscoveryEnvelope(String(event.data))); } catch { finish(); }
+      });
+      socket.addEventListener('error', () => finish());
+      socket.addEventListener('close', () => finish());
+    })));
+    const engines = results.filter((engine): engine is DiscoveredYakEngine => Boolean(engine));
+    return [...new Map(engines.map((engine) => [`${engine.engineIdentityId}:${engine.engineInstanceId}`, engine])).values()]
+      .sort((left, right) => Number(new URL(left.endpoint).port) - Number(new URL(right.endpoint).port));
   }
 
   emitEvent(method: string, params: unknown): void {
