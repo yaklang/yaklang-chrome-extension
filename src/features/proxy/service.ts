@@ -6,6 +6,10 @@ import type {
 } from '@/types/models';
 import { getState, updateState } from '@/platform/storage/state';
 import {
+  managedMITMRoutes, replaceManagedMITMRoutes, proxyWithMITMIngress, sameMITMRouting, startupProxyProfile,
+  type ManagedMITMRoute,
+} from './mitm-ingress-runtime';
+import {
   compileProxyRules, previewProxyRules, profileToPac, proxyCompilationRevision,
   sortedProxyRules,
   type CompiledProxyArtifact, type ProxyCompilationInput,
@@ -75,6 +79,7 @@ function assertUniqueIds(values: string[], label: string): void {
 }
 
 function chromeProxyValue(profile: ProxyProfile): object {
+  profile = proxyWithMITMIngress(profile);
   if (profile.kind === 'direct') return { mode: 'direct' };
   if (profile.kind === 'system') return { mode: 'system' };
   if (profile.kind === 'pac_script') {
@@ -99,6 +104,7 @@ function chromeProxyValue(profile: ProxyProfile): object {
 }
 
 function firefoxProxyValue(profile: ProxyProfile): object {
+  profile = proxyWithMITMIngress(profile);
   if (profile.kind === 'direct') return { proxyType: 'none' };
   if (profile.kind === 'system') return { proxyType: 'system' };
   if (profile.kind === 'pac_script') {
@@ -170,7 +176,7 @@ export async function getProxyStatus(state?: ExtensionState): Promise<ProxyStatu
   let activeProfileId: string | undefined;
   const current = state || await getState();
   let followingStartup = control === 'controllable_by_this_extension';
-  if (followingStartup && current.startupProxy) {
+  if ((followingStartup || control === 'controlled_by_this_extension' && current.activeProxyId === '') && current.startupProxy) {
     try {
       const endpoint = current.startupProxy === 'direct' ? undefined : new URL(current.startupProxy);
       followingStartup = proxyConfigMatches(value, endpoint ? chromeProxyValue({
@@ -230,7 +236,7 @@ async function compilationInput(state: ExtensionState, withRules = true): Promis
     manualRules: state.proxyRules,
     sources: state.proxyRuleSources,
     sourceRules,
-    profiles: state.proxyProfiles,
+    profiles: state.proxyProfiles.map(proxyWithMITMIngress),
     routing: state.proxyRouting,
   };
 }
@@ -278,6 +284,40 @@ export async function switchProxy(profileId: string): Promise<ExtensionState> {
     await setBrowserProxyProfile(profile);
     return { ...current, activeProxyId: profileId };
   });
+}
+
+// Reapply only a configuration we still own (or the verified launch proxy).
+// Durable endpoint settings retain the user's original host/port; runtime
+// ingress ports also participate in PAC compilation revisions.
+export async function applyManagedMITMRoutes(next: ManagedMITMRoute[]): Promise<void> {
+  const previous = managedMITMRoutes();
+  if (sameMITMRouting(previous, next)) {
+    replaceManagedMITMRoutes(next);
+    return;
+  }
+  await updateState(async (current) => {
+    const status = await getProxyStatus(current);
+    replaceManagedMITMRoutes(next);
+    try {
+      if (status.followingStartup) {
+        const startup = startupProxyProfile(current.startupProxy);
+        if (startup) await setBrowserProxyProfile(startup);
+      } else if (status.activeProfileId === 'auto') {
+        return withAppliedRuntime(current, await applyState(current));
+      } else if (status.activeProfileId) {
+        const profile = current.proxyProfiles.find((item) => item.id === status.activeProfileId);
+        if (profile) await setBrowserProxyProfile(profile);
+      }
+      return current;
+    } catch (error) {
+      replaceManagedMITMRoutes(previous);
+      throw error;
+    }
+  });
+}
+
+export function hasMITMProxyCredentials(profile: ProxyProfile): boolean {
+  return Boolean(profile.authEnabled && profile.authUsername && authPasswords.get(profile.id));
 }
 
 export async function saveProxyProfile(profile: ProxyProfile): Promise<ExtensionState> {
@@ -717,8 +757,10 @@ browser.storage.onChanged.addListener((changes) => {
 browser.webRequest.onAuthRequired.addListener((details, asyncCallback) => {
   const resolveCredentials = (state?: ExtensionState) => {
     const challenger = details.challenger;
-    const profile = state?.proxyProfiles.find((item) => item.kind === 'fixed_servers'
-      && item.host === challenger?.host && item.port === challenger?.port);
+    const profile = state?.proxyProfiles.find((item) => {
+      const effective = proxyWithMITMIngress(item);
+      return effective.kind === 'fixed_servers' && effective.host === challenger?.host && effective.port === challenger?.port;
+    });
     const password = profile && authPasswords.get(profile.id);
     return details.isProxy && profile?.authEnabled && profile.authUsername && password
       ? { authCredentials: { username: profile.authUsername, password } }

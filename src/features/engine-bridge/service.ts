@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import type { BridgeEnvelope } from '@/types/messages';
-import type { BridgeConfig, BridgePairingStatus, BridgePublicKey, BridgeStatus } from '@/types/models';
+import type { BridgeConfig, BridgePairingStatus, BridgePublicKey, BridgeStatus, DiscoveredYakEngine } from '@/types/models';
 import {
   BRIDGE_CAPABILITIES,
   capabilityVisibleToAgent,
@@ -9,9 +9,10 @@ import {
 import {
   BRIDGE_CHUNK_BYTES, BRIDGE_CHUNK_THRESHOLD_BYTES, BRIDGE_CHUNK_TIMEOUT_MS,
   BRIDGE_MAX_CHUNK_TRANSFERS, BRIDGE_MAX_MESSAGE_BYTES, BRIDGE_PROTOCOL_VERSION, parseBridgeEnvelope,
-  parseBridgePairingEnvelope, type BridgePairingEnvelope,
+  parseBridgeDiscoveryEnvelope, parseBridgePairingEnvelope, type BridgePairingEnvelope,
 } from '@/protocol/bridge';
 import { getBridgeRuntimeSession, getState, setBridgeRuntimeSession, updateState } from '@/platform/storage/state';
+import { getEnterprisePolicy } from '@/platform/policy/managed';
 import { routeCapability } from '@/features/grants/service';
 import { browserInstanceAccess } from '@/features/grants/capability-context';
 import { errorCode, ExtensionError, isDeniedErrorCode } from '@/shared/errors';
@@ -22,6 +23,7 @@ import {
   clearBrowserBridgeIdentity, clientAuthPayload, engineChallengePayload, getOrCreateBrowserBridgeIdentity,
   pairingVerificationCode, publicKeysEqual, randomBridgeNonce, signBridgePayload, verifyBridgePayload,
 } from './identity';
+import { bridgeDiscoveryEndpoints } from './discovery';
 
 const STATUS_EVENT = 'bridge.status.changed';
 const PAIRING_STATUS_EVENT = 'bridge.pairing.status.changed';
@@ -32,6 +34,7 @@ const HANDSHAKE_TIMEOUT = 5_000;
 const MAX_CONCURRENT_REQUESTS = 8;
 const ENGINE_REQUEST_TIMEOUT = 10_000;
 const MAX_OUTGOING_REQUESTS = 4;
+const DISCOVERY_TIMEOUT = 800;
 
 export function browserClientIdentity(
   config: BridgeConfig,
@@ -90,6 +93,12 @@ function isLoopbackEndpoint(endpoint: string): boolean {
 }
 
 export class EngineBridge {
+  private readonly statusListeners = new Set<(status: BridgeStatus) => void>();
+
+  subscribeStatus(listener: (status: BridgeStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => { this.statusListeners.delete(listener); };
+  }
   private socket?: WebSocket;
   private nativePort?: Browser.runtime.Port;
   private reconnectTimer?: ReturnType<typeof globalThis.setTimeout>;
@@ -101,6 +110,7 @@ export class EngineBridge {
   private handshakeChallengeAnswered = false;
   private connectPromise?: Promise<void>;
   private pairingSocket?: WebSocket;
+  private pairingGeneration = 0;
   private pairingTimer?: ReturnType<typeof globalThis.setTimeout>;
   private pairingResolve?: (status: BridgePairingStatus) => void;
   private pairingReject?: (error: Error) => void;
@@ -120,6 +130,7 @@ export class EngineBridge {
   private heartbeatSequence = 0;
   private transportFailureMessage?: string;
   private manuallyClosed = false;
+  private connectionGeneration = 0;
   private status: BridgeStatus = { state: 'disconnected', message: '未连接引擎' };
   private pairingStatus: BridgePairingStatus = { state: 'idle', message: '尚未配对' };
 
@@ -134,6 +145,49 @@ export class EngineBridge {
       this.expirePairing(this.pairingStatus.requestId);
     }
     return this.pairingStatus;
+  }
+
+  async discoverLocalEngines(config?: BridgeConfig): Promise<DiscoveredYakEngine[]> {
+    config ||= (await getState()).bridge;
+    if (config.transport !== 'websocket' || !isLoopbackEndpoint(config.endpoint)) return [];
+    const policy = (await getEnterprisePolicy()).policy;
+    if (policy.disableWebSocket || policy.bridgeTransport === 'native') return [];
+    const candidates = policy.bridgeEndpoint
+      ? [new URL('/discovery', config.endpoint).toString()]
+      : bridgeDiscoveryEndpoints(config.endpoint);
+    const results = await Promise.all(candidates.map((url) => new Promise<DiscoveredYakEngine | undefined>((resolve) => {
+      let socket: WebSocket;
+      try { socket = new WebSocket(url); } catch { resolve(undefined); return; }
+      let settled = false;
+      const finish = (engine?: DiscoveredYakEngine) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timer);
+        if (socket.readyState !== WebSocket.CLOSED) socket.close();
+        resolve(engine);
+      };
+      const timer = globalThis.setTimeout(() => finish(), DISCOVERY_TIMEOUT);
+      socket.addEventListener('message', (event) => {
+        try {
+          const engine = parseBridgeDiscoveryEnvelope(String(event.data));
+          const probed = new URL(url);
+          const advertised = new URL(engine.endpoint);
+          if (advertised.port !== probed.port || advertised.protocol !== probed.protocol) {
+            finish();
+            return;
+          }
+          // Discovery is a hint. Authenticate the actual probed endpoint using
+          // the existing signed handshake before trusting or saving it.
+          probed.pathname = '/extension';
+          finish({ ...engine, endpoint: probed.toString() });
+        } catch { finish(); }
+      });
+      socket.addEventListener('error', () => finish());
+      socket.addEventListener('close', () => finish());
+    })));
+    const engines = results.filter((engine): engine is DiscoveredYakEngine => Boolean(engine));
+    return [...new Map(engines.map((engine) => [`${engine.engineIdentityId}:${engine.engineInstanceId}`, engine])).values()]
+      .sort((left, right) => Number(new URL(left.endpoint).port) - Number(new URL(right.endpoint).port));
   }
 
   emitEvent(method: string, params: unknown): void {
@@ -185,9 +239,9 @@ export class EngineBridge {
     if (!effectiveConfig.pairedEngine) throw new Error('浏览器插件尚未与 Yak 引擎配对');
     const attempt = (effectiveConfig.transport === 'native'
       ? this.connectNative(effectiveConfig)
-      : this.connectWebSocket(effectiveConfig)).catch((error) => {
+      : this.connectWebSocketWithDiscovery(effectiveConfig)).catch((error) => {
       const failure = error instanceof Error ? error : new Error(String(error));
-      if (!this.manuallyClosed && this.status.state !== 'error') this.setStatus({ state: 'error', message: failure.message });
+      if (!this.manuallyClosed) this.setStatus({ state: 'error', message: failure.message });
       throw failure;
     });
     const tracked = attempt.finally(() => {
@@ -198,6 +252,7 @@ export class EngineBridge {
   }
 
   disconnect(): void {
+    this.connectionGeneration++;
     this.manuallyClosed = true;
     this.transportFailureMessage = undefined;
     if (this.reconnectTimer) globalThis.clearTimeout(this.reconnectTimer);
@@ -214,6 +269,41 @@ export class EngineBridge {
 
   cancelActiveRequests(): void {
     this.abortInFlight();
+  }
+
+  private async connectWebSocketWithDiscovery(config: BridgeConfig): Promise<void> {
+    const generation = this.connectionGeneration;
+    try {
+      await this.connectWebSocket(config);
+      return;
+    } catch (error) {
+      if (this.manuallyClosed || generation !== this.connectionGeneration || !isLoopbackEndpoint(config.endpoint)) throw error;
+      const engines = await this.discoverLocalEngines(config);
+      if (this.manuallyClosed || generation !== this.connectionGeneration) throw new Error('Bridge 连接已取消');
+      const matches = engines.filter((engine) => engine.engineIdentityId === config.pairedEngine?.engineIdentityId
+        && engine.endpoint !== config.endpoint);
+      let failure = error;
+      for (const engine of matches) {
+        if (this.manuallyClosed || generation !== this.connectionGeneration) throw new Error('Bridge 连接已取消');
+        try {
+          await this.connectWebSocket({ ...config, endpoint: engine.endpoint });
+        } catch (nextError) {
+          failure = nextError;
+          continue;
+        }
+        // Do not overwrite a config edited or paired again during discovery.
+        try {
+          await updateState((state) => state.bridge.endpoint === config.endpoint
+            && state.bridge.pairedEngine?.engineIdentityId === config.pairedEngine?.engineIdentityId
+            ? { ...state, bridge: { ...state.bridge, endpoint: engine.endpoint } }
+            : state);
+        } catch {
+          void appendAuditEvent({ category: 'bridge', action: 'bridge.endpoint.save', outcome: 'error', summary: '连接成功，但自动发现的地址未能保存' });
+        }
+        return;
+      }
+      throw new Error(`${failure instanceof Error ? failure.message : String(failure)}；未找到可连接的已配对引擎。请确认引擎已启动并启用了浏览器 Bridge（WSL 引擎也需要监听本机入口）`);
+    }
   }
 
   private async connectWebSocket(config: BridgeConfig): Promise<void> {
@@ -233,7 +323,7 @@ export class EngineBridge {
     });
     socket.addEventListener('error', () => {
       if (this.socket !== socket) return;
-      const error = new Error('Bridge 连接失败');
+      const error = new Error(`Bridge 连接失败：${config.endpoint}`);
       if (this.status.state === 'connected') {
         this.failTransport(error.message);
         return;
@@ -684,7 +774,11 @@ export class EngineBridge {
 
   private scheduleReconnect(config: BridgeConfig): void {
     if (this.reconnectTimer) globalThis.clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = globalThis.setTimeout(() => void this.connect(config).catch(() => undefined), RECONNECT_DELAY);
+    this.reconnectTimer = globalThis.setTimeout(() => {
+      void getState().then(({ bridge }) => {
+        if (!this.manuallyClosed && config.autoConnect && bridge.autoConnect && bridge.pairedEngine) return this.connect(bridge);
+      }).catch(() => undefined);
+    }, RECONNECT_DELAY);
   }
 
   private transportAvailable(): boolean {
@@ -788,17 +882,43 @@ export class EngineBridge {
       recordBridgeState(status.state as 'connecting' | 'connected' | 'disconnected' | 'error');
     }
     this.status = status;
+    for (const listener of this.statusListeners) listener(status);
     void browser.runtime.sendMessage({ action: STATUS_EVENT, payload: status }).catch(() => undefined);
   }
 
   async startPairing(): Promise<BridgePairingStatus> {
-    const config = (await getState()).bridge;
+    let config = (await getState()).bridge;
     if (config.pairedEngine) return { state: 'approved', message: '当前浏览器已经完成配对', engineIdentityId: config.pairedEngine.engineIdentityId };
     if (!isLoopbackEndpoint(config.endpoint)) throw new Error('配对仅允许访问本机 Yak Bridge');
     const currentPairing = this.getPairingStatus();
     if (this.pairingSocket && ['requesting', 'pending'].includes(currentPairing.state)) return currentPairing;
+    const discoveryGeneration = this.pairingGeneration;
+    const engines = await this.discoverLocalEngines(config);
+    if (discoveryGeneration !== this.pairingGeneration) throw new ExtensionError('cancelled', '配对已取消');
+    const latest = (await getState()).bridge;
+    if (discoveryGeneration !== this.pairingGeneration || latest.pairedEngine
+      || latest.endpoint !== config.endpoint || latest.installationId !== config.installationId) {
+      throw new ExtensionError('cancelled', '配对设置已变更，请重新连接');
+    }
+    const selected = engines.find((engine) => engine.endpoint === config.endpoint)
+      || (engines.length === 1 ? engines[0] : undefined);
+    if (!selected && engines.length > 1) {
+      const error = new Error('发现多个 Yak 引擎，请在连接设置中选择要配对的引擎');
+      this.setPairingStatus({ state: 'error', message: error.message });
+      throw error;
+    }
+    if (selected && selected.endpoint !== config.endpoint) {
+      const previousEndpoint = config.endpoint;
+      config = { ...config, endpoint: selected.endpoint };
+      await updateState((state) => !state.bridge.pairedEngine && state.bridge.endpoint === previousEndpoint
+        ? { ...state, bridge: { ...state.bridge, endpoint: selected.endpoint } }
+        : state);
+      if (discoveryGeneration !== this.pairingGeneration) throw new ExtensionError('cancelled', '配对已取消');
+    }
     this.cancelPairing(false);
+    const generation = this.pairingGeneration;
     const identity = await getOrCreateBrowserBridgeIdentity(config.installationId);
+    if (generation !== this.pairingGeneration) throw new ExtensionError('cancelled', '配对已取消');
     const browserIdentity = browserClientIdentity(config);
     const clientNonce = randomBridgeNonce();
     const pairingURL = new URL(config.endpoint);
@@ -838,7 +958,7 @@ export class EngineBridge {
       });
     });
     socket.addEventListener('error', () => {
-      if (this.pairingSocket === socket) this.failPairing(new Error('无法连接本机 Yak 配对服务'));
+      if (this.pairingSocket === socket) this.failPairing(new Error(`无法连接本机 Yak 配对服务：${pairingURL}。请确认引擎已启动并启用了浏览器 Bridge`));
     });
     socket.addEventListener('close', () => {
       if (this.pairingSocket !== socket) return;
@@ -849,6 +969,7 @@ export class EngineBridge {
   }
 
   cancelPairing(notify = true): BridgePairingStatus {
+    this.pairingGeneration++;
     if (this.pairingTimer) globalThis.clearTimeout(this.pairingTimer);
     const reject = this.pairingReject;
     this.pairingTimer = undefined;

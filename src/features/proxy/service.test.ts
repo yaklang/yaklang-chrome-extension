@@ -17,6 +17,7 @@ const harness = vi.hoisted(() => ({
   putSourceRevision: vi.fn(async () => undefined),
   pruneSourceRevisions: vi.fn(async () => undefined),
   deleteSource: vi.fn(async () => undefined),
+  artifacts: new Map<string, any>(),
   authListener: undefined as unknown as (
     details: { isProxy: boolean; challenger?: { host: string; port: number } },
     callback?: (response: unknown) => void,
@@ -49,20 +50,24 @@ vi.mock('@/platform/storage/state', () => ({
 
 vi.mock('./repository', () => ({
   deleteSource: harness.deleteSource,
-  getCompiledArtifact: vi.fn(async () => undefined),
+  getCompiledArtifact: vi.fn(async (revision: string) => harness.artifacts.get(revision)),
   getSourceContent: vi.fn(async () => undefined),
   getSourceRulePage: vi.fn(async () => ({ sourceId: 'source', offset: 0, limit: 100, total: 0, rules: [] })),
   getSourceRules: vi.fn(async (sourceId: string) => harness.sourceRules.get(sourceId) || []),
   pruneSourceRevisions: harness.pruneSourceRevisions,
-  putCompiledArtifact: harness.putCompiledArtifact,
+  putCompiledArtifact: vi.fn(async (artifact) => {
+    harness.artifacts.set(artifact.revision, artifact);
+    await harness.putCompiledArtifact();
+  }),
   putSourceRevision: harness.putSourceRevision,
 }));
 
 import {
   applyProxyRules, importProxyConfiguration, refreshProxyRuleSource, removeProxyProfile,
   routeCurrentSite, saveProxyProfile, saveProxyRuleSource, setProxyAuthPassword, switchProxy,
-  getProxyStatus, releaseProxy, proxyConfigMatches,
+  getProxyStatus, releaseProxy, proxyConfigMatches, applyManagedMITMRoutes,
 } from './service';
+import { managedMITMRoutes, replaceManagedMITMRoutes, type ManagedMITMRoute } from './mitm-ingress-runtime';
 
 function baseState(): ExtensionState {
   return {
@@ -116,11 +121,18 @@ function configuration(sourceExport?: ProxyConfiguration['sources'][number]): Pr
   };
 }
 
+function ingress(port = 18081): ManagedMITMRoute {
+  return { proxyHost: '127.0.0.1', proxyPort: 8083, host: '127.0.0.1', port,
+    engineIdentityId: 'engine', instanceId: 'instance-A', expiresAt: Date.now() + 90_000 };
+}
+
 describe('proxy service', () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     harness.state = baseState();
     harness.sourceRules.clear();
+    harness.artifacts.clear();
+    replaceManagedMITMRoutes([]);
     vi.clearAllMocks();
     harness.proxySet.mockImplementation(async (details) => {
       harness.proxyGet.mockResolvedValue({ value: (details as any).value, levelOfControl: 'controlled_by_this_extension' });
@@ -128,6 +140,58 @@ describe('proxy service', () => {
     harness.proxyGet.mockResolvedValue({
       value: { mode: 'direct' }, levelOfControl: 'controllable_by_this_extension',
     });
+  });
+
+  it('routes the selected MITM through an instance port without changing its saved endpoint', async () => {
+    await switchProxy('yakit-mitm');
+    await applyManagedMITMRoutes([ingress()]);
+    expect((harness.proxySet.mock.lastCall?.[0] as any).value.rules.singleProxy.port).toBe(18081);
+    expect(harness.state!.proxyProfiles.find((profile) => profile.id === 'yakit-mitm')?.port).toBe(8083);
+    expect((await getProxyStatus()).activeProfileId).toBe('yakit-mitm');
+    harness.proxySet.mockClear();
+    await applyManagedMITMRoutes([{ ...ingress(), expiresAt: Date.now() + 100_000 }]);
+    expect(harness.proxySet).not.toHaveBeenCalled();
+    await applyManagedMITMRoutes([]);
+    expect((harness.proxySet.mock.lastCall?.[0] as any).value.rules.singleProxy.port).toBe(8083);
+  });
+
+  it('keeps following the YTray startup proxy while installing and removing an ingress', async () => {
+    harness.state!.activeProxyId = '';
+    harness.state!.startupProxy = 'http://127.0.0.1:8083';
+    harness.proxyGet.mockResolvedValue({ value: { mode: 'fixed_servers', rules: { singleProxy: { host: '127.0.0.1', port: 8083 } } } as any,
+      levelOfControl: 'controllable_by_this_extension' });
+    await applyManagedMITMRoutes([ingress()]);
+    expect((await getProxyStatus()).followingStartup).toBe(true);
+    expect(harness.state!.activeProxyId).toBe('');
+    await applyManagedMITMRoutes([]);
+    expect((harness.proxySet.mock.lastCall?.[0] as any).value.rules.singleProxy.port).toBe(8083);
+    expect((await getProxyStatus()).followingStartup).toBe(true);
+  });
+
+  it('recompiles PAC routes for instance ports and retains direct rules', async () => {
+    harness.state!.proxyRouting.defaultProfileId = 'yakit-mitm';
+    await applyProxyRules();
+    const previous = harness.state!.proxyRuntime.revision;
+    await applyManagedMITMRoutes([ingress()]);
+    const value = (harness.proxySet.mock.lastCall?.[0] as any).value;
+    expect(value.pacScript.data).toContain('127.0.0.1:18081');
+    expect(harness.state!.proxyRuntime.revision).not.toBe(previous);
+    expect((await getProxyStatus()).activeProfileId).toBe('auto');
+    await applyManagedMITMRoutes([]);
+    expect((harness.proxySet.mock.lastCall?.[0] as any).value.pacScript.data).toContain('127.0.0.1:8083');
+    expect(harness.state!.proxyRuntime.revision).toBe(previous);
+  });
+
+  it('does not take proxy control from another extension and rolls back failed ingress updates', async () => {
+    harness.proxyGet.mockResolvedValue({ value: { mode: 'direct' }, levelOfControl: 'controlled_by_other_extensions' });
+    await applyManagedMITMRoutes([ingress()]);
+    expect(harness.proxySet).not.toHaveBeenCalled();
+    replaceManagedMITMRoutes([]);
+    harness.proxyGet.mockResolvedValue({ value: { mode: 'direct' }, levelOfControl: 'controllable_by_this_extension' });
+    await switchProxy('yakit-mitm');
+    harness.proxySet.mockRejectedValueOnce(new Error('browser refused proxy'));
+    await expect(applyManagedMITMRoutes([ingress()])).rejects.toThrow('browser refused proxy');
+    expect(managedMITMRoutes()).toEqual([]);
   });
 
   it('distinguishes launch proxy from stored selection, verifies application and releases without selecting direct', async () => {

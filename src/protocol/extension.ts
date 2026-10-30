@@ -487,6 +487,7 @@ const payloadSchemas = {
     }, '启动代理只能包含协议、主机和端口'))])),
   }),
   'bridge.pair': noPayload,
+  'bridge.discover': noPayload,
   'bridge.pair.cancel': noPayload,
   'bridge.pair.status': noPayload,
   'bridge.unpair': noPayload,
