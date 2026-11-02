@@ -85,6 +85,10 @@ vi.mock('@/platform/storage/state', () => ({
   setBridgeRuntimeSession: fixture.setRuntimeSession,
 }));
 
+vi.mock('@/platform/policy/managed', () => ({
+  getEnterprisePolicy: vi.fn(async () => ({ managed: false, policy: {}, warnings: [] })),
+}));
+
 vi.mock('@/protocol/capabilities', () => ({
   BRIDGE_CAPABILITIES: [],
   capabilityVisibleToAgent: vi.fn((method: string) => ![
@@ -148,6 +152,7 @@ import {
   browserClientIdentity,
 } from './service';
 import { beginAgentAction } from '@/features/agent-runtime/service';
+import { getEnterprisePolicy } from '@/platform/policy/managed';
 import {
   BRIDGE_CHUNK_TIMEOUT_MS,
   BRIDGE_PROTOCOL_VERSION,
@@ -210,6 +215,7 @@ async function connect(bridge: EngineBridge): Promise<FakeWebSocket> {
 
 describe('Engine Bridge transport lifecycle', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     FakeWebSocket.instances.length = 0;
@@ -219,6 +225,8 @@ describe('Engine Bridge transport lifecycle', () => {
     vi.clearAllMocks();
     fixture.setRuntimeSession.mockResolvedValue(undefined);
     fixture.pairingCode.mockResolvedValue('123456');
+    vi.spyOn(EngineBridge.prototype, 'discoverLocalEngines').mockResolvedValue([]);
+    vi.mocked(getEnterprisePolicy).mockResolvedValue({ managed: false, policy: {}, warnings: [] });
   });
 
   afterEach(() => vi.useRealTimers());
@@ -396,12 +404,133 @@ describe('Engine Bridge transport lifecycle', () => {
     });
   });
 
+  it('finds every local Yak engine in the bridge port range', async () => {
+    vi.mocked(EngineBridge.prototype.discoverLocalEngines).mockRestore();
+    fixture.state.bridge = bridgeConfig(false);
+    const bridge = new EngineBridge();
+    const pending = bridge.discoverLocalEngines();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(FakeWebSocket.instances).toHaveLength(64);
+    for (const index of [0, 2]) {
+      const socket = FakeWebSocket.instances[index];
+      socket.open();
+      socket.receive({
+        type: 'engine',
+        protocolVersion: BRIDGE_PROTOCOL_VERSION,
+        engineIdentityId: `engine-identity-${index}`,
+        engineInstanceId: `engine-instance-${index}`,
+        endpoint: `ws://127.0.0.1:${64333 + index}/extension`,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(801);
+
+    await expect(pending).resolves.toEqual([
+      expect.objectContaining({ endpoint: 'ws://127.0.0.1:64333/extension' }),
+      expect.objectContaining({ endpoint: 'ws://127.0.0.1:64335/extension' }),
+    ]);
+  });
+
+  it('rediscovers only the paired engine and saves its authenticated new endpoint', async () => {
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue([
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, engineIdentityId: 'other-engine', engineInstanceId: 'other-instance', endpoint: 'ws://127.0.0.1:14333/extension' },
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, engineIdentityId: 'engine-identity-1', engineInstanceId: 'engine-instance-1', endpoint: 'ws://127.0.0.1:14334/extension' },
+    ]);
+    const pending = bridge.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWebSocket.instances[0].close();
+    await vi.advanceTimersByTimeAsync(0);
+    const migrated = FakeWebSocket.instances.at(-1)!;
+    expect(migrated.url).toBe('ws://127.0.0.1:14334/extension');
+    migrated.open();
+    migrated.receive({
+      type: 'challenge', protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      engineIdentityId: 'engine-identity-1', engineInstanceId: 'engine-instance-1',
+      challenge: 'engine-challenge-0123456789', signature: 'engine-signature',
+      timestamp: Date.now(), publicKey: enginePublicKey,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    migrated.receive(helloAck());
+    await pending;
+    expect(fixture.state.bridge.endpoint).toBe(migrated.url);
+    expect(bridge.getStatus().state).toBe('connected');
+    bridge.disconnect();
+  });
+
+  it('keeps a discovered address untrusted when the engine key differs', async () => {
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue([
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, engineIdentityId: 'engine-identity-1', engineInstanceId: 'spoofed-instance', endpoint: 'ws://127.0.0.1:14333/extension' },
+    ]);
+    const pending = bridge.connect();
+    const rejected = expect(pending).rejects.toThrow('身份与首次配对记录不一致');
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWebSocket.instances[0].close();
+    await vi.advanceTimersByTimeAsync(0);
+    const migrated = FakeWebSocket.instances.at(-1)!;
+    migrated.open();
+    migrated.receive({
+      type: 'challenge', protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      engineIdentityId: 'engine-identity-1', engineInstanceId: 'spoofed-instance',
+      challenge: 'engine-challenge-0123456789', signature: 'engine-signature',
+      timestamp: Date.now(), publicKey: { ...enginePublicKey, x: 'wrong-key' },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await rejected;
+    expect(migrated.sent).toEqual([]);
+    expect(fixture.state.bridge.endpoint).toBe('ws://127.0.0.1:64333/extension');
+    bridge.disconnect();
+  });
+
+  it('uses a discovered fallback port for a managed browser first pairing', async () => {
+    fixture.state.bridge = bridgeConfig(false);
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue([
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, engineIdentityId: 'new-engine', engineInstanceId: 'new-instance', endpoint: 'ws://127.0.0.1:14333/extension' },
+    ]);
+    const pending = bridge.startPairing();
+    await vi.advanceTimersByTimeAsync(0);
+    const pairing = FakeWebSocket.instances.at(-1)!;
+    expect(pairing.url).toBe('ws://127.0.0.1:14333/pairing');
+    expect(fixture.state.bridge.endpoint).toBe('ws://127.0.0.1:14333/extension');
+    pairing.open();
+    pairing.receive({ type: 'pair_rejected', requestId: 'pairing-1', message: '用户拒绝' });
+    await expect(pending).resolves.toMatchObject({ state: 'rejected' });
+  });
+
+  it('does not reconnect after the user disconnects during discovery', async () => {
+    const bridge = new EngineBridge();
+    let finishDiscovery!: (value: []) => void;
+    vi.mocked(bridge.discoverLocalEngines).mockImplementation(() => new Promise((resolve) => { finishDiscovery = resolve; }));
+    const pending = bridge.connect();
+    const rejection = expect(pending).rejects.toThrow('连接已取消');
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWebSocket.instances[0].close();
+    await vi.advanceTimersByTimeAsync(0);
+    bridge.disconnect();
+    finishDiscovery([]);
+    await rejection;
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(bridge.getStatus().state).toBe('disconnected');
+  });
+
+  it('limits discovery to the endpoint enforced by organization policy', async () => {
+    vi.mocked(EngineBridge.prototype.discoverLocalEngines).mockRestore();
+    vi.mocked(getEnterprisePolicy).mockResolvedValue({ managed: true, policy: { bridgeEndpoint: fixture.state.bridge.endpoint }, warnings: [] });
+    const bridge = new EngineBridge();
+    const pending = bridge.discoverLocalEngines();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(801);
+    await expect(pending).resolves.toEqual([]);
+  });
+
   it('uses the engine pairing deadline locally after pair_pending', async () => {
     fixture.state.bridge = bridgeConfig(false);
     const bridge = new EngineBridge();
     const pending = bridge.startPairing();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     const socket = FakeWebSocket.instances.at(-1)!;
     socket.open();
     socket.receive({
@@ -438,8 +567,7 @@ describe('Engine Bridge transport lifecycle', () => {
     fixture.state.bridge = bridgeConfig(false);
     const bridge = new EngineBridge();
     const pending = bridge.startPairing();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     const socket = FakeWebSocket.instances.at(-1)!;
     socket.throwOnSend = true;
     const rejection = expect(pending).rejects.toThrow('配对申请发送失败');
@@ -454,8 +582,7 @@ describe('Engine Bridge transport lifecycle', () => {
     fixture.state.bridge = bridgeConfig(false);
     const bridge = new EngineBridge();
     const pending = bridge.startPairing();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     const socket = FakeWebSocket.instances.at(-1)!;
     socket.open();
     socket.receive({ type: 'pair_rejected', requestId: 'pairing-1', message: 'rejected by user' });
@@ -467,8 +594,7 @@ describe('Engine Bridge transport lifecycle', () => {
     fixture.state.bridge = bridgeConfig(false);
     const bridge = new EngineBridge();
     const pending = bridge.startPairing();
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     const socket = FakeWebSocket.instances.at(-1)!;
     socket.open();
     socket.receive({

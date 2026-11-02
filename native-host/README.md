@@ -2,6 +2,21 @@
 
 The Native Host is a small stdio-to-loopback-WebSocket transport. It does not store pairing credentials and does not execute browser commands itself. It forwards the normal Bridge v3 server challenge and extension authentication messages; Yak validates the origin-bound paired device signature and returns the engine identity, engine instance, connection, session, task, grant, protocol, and capability identity.
 
+The WebSocket connection mode automatically discovers running engines. Yak tries
+the preferred port and the following 15 ports, then separate fallback windows
+starting at 64333, 14333, 24333 and 34333. Both occupied ports and permission-denied
+binds are skipped. The extension rediscovers a paired engine after its port changes
+and verifies its pinned signing key before saving the new address. Initial pairing
+also discovers fallback ports, including browsers bootstrapped by YTray. Discovery
+does not replace the pairing confirmation or signature verification.
+
+For Windows Chrome with a WSL engine, keep the loopback address in WebSocket mode;
+the WSL listener must be reachable from Windows through localhost forwarding or
+mirrored networking. The settings page shows the endpoint on connection failures.
+This Native Host still relays to WebSocket, so it is not a port-free named-pipe or
+Unix-socket transport. When using Native Host mode, set its `-Endpoint` / `--endpoint`
+to the engine's actual Bridge URL; automatic port discovery applies to WebSocket mode.
+
 Build from the Yak repository:
 
 ```bash
