@@ -153,6 +153,7 @@ import {
 } from './service';
 import { beginAgentAction } from '@/features/agent-runtime/service';
 import { getEnterprisePolicy } from '@/platform/policy/managed';
+import { bindLaunchTarget } from './launch-target';
 import {
   BRIDGE_CHUNK_TIMEOUT_MS,
   BRIDGE_PROTOCOL_VERSION,
@@ -497,6 +498,51 @@ describe('Engine Bridge transport lifecycle', () => {
     pairing.open();
     pairing.receive({ type: 'pair_rejected', requestId: 'pairing-1', message: '用户拒绝' });
     await expect(pending).resolves.toMatchObject({ state: 'rejected' });
+  });
+
+  it('reuses an existing pairing without discovery support on an old engine', async () => {
+    fixture.state.bridge = bindLaunchTarget(bridgeConfig(true), { mode: 'legacy' });
+    const original = structuredClone(fixture.state.bridge);
+    const bridge = new EngineBridge();
+    const socket = await connect(bridge);
+    expect(bridge.getStatus().state).toBe('connected');
+    expect(bridge.discoverLocalEngines).not.toHaveBeenCalled();
+    expect(fixture.state.bridge).toEqual(original);
+    expect(socket.url).toBe(original.endpoint);
+    bridge.disconnect();
+  });
+
+  it.each([false, true])('pairs at the existing endpoint without discovery redirects (other engine discoverable: %s)', async (otherEngine) => {
+    fixture.state.bridge = bindLaunchTarget({ ...bridgeConfig(false), endpoint: 'ws://127.0.0.1:65400/extension' }, { mode: 'legacy' });
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue(otherEngine ? [{ protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      engineIdentityId: 'other-engine', engineInstanceId: 'other-process', endpoint: 'ws://127.0.0.1:64333/extension' }] : []);
+    const pending = bridge.startPairing();
+    await vi.advanceTimersByTimeAsync(0);
+    const pairing = FakeWebSocket.instances.at(-1)!;
+    expect(pairing.url).toBe('ws://127.0.0.1:65400/pairing');
+    expect(bridge.discoverLocalEngines).not.toHaveBeenCalled();
+    pairing.open();
+    pairing.receive({ type: 'pair_pending', protocolVersion: BRIDGE_PROTOCOL_VERSION, requestId: 'pairing-1', code: '123456',
+      serverNonce: 'server-nonce-0123456789', expiresAt: NOW + 30_000,
+      engineIdentityId: 'engine-identity-1', publicKey: enginePublicKey });
+    await expect(pending).resolves.toMatchObject({ state: 'pending' });
+    pairing.receive({ type: 'pair_approved', requestId: 'pairing-1', deviceId: 'device-1',
+      engineIdentityId: 'engine-identity-1', publicKey: enginePublicKey });
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = FakeWebSocket.instances.at(-1)!;
+    expect(socket.url).toBe('ws://127.0.0.1:65400/extension');
+    socket.open();
+    socket.receive({ type: 'challenge', protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      engineIdentityId: 'engine-identity-1', engineInstanceId: 'engine-instance-1',
+      challenge: 'engine-challenge-0123456789', signature: 'engine-signature', timestamp: NOW, publicKey: enginePublicKey });
+    await vi.advanceTimersByTimeAsync(0);
+    socket.receive(helloAck());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.getStatus().state).toBe('connected');
+    expect(fixture.state.bridge.pairedEngine.deviceId).toBe('device-1');
+    expect(fixture.state.bridge.endpoint).toBe('ws://127.0.0.1:65400/extension');
+    bridge.disconnect();
   });
 
   it('pairs only with the frontend selected in YTray, regardless of discovery ordering', async () => {

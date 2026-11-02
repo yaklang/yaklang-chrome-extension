@@ -943,7 +943,7 @@ export class EngineBridge {
     const currentPairing = this.getPairingStatus();
     if (this.pairingSocket && ['requesting', 'pending'].includes(currentPairing.state)) return currentPairing;
     const discoveryGeneration = this.pairingGeneration;
-    const engines = await this.discoverLocalEngines(config);
+    const engines = config.launchTarget?.mode === 'legacy' ? [] : await this.discoverLocalEngines(config);
     if (discoveryGeneration !== this.pairingGeneration) throw new ExtensionError('cancelled', '配对已取消');
     const latest = (await getState()).bridge;
     if (discoveryGeneration !== this.pairingGeneration || latest.pairedEngine

@@ -8,6 +8,25 @@ const memfit: DiscoveredYakEngine = { protocolVersion: 3, frontendId: 'memfit', 
   engineIdentityId: 'memfit-key', engineInstanceId: 'memfit-process', endpoint: target.endpoint! };
 
 describe('YTray selected frontend', () => {
+  it.each(['websocket', 'native'] as const)('keeps existing %s settings and pairing when discovery is unavailable', (transport) => {
+    const pair: BridgePairedEngine = { engineIdentityId: 'old-engine', deviceId: 'existing-device',
+      publicKey: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }, pairedAt: 1 };
+    const config: BridgeConfig = { transport, nativeHost: 'existing.host', endpoint: 'ws://127.0.0.1:65400/extension',
+      autoConnect: true, installationId: 'existing-browser', pairedEngine: pair };
+    expect(bindLaunchTarget(config, { mode: 'legacy' })).toEqual({ ...config, launchTarget: { mode: 'legacy' } });
+    const optedOut = bindLaunchTarget(config, { mode: 'none' });
+    const resumed = bindLaunchTarget(optedOut, { mode: 'legacy' });
+    expect(resumed.launchTarget).toEqual({ mode: 'legacy' });
+    expect(resumed.endpoint).toBe(config.endpoint);
+    expect(resumed.transport).toBe(transport);
+    expect(resumed.nativeHost).toBe(config.nativeHost);
+    expect(resumed.pairedEngine).toEqual(pair);
+    expect(resumed.autoConnect).toBe(true);
+    expect(resumed.installationId).toBe(config.installationId);
+    expect(resumed.trustedEngines).toContainEqual(pair);
+    expect(normalizeLaunchTarget({ mode: 'legacy' })).toEqual({ mode: 'legacy' });
+  });
+
   it('remembers trusted frontend pairings without reusing another frontend device registration', () => {
     const pair: BridgePairedEngine = { engineIdentityId: 'shared-key', frontendId: 'yakit', deviceId: 'device-yakit',
       publicKey: { kty: 'EC', crv: 'P-256', x: 'x', y: 'y' }, pairedAt: 1 };
@@ -24,7 +43,7 @@ describe('YTray selected frontend', () => {
     expect(config.pairedEngine?.deviceId).toBe('device-yakit');
     const none = bindLaunchTarget(back, { mode: 'none' });
     expect(none.autoConnect).toBe(false);
-    expect(none.pairedEngine).toBeUndefined();
+    expect(none.pairedEngine?.deviceId).toBe('device-yakit');
     expect(none.trustedEngines).toHaveLength(2);
   });
   it('selects Memfit even when Yakit occupies the default port and is discovered first', () => {

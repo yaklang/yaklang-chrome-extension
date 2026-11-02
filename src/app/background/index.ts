@@ -453,7 +453,7 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       }));
       await browser.storage.session?.set({ 'session.ytray-launch-bound.v1': true });
       await syncManagedInstanceBadge(state.bridge.managedInstance);
-      if (launchTarget !== undefined) {
+      if (launchTarget !== undefined && launchTarget.mode !== 'legacy') {
         if (launchTarget.mode === 'engine') void engineBridge.connectManaged(state.bridge).catch(console.error);
         return ok(engineBridge.getStatus());
       }

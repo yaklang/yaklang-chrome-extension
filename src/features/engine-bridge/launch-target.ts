@@ -1,16 +1,19 @@
 import type { BridgeConfig, BridgeLaunchTarget, DiscoveredYakEngine } from '@/types/models';
 
 export function bindLaunchTarget(config: BridgeConfig, target: BridgeLaunchTarget): BridgeConfig {
+  // A launcher without discovery support must preserve the user's existing connection and credentials.
+  if (target.mode === 'legacy') return { ...config, launchTarget: { mode: 'legacy' },
+    autoConnect: config.launchTarget?.mode === 'none' ? true : config.autoConnect };
   const previous = config.pairedEngine && { ...config.pairedEngine,
     frontendId: config.pairedEngine.frontendId || config.launchTarget?.frontendId
       || (target.mode === 'engine' && config.endpoint === target.endpoint ? target.frontendId : undefined) };
   const records = [...new Map([...(config.trustedEngines || []), ...(previous ? [previous] : [])]
     .map((engine) => [`${engine.engineIdentityId}:${engine.frontendId || ''}`, engine])).values()].slice(-32);
-  return { ...config, launchTarget: target, transport: 'websocket', autoConnect: target.mode === 'engine',
+  return { ...config, launchTarget: target, transport: target.mode === 'engine' ? 'websocket' : config.transport, autoConnect: target.mode === 'engine',
     endpoint: target.mode === 'engine' ? target.endpoint! : config.endpoint,
     trustedEngines: records,
     pairedEngine: target.mode === 'engine' ? records.find((engine) => engine.engineIdentityId === target.engineIdentityId
-      && engine.frontendId === target.frontendId) : undefined,
+      && engine.frontendId === target.frontendId) : previous,
   };
 }
 
@@ -18,6 +21,7 @@ export function normalizeLaunchTarget(value: unknown): BridgeLaunchTarget | unde
   if (value === undefined) return undefined;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return { mode: 'none' };
   const target = value as Record<string, unknown>;
+  if (target.mode === 'legacy') return { mode: 'legacy' };
   if (target.mode === 'none') return { mode: 'none' };
   if (target.mode !== 'engine') return { mode: 'none' };
   for (const key of ['engineIdentityId', 'engineInstanceId', 'frontendId', 'frontendName', 'endpoint']) {

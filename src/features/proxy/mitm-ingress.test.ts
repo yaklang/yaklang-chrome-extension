@@ -97,6 +97,27 @@ describe('Bridge MITM ingress reconciliation', () => {
     expect(managedMITMRoutes()).toEqual([route()]);
   });
 
+  it('leaves existing proxy profiles and authentication intact when an old engine lacks ingress support', async () => {
+    harness.status = { state: 'connected', message: '', connectionId: 'old-engine' };
+    harness.state.proxyProfiles[0] = { ...harness.state.proxyProfiles[0], authEnabled: true, authUsername: 'existing-user' };
+    const original = structuredClone(harness.state);
+    replaceManagedMITMRoutes([route()]);
+    await reconcileManagedMITMIngress();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(managedMITMRoutes()).toEqual([]);
+    expect(harness.state).toEqual(original);
+  });
+
+  it('clears runtime ingress on explicit browser-only mode while keeping the cached pairing', async () => {
+    harness.state.bridge.launchTarget = { mode: 'none' };
+    replaceManagedMITMRoutes([route()]);
+    const pairing = structuredClone(harness.state.bridge.pairedEngine);
+    await reconcileManagedMITMIngress();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(managedMITMRoutes()).toEqual([]);
+    expect(harness.state.bridge.pairedEngine).toEqual(pairing);
+  });
+
   it('ignores an old engine response after the connection changes', async () => {
     harness.request.mockImplementation(async () => {
       harness.status = { ...harness.status, connectionId: 'new-connection' };

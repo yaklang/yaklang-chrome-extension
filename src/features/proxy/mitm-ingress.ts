@@ -38,7 +38,7 @@ export async function reconcileManagedMITMIngress(): Promise<void> {
       await applyManagedMITMRoutes(routes);
       await browser.storage.session?.set({ [STORAGE_KEY]: routes });
     };
-    if (!instanceId || !engineIdentityId) { await commit([]); return; }
+    if (!instanceId || !engineIdentityId || state.bridge.launchTarget?.mode === 'none') { await commit([]); return; }
     // A short Bridge reconnect must not interrupt established proxy tunnels.
     if (status.state !== 'connected') { await commit(retained); return; }
     if (!status.capabilities?.includes(METHOD)) { await commit([]); return; }

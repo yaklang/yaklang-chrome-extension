@@ -174,14 +174,14 @@ const managedInstance = v.strictObject({
 });
 
 const launchTarget = v.pipe(v.strictObject({
-  mode: v.picklist(['engine', 'none']),
+  mode: v.picklist(['engine', 'none', 'legacy']),
   frontendId: v.optional(v.pipe(v.string(), v.maxLength(160))),
   frontendName: v.optional(v.pipe(v.string(), v.maxLength(160))),
   engineIdentityId: v.optional(v.pipe(v.string(), v.maxLength(160))),
   engineInstanceId: v.optional(v.pipe(v.string(), v.maxLength(160))),
   endpoint: v.optional(v.pipe(v.string(), v.maxLength(2048))),
 }), v.check((value) => {
-  if (value.mode === 'none') return true;
+  if (value.mode === 'none' || value.mode === 'legacy') return true;
   if (!value.frontendId || !value.frontendName || !value.engineIdentityId || !value.engineInstanceId || !value.endpoint) return false;
   try {
     const url = new URL(value.endpoint);
