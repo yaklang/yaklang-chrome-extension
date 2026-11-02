@@ -499,6 +499,60 @@ describe('Engine Bridge transport lifecycle', () => {
     await expect(pending).resolves.toMatchObject({ state: 'rejected' });
   });
 
+  it('pairs only with the frontend selected in YTray, regardless of discovery ordering', async () => {
+    fixture.state.bridge = { ...bridgeConfig(false), launchTarget: {
+      mode: 'engine', frontendId: 'memfit', frontendName: 'Memfit AI', engineIdentityId: 'memfit-key',
+      engineInstanceId: 'memfit-process', endpoint: 'ws://127.0.0.1:14333/extension',
+    } };
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue([
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, frontendId: 'yakit', engineIdentityId: 'other-key', engineInstanceId: 'other-process', endpoint: 'ws://127.0.0.1:64333/extension' },
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, frontendId: 'memfit', engineIdentityId: 'memfit-key', engineInstanceId: 'memfit-process', endpoint: 'ws://127.0.0.1:14333/extension' },
+    ]);
+    const pending = bridge.startPairing();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances.map((socket) => socket.url)).toEqual(['ws://127.0.0.1:14333/pairing']);
+    const socket = FakeWebSocket.instances[0];
+    socket.open();
+    socket.receive({ type: 'pair_rejected', requestId: 'pairing-1', message: '用户拒绝' });
+    await pending;
+  });
+
+  it('does not open a pairing connection to another frontend when the selected engine is offline', async () => {
+    fixture.state.bridge = { ...bridgeConfig(false), launchTarget: {
+      mode: 'engine', frontendId: 'memfit', frontendName: 'Memfit AI', engineIdentityId: 'memfit-key',
+      engineInstanceId: 'memfit-process', endpoint: 'ws://127.0.0.1:14333/extension',
+    } };
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue([
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, frontendId: 'yakit', engineIdentityId: 'other-key', engineInstanceId: 'other-process', endpoint: 'ws://127.0.0.1:64333/extension' },
+    ]);
+    await expect(bridge.startPairing()).rejects.toThrow('等待所选');
+    expect(FakeWebSocket.instances).toEqual([]);
+  });
+
+  it('rejects a different engine process taking over the selected port before sending client authentication', async () => {
+    fixture.state.bridge = { ...bridgeConfig(), launchTarget: {
+      mode: 'engine', frontendId: 'memfit', frontendName: 'Memfit AI', engineIdentityId: 'engine-identity-1',
+      engineInstanceId: 'engine-instance-1', endpoint: 'ws://127.0.0.1:14333/extension',
+    } };
+    const bridge = new EngineBridge();
+    vi.mocked(bridge.discoverLocalEngines).mockResolvedValue([
+      { protocolVersion: BRIDGE_PROTOCOL_VERSION, frontendId: 'memfit', engineIdentityId: 'engine-identity-1', engineInstanceId: 'engine-instance-1', endpoint: 'ws://127.0.0.1:14333/extension' },
+    ]);
+    const pending = bridge.connect(fixture.state.bridge);
+    const rejected = expect(pending).rejects.toThrow('进程');
+    await vi.advanceTimersByTimeAsync(0);
+    const socket = FakeWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.receive({ type: 'challenge', protocolVersion: BRIDGE_PROTOCOL_VERSION,
+      engineIdentityId: 'engine-identity-1', engineInstanceId: 'wrong-process',
+      challenge: 'engine-challenge-0123456789', signature: 'engine-signature', timestamp: Date.now(), publicKey: enginePublicKey });
+    await rejected;
+    expect(socket.sent).toEqual([]);
+    bridge.disconnect();
+  });
+
   it('does not reconnect after the user disconnects during discovery', async () => {
     const bridge = new EngineBridge();
     let finishDiscovery!: (value: []) => void;

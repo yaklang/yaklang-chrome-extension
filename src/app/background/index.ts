@@ -1,4 +1,5 @@
 import { browser, type Browser } from 'wxt/browser';
+import { bindLaunchTarget } from '@/features/engine-bridge/launch-target';
 import {
   clearNetworkRequests, exportNetworkRequest, listNetworkRequests, networkCaptureStatus,
   rebindNetworkCapturesForGrant, startNetworkCapture, stopNetworkCapture, stopNetworkCapturesForGrant,
@@ -427,11 +428,22 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       if (senderURL?.origin !== bootstrapURL.origin || senderURL.pathname !== bootstrapURL.pathname) {
         throw new ExtensionError('forbidden', '浏览器实例身份只能由受管启动页设置');
       }
+      const launchTarget = request.payload.launchTarget;
+      if (launchTarget !== undefined) {
+        const policy = (await getEnterprisePolicy()).policy;
+        if (launchTarget.mode === 'engine' && (policy.disableWebSocket || policy.bridgeTransport === 'native'
+          || policy.bridgeEndpoint && policy.bridgeEndpoint !== launchTarget.endpoint)) {
+          throw new ExtensionError('forbidden', '企业连接策略与 YTray 所选接入目标不一致');
+        }
+        engineBridge.cancelPairing(false);
+        engineBridge.disconnect();
+        await stopPairedBrowserTasks();
+      }
       const state = await updateState((current) => ({
         ...current,
         startupProxy: request.payload.startupProxy,
         bridge: {
-          ...current.bridge,
+          ...(launchTarget === undefined ? current.bridge : bindLaunchTarget(current.bridge, launchTarget)),
           browserName: request.payload.browserName,
           browserVersion: request.payload.browserVersion,
           managedInstance: {
@@ -439,7 +451,12 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
           },
         },
       }));
+      await browser.storage.session?.set({ 'session.ytray-launch-bound.v1': true });
       await syncManagedInstanceBadge(state.bridge.managedInstance);
+      if (launchTarget !== undefined) {
+        if (launchTarget.mode === 'engine') void engineBridge.connectManaged(state.bridge).catch(console.error);
+        return ok(engineBridge.getStatus());
+      }
       if (state.bridge.autoConnect && state.bridge.pairedEngine) {
         engineBridge.disconnect();
         void stopPairedBrowserTasks()
@@ -522,8 +539,10 @@ async function restoreBackgroundState(): Promise<void> {
   }
   const currentState = await getState();
   await syncManagedInstanceBadge(currentState.bridge.managedInstance);
-  if (currentState.bridge.autoConnect && currentState.bridge.pairedEngine) {
-    await engineBridge.connect(currentState.bridge).catch(console.error);
+  const launchBound = !browser.storage.session || currentState.bridge.managedInstance?.manager !== 'ytray'
+    || (await browser.storage.session.get('session.ytray-launch-bound.v1'))['session.ytray-launch-bound.v1'] === true;
+  if (launchBound && currentState.bridge.autoConnect) {
+    await engineBridge.connectManaged(currentState.bridge).catch(console.error);
   }
 }
 

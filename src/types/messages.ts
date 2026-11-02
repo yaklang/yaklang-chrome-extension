@@ -255,6 +255,7 @@ export interface ExtensionRequestMap {
   'bridge.managed-instance.bind': {
     input: NonNullable<BridgeConfig['managedInstance']> & Pick<BridgeConfig, 'browserName' | 'browserVersion'> & {
       startupProxy?: string;
+      launchTarget?: BridgeConfig['launchTarget'];
     };
     output: BridgeStatus;
   };

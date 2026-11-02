@@ -37,7 +37,7 @@ export function parseBridgeDiscoveryEnvelope(raw: unknown): DiscoveredYakEngine 
   const input = typeof raw === 'string' ? JSON.parse(raw) as unknown : raw;
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Yak 引擎发现消息无效');
   const message = input as Record<string, unknown>;
-  const allowed = new Set(['type', 'protocolVersion', 'engineIdentityId', 'engineInstanceId', 'endpoint']);
+  const allowed = new Set(['type', 'protocolVersion', 'engineIdentityId', 'engineInstanceId', 'endpoint', 'frontendId', 'frontendName']);
   const unexpected = Object.keys(message).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Yak 引擎发现消息包含未声明字段 $.${unexpected}`);
   if (message.type !== 'engine' || message.protocolVersion !== BRIDGE_PROTOCOL_VERSION) throw new Error('Yak 引擎版本不兼容');
@@ -56,6 +56,8 @@ export function parseBridgeDiscoveryEnvelope(raw: unknown): DiscoveredYakEngine 
     engineIdentityId: message.engineIdentityId,
     engineInstanceId: message.engineInstanceId,
     endpoint: message.endpoint,
+    frontendId: typeof message.frontendId === 'string' ? message.frontendId.slice(0, 160) : undefined,
+    frontendName: typeof message.frontendName === 'string' ? message.frontendName.slice(0, 160) : undefined,
   } as DiscoveredYakEngine;
 }
 

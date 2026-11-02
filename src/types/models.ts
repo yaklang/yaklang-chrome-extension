@@ -197,6 +197,15 @@ export interface UserAgentResolution {
   assignment?: UserAgentAssignment;
 }
 
+export interface BridgeLaunchTarget {
+  mode: 'engine' | 'none';
+  frontendId?: string;
+  frontendName?: string;
+  engineIdentityId?: string;
+  engineInstanceId?: string;
+  endpoint?: string;
+}
+
 export interface BridgeConfig {
   transport: 'native' | 'websocket';
   nativeHost: string;
@@ -211,6 +220,8 @@ export interface BridgeConfig {
     badge: string;
   };
   pairedEngine?: BridgePairedEngine;
+  launchTarget?: BridgeLaunchTarget;
+  trustedEngines?: BridgePairedEngine[];
 }
 
 export interface BridgePublicKey {
@@ -222,6 +233,7 @@ export interface BridgePublicKey {
 
 export interface BridgePairedEngine {
   engineIdentityId: string;
+  frontendId?: string;
   deviceId: string;
   publicKey: BridgePublicKey;
   pairedAt: number;
@@ -251,6 +263,8 @@ export interface DiscoveredYakEngine {
   engineIdentityId: string;
   engineInstanceId: string;
   endpoint: string;
+  frontendId?: string;
+  frontendName?: string;
 }
 
 export type CapabilityScope =
