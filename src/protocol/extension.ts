@@ -173,6 +173,31 @@ const managedInstance = v.strictObject({
   badge: v.pipe(v.string(), v.regex(/^[A-Z]{1,2}$/)),
 });
 
+const launchTarget = v.pipe(v.strictObject({
+  mode: v.picklist(['engine', 'none', 'legacy']),
+  frontendId: v.optional(v.pipe(v.string(), v.maxLength(160))),
+  frontendName: v.optional(v.pipe(v.string(), v.maxLength(160))),
+  engineIdentityId: v.optional(v.pipe(v.string(), v.maxLength(160))),
+  engineInstanceId: v.optional(v.pipe(v.string(), v.maxLength(160))),
+  endpoint: v.optional(v.pipe(v.string(), v.maxLength(2048))),
+}), v.check((value) => {
+  if (value.mode === 'none' || value.mode === 'legacy') return true;
+  if (!value.frontendId || !value.frontendName || !value.engineIdentityId || !value.engineInstanceId || !value.endpoint) return false;
+  try {
+    const url = new URL(value.endpoint);
+    return ['ws:', 'wss:'].includes(url.protocol) && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname)
+      && url.pathname === '/extension' && !url.username && !url.password && !url.search && !url.hash;
+  } catch { return false; }
+}, 'YTray 接入目标必须包含完整引擎身份及本机地址'));
+
+const pairedEngine = v.strictObject({
+  engineIdentityId: id, deviceId: id,
+  frontendId: v.optional(id),
+  publicKey: v.strictObject({ kty: v.literal('EC'), crv: v.literal('P-256'),
+    x: v.pipe(v.string(), v.minLength(1), v.maxLength(128)), y: v.pipe(v.string(), v.minLength(1), v.maxLength(128)) }),
+  pairedAt: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
+});
+
 const bridgeConfig = v.strictObject({
   transport: v.picklist(['native', 'websocket']),
   nativeHost: v.pipe(v.string(), v.trim(), v.maxLength(253)),
@@ -182,8 +207,11 @@ const bridgeConfig = v.strictObject({
   browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
   browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
   managedInstance: v.optional(managedInstance),
+  launchTarget: v.optional(launchTarget),
+  trustedEngines: v.optional(v.pipe(v.array(pairedEngine), v.maxLength(32))),
   pairedEngine: v.optional(v.strictObject({
     engineIdentityId: id,
+    frontendId: v.optional(id),
     deviceId: id,
     publicKey: v.strictObject({
       kty: v.literal('EC'),
@@ -479,6 +507,7 @@ const payloadSchemas = {
   'bridge.config.save': bridgeConfig,
   'bridge.managed-instance.bind': v.strictObject({
     ...managedInstance.entries,
+    launchTarget: v.optional(launchTarget),
     browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
     browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
     startupProxy: v.optional(v.union([v.literal('direct'), v.pipe(httpUrl, v.check((value) => {

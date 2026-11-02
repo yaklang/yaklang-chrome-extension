@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { normalizeLaunchTarget } from '@/features/engine-bridge/launch-target';
 import type {
   BridgeConfig, BridgeGrant, BridgeGrantTarget, BridgeRuntimeSession, CapabilityScope, ExtensionState,
   ProxyConditionType, ProxyProfile,
@@ -199,6 +200,7 @@ function normalizeState(value: Partial<ExtensionState>): ExtensionState {
       browserName: normalizeBrowserMetadata(value.bridge?.browserName, 120),
       browserVersion: normalizeBrowserMetadata(value.bridge?.browserVersion, 80),
       managedInstance: normalizeManagedInstance(value.bridge?.managedInstance),
+      launchTarget: normalizeLaunchTarget(value.bridge?.launchTarget),
     },
     floatingPanel: {
       ...DEFAULT_STATE.floatingPanel, ...value.floatingPanel,

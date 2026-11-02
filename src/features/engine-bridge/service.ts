@@ -24,6 +24,7 @@ import {
   pairingVerificationCode, publicKeysEqual, randomBridgeNonce, signBridgePayload, verifyBridgePayload,
 } from './identity';
 import { bridgeDiscoveryEndpoints } from './discovery';
+import { selectLaunchTarget } from './launch-target';
 
 const STATUS_EVENT = 'bridge.status.changed';
 const PAIRING_STATUS_EVENT = 'bridge.pairing.status.changed';
@@ -226,6 +227,29 @@ export class EngineBridge {
     });
   }
 
+  async connectManaged(config?: BridgeConfig): Promise<void> {
+    config ||= (await getState()).bridge;
+    if (!config.autoConnect || config.launchTarget?.mode === 'none') return;
+    if (config.pairedEngine) return this.connect(config);
+    if (config.launchTarget?.mode !== 'engine') return;
+    this.manuallyClosed = false;
+    try {
+      await this.startPairing();
+    } catch (error) {
+      this.setStatus({ state: 'error', message: error instanceof Error ? error.message : String(error) });
+      const expected = config.launchTarget;
+      if (this.reconnectTimer) globalThis.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = globalThis.setTimeout(() => {
+        void getState().then(({ bridge }) => {
+          if (!this.manuallyClosed && bridge.autoConnect && bridge.launchTarget?.mode === 'engine'
+            && bridge.launchTarget.engineIdentityId === expected.engineIdentityId && bridge.launchTarget.frontendId === expected.frontendId) {
+            return this.connectManaged(bridge);
+          }
+        }).catch(() => undefined);
+      }, RECONNECT_DELAY);
+    }
+  }
+
   async connect(config?: BridgeConfig): Promise<void> {
     if (this.status.state === 'connected' && this.transportAvailable()) return;
     if (this.status.state === 'connected') {
@@ -236,7 +260,13 @@ export class EngineBridge {
     }
     if (this.connectPromise) return this.connectPromise;
     const effectiveConfig = config || (await getState()).bridge;
+    if (effectiveConfig.launchTarget?.mode === 'none') throw new Error('YTray 已选择仅启动浏览器，尚未接入前端');
+    if (effectiveConfig.launchTarget?.mode === 'engine' && (effectiveConfig.transport !== 'websocket'
+      || effectiveConfig.pairedEngine?.engineIdentityId !== effectiveConfig.launchTarget.engineIdentityId)) {
+      throw new Error('连接身份与 YTray 所选接入目标不一致');
+    }
     if (!effectiveConfig.pairedEngine) throw new Error('浏览器插件尚未与 Yak 引擎配对');
+    this.manuallyClosed = false;
     const attempt = (effectiveConfig.transport === 'native'
       ? this.connectNative(effectiveConfig)
       : this.connectWebSocketWithDiscovery(effectiveConfig)).catch((error) => {
@@ -273,6 +303,17 @@ export class EngineBridge {
 
   private async connectWebSocketWithDiscovery(config: BridgeConfig): Promise<void> {
     const generation = this.connectionGeneration;
+    if (config.launchTarget?.mode === 'engine') {
+      const target = selectLaunchTarget(config.launchTarget, await this.discoverLocalEngines(config));
+      if (this.manuallyClosed || generation !== this.connectionGeneration) throw new Error('Bridge 连接已取消');
+      const selected = { ...config, endpoint: target.endpoint,
+        launchTarget: { ...config.launchTarget, endpoint: target.endpoint, engineInstanceId: target.engineInstanceId } };
+      await this.connectWebSocket(selected);
+      await updateState((state) => state.bridge.launchTarget?.engineIdentityId === selected.launchTarget.engineIdentityId
+        && state.bridge.launchTarget?.frontendId === selected.launchTarget.frontendId
+        ? { ...state, bridge: { ...state.bridge, endpoint: selected.endpoint, launchTarget: selected.launchTarget } } : state);
+      return;
+    }
     try {
       await this.connectWebSocket(config);
       return;
@@ -386,6 +427,10 @@ export class EngineBridge {
   }
 
   private async answerChallenge(config: BridgeConfig, challenge: BridgeEnvelope): Promise<void> {
+    if (config.launchTarget?.mode === 'engine' && (challenge.engineIdentityId !== config.launchTarget.engineIdentityId
+      || challenge.engineInstanceId !== config.launchTarget.engineInstanceId)) {
+      throw new Error('当前引擎进程与 YTray 所选接入目标不一致');
+    }
     const paired = config.pairedEngine;
     if (!paired || !challenge.publicKey || !challenge.engineIdentityId || !challenge.engineInstanceId || !challenge.challenge || !challenge.signature || !challenge.timestamp) {
       throw new Error('Yak 引擎返回了不完整的身份挑战');
@@ -888,20 +933,26 @@ export class EngineBridge {
 
   async startPairing(): Promise<BridgePairingStatus> {
     let config = (await getState()).bridge;
+    if (config.launchTarget?.mode === 'none') throw new Error('YTray 已选择仅启动浏览器');
+    if (config.launchTarget?.mode === 'engine' && config.pairedEngine
+      && config.pairedEngine.engineIdentityId !== config.launchTarget.engineIdentityId) {
+      throw new Error('已有配对与 YTray 所选目标不一致，请从 YTray 重新接入');
+    }
     if (config.pairedEngine) return { state: 'approved', message: '当前浏览器已经完成配对', engineIdentityId: config.pairedEngine.engineIdentityId };
     if (!isLoopbackEndpoint(config.endpoint)) throw new Error('配对仅允许访问本机 Yak Bridge');
     const currentPairing = this.getPairingStatus();
     if (this.pairingSocket && ['requesting', 'pending'].includes(currentPairing.state)) return currentPairing;
     const discoveryGeneration = this.pairingGeneration;
-    const engines = await this.discoverLocalEngines(config);
+    const engines = config.launchTarget?.mode === 'legacy' ? [] : await this.discoverLocalEngines(config);
     if (discoveryGeneration !== this.pairingGeneration) throw new ExtensionError('cancelled', '配对已取消');
     const latest = (await getState()).bridge;
     if (discoveryGeneration !== this.pairingGeneration || latest.pairedEngine
       || latest.endpoint !== config.endpoint || latest.installationId !== config.installationId) {
       throw new ExtensionError('cancelled', '配对设置已变更，请重新连接');
     }
-    const selected = engines.find((engine) => engine.endpoint === config.endpoint)
-      || (engines.length === 1 ? engines[0] : undefined);
+    const selected = config.launchTarget?.mode === 'engine'
+      ? selectLaunchTarget(config.launchTarget, engines)
+      : engines.find((engine) => engine.endpoint === config.endpoint) || (engines.length === 1 ? engines[0] : undefined);
     if (!selected && engines.length > 1) {
       const error = new Error('发现多个 Yak 引擎，请在连接设置中选择要配对的引擎');
       this.setPairingStatus({ state: 'error', message: error.message });
@@ -909,9 +960,10 @@ export class EngineBridge {
     }
     if (selected && selected.endpoint !== config.endpoint) {
       const previousEndpoint = config.endpoint;
-      config = { ...config, endpoint: selected.endpoint };
+      config = { ...config, endpoint: selected.endpoint, ...(config.launchTarget?.mode === 'engine'
+        ? { launchTarget: { ...config.launchTarget, endpoint: selected.endpoint, engineInstanceId: selected.engineInstanceId } } : {}) };
       await updateState((state) => !state.bridge.pairedEngine && state.bridge.endpoint === previousEndpoint
-        ? { ...state, bridge: { ...state.bridge, endpoint: selected.endpoint } }
+        ? { ...state, bridge: { ...state.bridge, endpoint: selected.endpoint, launchTarget: config.launchTarget } }
         : state);
       if (discoveryGeneration !== this.pairingGeneration) throw new ExtensionError('cancelled', '配对已取消');
     }
@@ -988,12 +1040,15 @@ export class EngineBridge {
     const state = await getState();
     this.disconnect();
     this.cancelPairing(false);
-    await clearBrowserBridgeIdentity(state.bridge.installationId);
+    const remaining = (state.bridge.trustedEngines || []).filter((engine) => engine.engineIdentityId !== state.bridge.pairedEngine?.engineIdentityId
+      || engine.frontendId !== state.bridge.pairedEngine?.frontendId);
+    if (!remaining.length) await clearBrowserBridgeIdentity(state.bridge.installationId);
     await updateState((current) => ({
       ...current,
       bridge: {
         ...current.bridge,
         pairedEngine: undefined,
+        trustedEngines: remaining,
         autoConnect: false,
       },
     }));
@@ -1010,6 +1065,11 @@ export class EngineBridge {
     }
     const context = this.pairingContext;
     if (!context) return;
+    if (context.config.launchTarget?.mode === 'engine' && message.engineIdentityId
+      && message.engineIdentityId !== context.config.launchTarget.engineIdentityId) {
+      this.failPairing(new Error('配对响应来自其他引擎，已拒绝接入'));
+      return;
+    }
     if (message.type === 'pair_pending') {
       const code = await pairingVerificationCode({
         engineIdentityId: message.engineIdentityId!, requestId: message.requestId!,
@@ -1026,7 +1086,7 @@ export class EngineBridge {
       context.enginePublicKey = message.publicKey;
       if (this.pairingTimer) globalThis.clearTimeout(this.pairingTimer);
       const status: BridgePairingStatus = {
-        state: 'pending', message: '请在 Yakit 中确认相同的验证码',
+        state: 'pending', message: `请在 ${context.config.launchTarget?.frontendName || 'Yakit'} 中确认相同的验证码`,
         requestId: message.requestId, code, engineIdentityId: message.engineIdentityId, expiresAt: message.expiresAt,
       };
       this.pairingTimer = globalThis.setTimeout(
@@ -1058,6 +1118,7 @@ export class EngineBridge {
             autoConnect: true,
             pairedEngine: {
               engineIdentityId: message.engineIdentityId!, deviceId: message.deviceId!,
+              frontendId: context.config.launchTarget?.frontendId,
               publicKey: message.publicKey!, pairedAt: Date.now(),
             },
           },

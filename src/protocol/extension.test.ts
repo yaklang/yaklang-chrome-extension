@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { parseExtensionRequest } from './extension';
 
 describe('extension request schemas', () => {
+  it('distinguishes legacy connection settings from explicit opt-out and a pinned engine', () => {
+    const managed = { manager: 'ytray', instanceId: 'instance-A', badge: 'A' };
+    for (const mode of ['legacy', 'none']) {
+      expect(parseExtensionRequest({ action: 'bridge.managed-instance.bind', payload: { ...managed, launchTarget: { mode } } }))
+        .toMatchObject({ payload: { launchTarget: { mode } } });
+    }
+    expect(() => parseExtensionRequest({
+      action: 'bridge.managed-instance.bind', payload: { ...managed, launchTarget: { mode: 'engine' } },
+    })).toThrow();
+  });
+
   it('rejects unknown fields', () => {
     expect(() => parseExtensionRequest({ action: 'panel.update', payload: { enabled: true, unexpected: true } })).toThrow('unexpected');
   });

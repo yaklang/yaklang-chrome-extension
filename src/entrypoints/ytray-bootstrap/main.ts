@@ -28,6 +28,7 @@ async function bootstrap(): Promise<void> {
     browserName: query.get('browserName') || undefined,
     browserVersion: query.get('browserVersion') || undefined,
     startupProxy: query.get('startupProxy') || undefined,
+    launchTarget: query.has('engineTarget') ? JSON.parse(query.get('engineTarget')!) : undefined,
   });
 
   const current = await browser.tabs.getCurrent();
