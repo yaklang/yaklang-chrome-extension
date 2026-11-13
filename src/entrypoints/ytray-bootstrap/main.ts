@@ -12,6 +12,7 @@ async function bootstrap(): Promise<void> {
   const instanceId = query.get('instanceId') || '';
   const badge = query.get('badge') || '';
   const target = query.get('target') || 'chrome://newtab/';
+  const browserUseTicket = query.get('browserUseTicket') || undefined;
   if (!['ytray', 'yakit'].includes(manager || '')
     || !/^[A-Za-z0-9-]{1,160}$/.test(instanceId)
     || !/^[A-Z]{1,2}$/.test(badge)) {
@@ -22,6 +23,11 @@ async function bootstrap(): Promise<void> {
     && target !== 'data:text/html,<title>YTray</title>') {
     throw new Error('浏览器实例目标地址无效');
   }
+  if (browserUseTicket) {
+    const current = new URL(location.href);
+    current.searchParams.delete('browserUseTicket');
+    history.replaceState(null, '', current);
+  }
 
   await request('bridge.managed-instance.bind', {
     manager: manager as 'ytray' | 'yakit', instanceId, badge,
@@ -29,6 +35,7 @@ async function bootstrap(): Promise<void> {
     browserVersion: query.get('browserVersion') || undefined,
     startupProxy: query.get('startupProxy') || undefined,
     launchTarget: query.has('engineTarget') ? JSON.parse(query.get('engineTarget')!) : undefined,
+    browserUseTicket,
   });
 
   const current = await browser.tabs.getCurrent();

@@ -14,7 +14,14 @@ import { getTab, resolveDocumentTarget, scriptingTarget } from '@/platform/brows
 import { resolveTabCookieStoreId } from '@/platform/browser/isolation';
 import { beginPageDialogCapture, endPageDialogCapture } from './dialogs';
 
-async function collectDocumentContext(input: { options: PageContextOptions; captureId: string }) {
+interface SharedDocument {
+  id: string;
+  url: string;
+}
+
+async function collectDocumentContext(input: { options: PageContextOptions; captureId: string; shared?: SharedDocument }) {
+  if (input.shared && (location.href !== input.shared.url
+    || Reflect.get(globalThis, Symbol.for('com.yaklang.browser.use.grant.v1')) !== input.shared.id)) return;
   const MAX_SCANNED_ELEMENTS = 10_000;
   const MAX_NODES = 400;
   const MAX_FORMS = 50;
@@ -347,13 +354,15 @@ async function collectDocumentContext(input: { options: PageContextOptions; capt
     return { indexedDB: indexedResult, cacheStorage: cacheResult };
   };
 
-  const cryptoPattern = /(encrypt|decrypt|crypto|cipher|sign|hash|md5|sha|aes|rsa|sm2|sm3|sm4|encode|decode)/i;
   const cryptoCandidates: Array<{ path: string; kind: string }> = [];
-  for (const key of Object.getOwnPropertyNames(window).slice(0, 5_000)) {
-    if (!cryptoPattern.test(key)) continue;
-    try { cryptoCandidates.push({ path: key, kind: typeof Reflect.get(window, key) }); }
-    catch { cryptoCandidates.push({ path: key, kind: 'unreadable' }); }
-    if (cryptoCandidates.length >= 100) break;
+  if (!input.shared) {
+    const cryptoPattern = /(encrypt|decrypt|crypto|cipher|sign|hash|md5|sha|aes|rsa|sm2|sm3|sm4|encode|decode)/i;
+    for (const key of Object.getOwnPropertyNames(window).slice(0, 5_000)) {
+      if (!cryptoPattern.test(key)) continue;
+      try { cryptoCandidates.push({ path: key, kind: typeof Reflect.get(window, key) }); }
+      catch { cryptoCandidates.push({ path: key, kind: 'unreadable' }); }
+      if (cryptoCandidates.length >= 100) break;
+    }
   }
   const collectBodyText = () => {
     if (input.options.includeDom === false || !document.body) return { value: '', truncated: false };
@@ -368,6 +377,12 @@ async function collectDocumentContext(input: { options: PageContextOptions; capt
       const parent = current.parentElement;
       if (parent && !parent.closest('script,style,noscript,template,[hidden],[aria-hidden="true"],yakit-browser-agent')) {
         const raw = current.nodeValue || '';
+        // A hidden text node can contain a large markup payload ahead of the readable page content.
+        if (input.shared && (parent.checkVisibility?.({ visibilityProperty: true }) === false
+          || /^\s*<(?:style|script)\b/i.test(raw))) {
+          current = walker.nextNode();
+          continue;
+        }
         const normalized = raw.slice(0, MAX_BODY_TEXT).replace(/\s+/g, ' ').trim();
         if (normalized) {
           const separatorBytes = parts.length ? 1 : 0;
@@ -400,7 +415,16 @@ async function collectDocumentContext(input: { options: PageContextOptions; capt
   const sessionStorageSummary = input.options.includeStorage ? readStorage('sessionStorage') : undefined;
   const registry = { captureId: input.captureId, nodes, summaries };
   Reflect.set(globalThis, registryKey, registry);
+  const feedbackBox = input.shared
+    ? Reflect.get(globalThis, Symbol.for('com.yaklang.browser.use.feedback-box.v1')) as HTMLElement | undefined
+    : undefined;
+  const bounds = feedbackBox?.isConnected && !feedbackBox.hidden && !document.hidden ? feedbackBox.getBoundingClientRect() : undefined;
   return {
+    feedback: bounds && bounds.width > 0 && bounds.height > 0 ? {
+      label: feedbackBox!.textContent || '',
+      border_color: getComputedStyle(feedbackBox!).borderTopColor,
+      bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+    } : null,
     document: {
       title: document.title.slice(0, 1_000),
       url: location.href.slice(0, 8_192),
@@ -421,6 +445,7 @@ async function collectDocumentContext(input: { options: PageContextOptions; capt
       scannedElementCount,
       limitsReached: [...limitsReached],
     },
+    visibility: document.visibilityState,
     authenticationSeed: { passwordFieldCount, hasLoginControl, hasLogoutControl, hasAccountControl },
   };
 }
@@ -634,7 +659,7 @@ function authenticationSignals(
 
 function isCollectedDocumentContext(
   input: unknown,
-): input is Awaited<ReturnType<typeof collectDocumentContext>> {
+): input is NonNullable<Awaited<ReturnType<typeof collectDocumentContext>>> {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return false;
   const value = input as {
     document?: Record<string, unknown>;
@@ -709,13 +734,97 @@ export async function capturePageContext(options: PageContextOptions = {}, input
   return { ...contextWithoutDiff, diff: await contextDiff(contextWithoutDiff) };
 }
 
-function operateRegisteredNode(input: { captureId: string; nodeId: string; operation: 'inspect' | PageNodeAction; value?: string }) {
+function operateRegisteredNode(input: {
+  captureId: string; nodeId: string; operation: 'inspect' | PageNodeAction | 'scrollPage';
+  value?: string; deltaY?: number; feedback?: boolean; shared?: SharedDocument;
+}) {
+  const shared = input.shared;
+  if (shared && (location.href !== shared.url
+    || Reflect.get(globalThis, Symbol.for('com.yaklang.browser.use.grant.v1')) !== shared.id)) {
+    return { ok: false as const, code: 'stale_document', message: '页面已变化或停止共享，请重新授权当前页面' };
+  }
+  // executeScript serializes this function. Keep the feedback with the resolved
+  // element so a selector lookup cannot draw a box around a different node.
+  const feedbackKey = Symbol.for('com.yaklang.browser.context.action-feedback.v1');
+  const feedbackBoxKey = Symbol.for('com.yaklang.browser.use.feedback-box.v1');
+  let feedbackVisible = false;
+  const showFeedback = (element: Element, label: string) => {
+    if (!input.feedback || document.hidden) return;
+    const previous = Reflect.get(globalThis, feedbackKey);
+    if (typeof previous === 'function') previous();
+
+    const floatingHost = document.querySelector('yakit-browser-agent');
+    let shadow = floatingHost?.shadowRoot;
+    let host: HTMLElement | undefined;
+    if (!shadow || getComputedStyle(floatingHost!).display === 'none') {
+      host = document.createElement('ytray-browser-feedback');
+      host.setAttribute('aria-hidden', 'true');
+      host.style.cssText = 'all:initial!important;position:fixed!important;inset:0!important;z-index:2147483647!important;pointer-events:none!important';
+      shadow = host.attachShadow({ mode: 'open' });
+      document.documentElement.append(host);
+    }
+    const box = document.createElement('div');
+    box.dataset.ytrayActionFeedback = '';
+    box.setAttribute('aria-hidden', 'true');
+    box.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;box-sizing:border-box;border:2px solid #f04452;border-radius:5px;box-shadow:0 0 0 1px #fff9,0 2px 12px #a8122838';
+    const caption = document.createElement('span');
+    caption.textContent = label;
+    caption.style.cssText = 'position:absolute;left:-2px;padding:2px 7px;border-radius:4px;background:#c52335;color:#fff;white-space:nowrap;font:600 11px/16px system-ui,sans-serif;pointer-events:none';
+    box.append(caption);
+    shadow.append(box);
+
+    const url = location.href;
+    const deadline = performance.now() + 2_200;
+    let frame = 0;
+    let timer = 0;
+    const clear = () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+      document.removeEventListener('visibilitychange', clear);
+      window.removeEventListener('pagehide', clear);
+      box.remove();
+      host?.remove();
+      if (Reflect.get(globalThis, feedbackKey) === clear) Reflect.deleteProperty(globalThis, feedbackKey);
+      if (Reflect.get(globalThis, feedbackBoxKey) === box) Reflect.deleteProperty(globalThis, feedbackBoxKey);
+    };
+    const draw = () => {
+      if (!box.isConnected || !element.isConnected || document.hidden || location.href !== url || performance.now() >= deadline) {
+        clear();
+        return;
+      }
+      const rect = element.getBoundingClientRect();
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(document.documentElement.clientWidth, rect.right);
+      const bottom = Math.min(document.documentElement.clientHeight, rect.bottom);
+      box.hidden = right <= left || bottom <= top;
+      if (!box.hidden) {
+        box.style.left = `${left}px`;
+        box.style.top = `${top}px`;
+        box.style.width = `${right - left}px`;
+        box.style.height = `${bottom - top}px`;
+        caption.style.top = top >= 22 ? '-22px' : '0';
+      }
+      frame = requestAnimationFrame(draw);
+    };
+    Reflect.set(globalThis, feedbackKey, clear);
+    if (shared) Reflect.set(globalThis, feedbackBoxKey, box);
+    document.addEventListener('visibilitychange', clear);
+    window.addEventListener('pagehide', clear);
+    timer = window.setTimeout(clear, 2_200);
+    draw();
+    feedbackVisible = box.isConnected && !box.hidden;
+  };
   const registryKey = Symbol.for('com.yaklang.browser.context.registry.v1');
   const registry = Reflect.get(globalThis, registryKey) as {
     captureId?: string;
     nodes?: Map<string, Element>;
     summaries?: Map<string, PageNodeSummary>;
   } | undefined;
+  if (input.operation === 'scrollPage') {
+    window.scrollBy({ top: input.deltaY, behavior: 'instant' });
+    return { ok: true as const, scrollY: window.scrollY };
+  }
   if (!registry || registry.captureId !== input.captureId) {
     return { ok: false as const, code: 'stale_node', message: '上下文快照已经失效，请重新采集页面上下文' };
   }
@@ -745,19 +854,32 @@ function operateRegisteredNode(input: { captureId: string; nodeId: string; opera
       && style.visibility !== 'hidden'
       && style.opacity !== '0'
       && style.pointerEvents !== 'none';
-    if (!visible || control.disabled || element.getAttribute('aria-disabled') === 'true') {
+    if (!visible || control.disabled || element.getAttribute('aria-disabled') === 'true'
+      || (shared && (element.matches(':disabled') || element.closest('[inert]')))) {
       return { ok: false as const, code: 'node_not_actionable', message: '页面元素当前不可点击' };
     }
     const click = (element as HTMLElement).click;
     if (typeof click !== 'function') return { ok: false as const, code: 'node_not_actionable', message: '页面元素不支持原生 click 操作' };
-    globalThis.setTimeout(() => click.call(element), 0);
+    if (shared && input.feedback) element.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
+    showFeedback(element, '点击');
+    globalThis.setTimeout(() => {
+      if (!element.isConnected || (shared && (location.href !== shared.url
+        || Reflect.get(globalThis, Symbol.for('com.yaklang.browser.use.grant.v1')) !== shared.id))) return;
+      click.call(element);
+    }, 0);
   } else if (input.operation === 'focus') {
     if (!(element instanceof HTMLElement)) return { ok: false as const, code: 'node_not_actionable', message: '页面元素不支持聚焦' };
     element.focus({ preventScroll: true });
+    showFeedback(element, '聚焦');
   } else if (input.operation === 'scroll') {
     element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    showFeedback(element, '滚动到元素');
   } else if (input.operation === 'setValue') {
     if (typeof input.value !== 'string') return { ok: false as const, code: 'invalid_node_action', message: 'setValue 缺少 value' };
+    if (shared && (control.readOnly || element.matches(':disabled') || element.getAttribute('aria-disabled') === 'true'
+      || element.closest('[inert]') || !element.getClientRects().length || getComputedStyle(element).visibility !== 'visible')) {
+      return { ok: false as const, code: 'node_not_actionable', message: '页面元素当前不可编辑' };
+    }
     if (element instanceof HTMLInputElement) {
       if (element.type === 'file') return { ok: false as const, code: 'node_not_actionable', message: '不能通过 setValue 写入文件输入框' };
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
@@ -773,10 +895,51 @@ function operateRegisteredNode(input: { captureId: string; nodeId: string; opera
     } else {
       return { ok: false as const, code: 'node_not_actionable', message: '页面元素不支持 setValue' };
     }
+    if (shared && input.feedback) element.scrollIntoView({ behavior: 'instant', block: 'nearest', inline: 'nearest' });
+    showFeedback(element, '输入');
     element.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true, inputType: 'insertText', data: input.value }));
     element.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
   }
-  return { ok: true as const, node };
+  return { ok: true as const, node, feedbackVisible };
+}
+
+type PageWorld = 'MAIN' | 'ISOLATED';
+const feedbackTargets = new Map<number, { target: BrowserTarget; world: PageWorld }>();
+
+async function clearActionFeedback(target: BrowserTarget, world: PageWorld): Promise<void> {
+  await browser.scripting.executeScript({
+    target: scriptingTarget(target),
+    world,
+    func: () => {
+      const clear = Reflect.get(globalThis, Symbol.for('com.yaklang.browser.context.action-feedback.v1'));
+      if (typeof clear === 'function') clear();
+    },
+  }).catch(() => undefined);
+}
+
+export function initializePageActionFeedback(): void {
+  browser.tabs.onActivated.addListener(({ windowId, tabId }) => {
+    const previous = feedbackTargets.get(windowId);
+    if (!previous || previous.target.tabId === tabId) return;
+    feedbackTargets.delete(windowId);
+    void clearActionFeedback(previous.target, previous.world);
+  });
+  browser.windows.onRemoved.addListener((windowId) => { feedbackTargets.delete(windowId); });
+  browser.tabs.onRemoved.addListener((tabId, { windowId }) => {
+    if (feedbackTargets.get(windowId)?.target.tabId === tabId) feedbackTargets.delete(windowId);
+  });
+}
+
+async function trackActionFeedback(target: BrowserTarget, world: PageWorld): Promise<boolean> {
+  const tab = await browser.tabs.get(target.tabId);
+  if (!tab.active) return false;
+  const previous = feedbackTargets.get(tab.windowId);
+  feedbackTargets.set(tab.windowId, { target, world });
+  if (previous && (previous.world !== world || previous.target.documentId !== target.documentId
+    || previous.target.tabId !== target.tabId || previous.target.frameId !== target.frameId)) {
+    void clearActionFeedback(previous.target, previous.world);
+  }
+  return true;
 }
 
 async function operateNode(
@@ -787,13 +950,16 @@ async function operateNode(
   value?: string,
 ): Promise<PageNodeDetails> {
   const target = await resolveDocumentTarget(input);
+  const feedback = operation !== 'inspect' && await trackActionFeedback(target, 'MAIN').catch(() => false);
   const [{ result }] = await browser.scripting.executeScript({
     target: scriptingTarget(target),
     world: 'MAIN',
     func: operateRegisteredNode,
-    args: [{ captureId, nodeId, operation, value }],
+    args: [{ captureId, nodeId, operation, value, feedback }],
   });
-  if (!result?.ok) throw new ExtensionError(result?.code || 'node_operation_failed', result?.message || '页面元素操作失败');
+  if (!result?.ok || !result.node) {
+    throw new ExtensionError(result?.code || 'node_operation_failed', result?.message || '页面元素操作失败');
+  }
   return {
     ...(result.node as unknown as PageNodeSummary),
     connected: true,
@@ -825,6 +991,87 @@ export async function actOnPageNode(
     dialogs = await endPageDialogCapture(target, dialogCaptureOwned);
   }
   return { action, status: 'dispatched', dispatchedAt: Date.now(), node, dialogs };
+}
+
+export async function setSharedPageGrant(target: BrowserTarget, shared: SharedDocument, enabled: boolean): Promise<boolean> {
+  const [injection] = await browser.scripting.executeScript({
+    target: scriptingTarget(target),
+    world: 'ISOLATED',
+    func: (shared: SharedDocument, enabled: boolean) => {
+      const key = Symbol.for('com.yaklang.browser.use.grant.v1');
+      if (enabled) {
+        if (location.href !== shared.url) return false;
+        if (Reflect.get(globalThis, key) === shared.id) return true;
+        Reflect.set(globalThis, key, shared.id);
+      } else if (Reflect.get(globalThis, key) === shared.id) {
+        Reflect.deleteProperty(globalThis, key);
+        const clear = Reflect.get(globalThis, Symbol.for('com.yaklang.browser.context.action-feedback.v1'));
+        if (typeof clear === 'function') clear();
+      } else {
+        return false;
+      }
+      Reflect.deleteProperty(globalThis, Symbol.for('com.yaklang.browser.context.registry.v1'));
+      return true;
+    },
+    args: [shared, enabled],
+  });
+  return injection?.result === true;
+}
+
+export async function observeSharedPage(target: BrowserTarget, shared: SharedDocument, captureId: string) {
+  const [injection] = await browser.scripting.executeScript({
+    target: scriptingTarget(target),
+    world: 'ISOLATED',
+    func: collectDocumentContext,
+    args: [{ options: { includeDom: true }, captureId, shared }],
+  });
+  if (!injection?.result) throw new ExtensionError('stale_document', '页面已变化或停止共享，请重新授权当前页面');
+  const { document, feedback, visibility } = injection.result;
+  const controls = document.interactive.filter((node) => node.visible);
+  const nodes = controls.slice(0, 160).map((node) => ({
+    node_id: node.nodeId,
+    tag: node.tag,
+    label: node.accessibleName || node.text || node.placeholder || node.name || node.selectorHint,
+    ...(node.type ? { type: node.type } : {}),
+    ...(node.disabled ? { disabled: true } : {}),
+    ...(node.checked !== undefined ? { checked: node.checked } : {}),
+  }));
+  return {
+    capture_id: captureId,
+    title: document.title,
+    url: document.url,
+    text: document.bodyText.slice(0, 5_000),
+    feedback,
+    visibility,
+    nodes,
+    truncated: document.bodyTextTruncated || document.bodyText.length > 5_000
+      || controls.length > nodes.length || document.limitsReached.length > 0,
+  };
+}
+
+export async function actOnSharedPage(
+  target: BrowserTarget,
+  shared: SharedDocument,
+  action: { captureId: string; nodeId: string; operation: PageNodeAction; value?: string }
+    | { operation: 'scrollPage'; deltaY: number },
+) {
+  const input = 'captureId' in action ? action : { ...action, captureId: '', nodeId: '' };
+  const feedback = 'captureId' in action && await trackActionFeedback(target, 'ISOLATED').catch(() => false);
+  const [injection] = await browser.scripting.executeScript({
+    target: scriptingTarget(target),
+    world: 'ISOLATED',
+    func: operateRegisteredNode,
+    args: [{ ...input, shared, feedback }],
+  });
+  const result = injection?.result;
+  if (!result?.ok) throw new ExtensionError(result?.code || 'target_unavailable', result?.message || '页面操作状态未知，请先重新观察');
+  if (action.operation === 'scrollPage') return { status: 'applied', scroll_y: result.scrollY };
+  return {
+    status: action.operation === 'click' || action.operation === 'scroll' ? 'dispatched' : 'applied',
+    node_id: action.nodeId,
+    label: result.node?.accessibleName || result.node?.text || result.node?.selectorHint || '',
+    feedback_visible: result.feedbackVisible === true,
+  };
 }
 
 export async function invokePageFunction(path: string, args: unknown[], input?: BrowserTarget | number, timeoutMs = 10_000): Promise<PageEvalResult> {

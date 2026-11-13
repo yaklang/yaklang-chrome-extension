@@ -67,6 +67,13 @@ import type {
   YakitFuzzerOpenResult,
 } from './models';
 
+export interface BrowserUseShareStatus {
+  supported: boolean;
+  shared: boolean;
+  managed: boolean;
+  paused: boolean;
+}
+
 export interface ExtensionRequestMap {
   'state.get': { input: undefined; output: ExtensionState };
   'tab.active': { input: undefined; output: ActiveTabInfo };
@@ -135,6 +142,9 @@ export interface ExtensionRequestMap {
   'context.capture': { input: PageContextOptions & { tabId?: number; frameId?: number; documentId?: string }; output: PageContext };
   'context.node.inspect': { input: { captureId: string; nodeId: string; tabId?: number; frameId?: number; documentId?: string }; output: PageNodeDetails };
   'context.node.action': { input: { captureId: string; nodeId: string; action: PageNodeAction; value?: string; tabId?: number; frameId?: number; documentId?: string }; output: PageNodeActionResult };
+  'browser-use.share.status': { input: { tabId: number }; output: BrowserUseShareStatus };
+  'browser-use.share.start': { input: { tabId: number; url: string }; output: BrowserUseShareStatus };
+  'browser-use.share.stop': { input: { tabId: number }; output: BrowserUseShareStatus };
   'context.invoke': { input: { path: string; args: unknown[]; tabId?: number; frameId?: number; documentId?: string; timeoutMs?: number }; output: PageEvalResult };
   'context.eval': { input: PageEvalRequest; output: PageEvalResult };
   'panel.update': { input: {
@@ -256,6 +266,7 @@ export interface ExtensionRequestMap {
     input: NonNullable<BridgeConfig['managedInstance']> & Pick<BridgeConfig, 'browserName' | 'browserVersion'> & {
       startupProxy?: string;
       launchTarget?: BridgeConfig['launchTarget'];
+      browserUseTicket?: string;
     };
     output: BridgeStatus;
   };

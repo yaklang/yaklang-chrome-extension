@@ -508,6 +508,7 @@ const payloadSchemas = {
   'bridge.managed-instance.bind': v.strictObject({
     ...managedInstance.entries,
     launchTarget: v.optional(launchTarget),
+    browserUseTicket: v.optional(v.pipe(v.string(), v.regex(/^[A-Za-z0-9+/]{43}=$/))),
     browserName: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(120))),
     browserVersion: v.optional(v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(80))),
     startupProxy: v.optional(v.union([v.literal('direct'), v.pipe(httpUrl, v.check((value) => {
@@ -523,6 +524,9 @@ const payloadSchemas = {
   'bridge.connect': noPayload,
   'bridge.disconnect': noPayload,
   'bridge.status': noPayload,
+  'browser-use.share.status': v.strictObject({ tabId }),
+  'browser-use.share.start': v.strictObject({ tabId, url: httpUrl }),
+  'browser-use.share.stop': v.strictObject({ tabId }),
 } satisfies Record<ExtensionAction, v.GenericSchema>;
 
 function issueMessage(issues: readonly v.BaseIssue<unknown>[]): string {

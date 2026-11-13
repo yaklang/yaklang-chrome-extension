@@ -211,6 +211,11 @@
 @media (prefers-reduced-motion: reduce) { .popup-global-notice { animation: none; } }
 
 .popup-loading { width: 390px; height: 230px; display: flex; align-items: center; justify-content: center; gap: 9px; color: var(--muted); background: var(--background); font-size: var(--text-md); }
+.popup-browser-use { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.popup-browser-use > div { display: grid; gap: 3px; }
+.popup-browser-use strong { font-size: var(--text-sm); }
+.popup-browser-use span { color: var(--muted); font-size: var(--text-xs); }
+.popup-browser-use button { flex: 0 0 auto; }
 .spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: .35; } }

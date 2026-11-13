@@ -18,7 +18,7 @@ import { engineBridge } from '@/features/engine-bridge/service';
 import { getFrameInventory } from '@/features/page-context/frames';
 import { getActiveTab, getTab } from '@/platform/browser/targets';
 import {
-  actOnPageNode, capturePageContext, evalInPage, inspectPageNode, invokePageFunction,
+  actOnPageNode, capturePageContext, evalInPage, initializePageActionFeedback, inspectPageNode, invokePageFunction,
 } from '@/features/page-context/service';
 import { getState, updateState } from '@/platform/storage/state';
 import {
@@ -67,6 +67,7 @@ import { handleRecordingRequest } from './handlers/recording';
 import { handleTransformRequest } from './handlers/transform';
 import { resolveHandoff } from '@/features/handoff/service';
 import { initializeManagedMITMIngress } from '@/features/proxy/mitm-ingress';
+import { bindManagedBrowserUse, browserUseShareStatus, initializeBrowserUse, revokeBrowserUseShare, shareBrowserUseTab } from '@/features/browser-use/service';
 
 function originOf(url: string): string {
   const parsed = new URL(url);
@@ -133,6 +134,18 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
   if (domainResponse !== undefined) return domainResponse;
 
   switch (request.action) {
+    case 'browser-use.share.status':
+    case 'browser-use.share.start':
+    case 'browser-use.share.stop': {
+      const popupUrl = browser.runtime.getURL('/popup.html');
+      if (sender.url !== popupUrl || sender.frameId && sender.frameId !== 0) {
+        throw new ExtensionError('forbidden_sender', '请从浏览器工具栏管理网页共享');
+      }
+      const { tabId } = request.payload;
+      if (request.action === 'browser-use.share.start') return ok(await shareBrowserUseTab(tabId, request.payload.url));
+      if (request.action === 'browser-use.share.stop') return ok(await revokeBrowserUseShare(tabId));
+      return ok(browserUseShareStatus(tabId));
+    }
     case 'state.get': {
       await currentActiveGrant();
       return ok(await getState());
@@ -453,6 +466,10 @@ async function handleRequest(request: ExtensionRequest, sender: Browser.runtime.
       }));
       await browser.storage.session?.set({ 'session.ytray-launch-bound.v1': true });
       await syncManagedInstanceBadge(state.bridge.managedInstance);
+      if (request.payload.manager === 'ytray' && !sender.tab?.incognito) {
+        await bindManagedBrowserUse(request.payload.instanceId, request.payload.badge, request.payload.browserUseTicket)
+          .catch((error) => console.error('YTray Browser Use binding failed', errorCode(error)));
+      }
       if (launchTarget !== undefined && launchTarget.mode !== 'legacy') {
         if (launchTarget.mode === 'engine') void engineBridge.connectManaged(state.bridge).catch(console.error);
         return ok(engineBridge.getStatus());
@@ -566,6 +583,7 @@ export function runBackground(): void {
       'bridge.pairing.status.changed',
       'network.capture.changed',
       'deep.capture.changed',
+      'browser-use.share.changed',
     ].includes((input as { action?: string })?.action || '')) return undefined;
     void Promise.resolve()
       .then(() => parseExtensionRequest(input))
@@ -576,6 +594,8 @@ export function runBackground(): void {
   });
 
   configureAuthorizationPageContextCapture(capturePageContext);
+  initializePageActionFeedback();
+  initializeBrowserUse();
   recordServiceWorkerStart();
   initializeBrowserRecordingService();
   initializeFloatingPanelLifecycle();
