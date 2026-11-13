@@ -126,7 +126,10 @@ for (const target of targets) {
   assert((manifest.permissions || []).includes('webNavigation'), `${target.name} 缺少 frame/document 生命周期所需 webNavigation 权限`);
   assert((manifest.permissions || []).includes('debugger') === !isFirefox, `${target.name} debugger 权限不符合 Chromium-only 深度捕获策略`);
   assert(!(manifest.permissions || []).includes('activeTab'), `${target.name} 不应申请未使用的 activeTab 权限`);
-  assert(!(manifest.permissions || []).includes('nativeMessaging') && (manifest.optional_permissions || []).includes('nativeMessaging'), `${target.name} Native Messaging 必须按需授权`);
+  const nativeAtInstall = target.name === 'enterprise';
+  assert((manifest.permissions || []).includes('nativeMessaging') === nativeAtInstall
+    && (manifest.optional_permissions || []).includes('nativeMessaging') === !nativeAtInstall,
+  `${target.name} Native Messaging 权限与发布渠道不符`);
   assert((manifest.permissions || []).includes(isFirefox ? 'webRequestBlocking' : 'webRequestAuthProvider'), `${target.name} 缺少代理认证权限`);
   assert(manifest.storage?.managed_schema === 'managed-storage-schema.json', `${target.name} 缺少企业 managed storage schema`);
   assert(await exists(join(output, 'managed-storage-schema.json')), `${target.name} managed storage schema 未打包`);

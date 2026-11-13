@@ -15,6 +15,9 @@ export default defineConfig({
     build: {
       modulePreload: false,
     },
+    define: {
+      __YTRAY_BROWSER_PORT__: Number(process.env.YTRAY_BROWSER_TEST_PORT || 51374),
+    },
   }),
   manifest: ({ mode, browser }) => ({
     name: 'Yakit Browser Agent',
@@ -46,8 +49,9 @@ export default defineConfig({
       ...(browser === 'firefox' ? [] : ['debugger']),
       ...(browser === 'firefox' ? ['webRequestBlocking'] : ['webRequestAuthProvider']),
       ...(browser !== 'firefox' && ['production', 'store', 'enterprise'].includes(mode) ? ['userScripts'] : []),
+      ...(browser === 'chrome' && mode === 'enterprise' ? ['nativeMessaging'] : []),
     ],
-    optional_permissions: ['nativeMessaging'],
+    optional_permissions: browser === 'chrome' && mode === 'enterprise' ? [] : ['nativeMessaging'],
     host_permissions: [
       '<all_urls>'
     ],

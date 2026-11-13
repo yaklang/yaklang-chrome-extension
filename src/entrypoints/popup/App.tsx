@@ -9,6 +9,7 @@ import { Tooltip, TooltipProvider } from '@/components/ui/tooltip';
 import { HANDOFF_REASON_LABELS, waitingHandoff } from '@/features/handoff/presentation';
 import { isStateStorageChange } from '@/protocol/storage';
 import type { ActiveTabInfo, BridgeStatus, ExtensionState, UserAgentResolution } from '@/types/models';
+import type { BrowserUseShareStatus } from '@/types/messages';
 import { errorMessage, request } from '@/platform/messaging/runtime';
 import { CookieQuickView } from './views/CookieQuickView';
 import { OverviewQuickView } from './views/OverviewQuickView';
@@ -42,6 +43,7 @@ function App() {
   const [view, setView] = useState<PopupView>('home');
   const [cookieCount, setCookieCount] = useState(0);
   const [uaResolution, setUaResolution] = useState<UserAgentResolution>();
+  const [browserUse, setBrowserUse] = useState<BrowserUseShareStatus & { tabId: number; url: string }>();
 
   const load = useCallback(async () => {
     const [nextState, nextTab, nextBridge] = await Promise.all([
@@ -87,6 +89,30 @@ function App() {
     return () => globalThis.clearTimeout(timer);
   }, [notice]);
 
+  useEffect(() => {
+    if (import.meta.env.FIREFOX) return;
+    let disposed = false;
+    const refresh = async () => {
+      const [active] = await browser.tabs.query({ active: true, currentWindow: true });
+      const target = active?.id && active.url && /^https?:\/\//i.test(active.url)
+        ? { tabId: active.id, url: active.url } : undefined;
+      const status = target ? await request('browser-use.share.status', { tabId: target.tabId }) : undefined;
+      if (!disposed) setBrowserUse(target && status?.supported ? { ...target, ...status } : undefined);
+    };
+    const update = () => void refresh().catch(() => { if (!disposed) setBrowserUse(undefined); });
+    const changed = (message: { action?: string }) => { if (message.action === 'browser-use.share.changed') update(); };
+    update();
+    browser.tabs.onActivated.addListener(update);
+    browser.tabs.onUpdated.addListener(update);
+    browser.runtime.onMessage.addListener(changed);
+    return () => {
+      disposed = true;
+      browser.tabs.onActivated.removeListener(update);
+      browser.tabs.onUpdated.removeListener(update);
+      browser.runtime.onMessage.removeListener(changed);
+    };
+  }, []);
+
   const grantActive = Boolean(state?.activeGrant && state.activeGrant.expiresAt > Date.now() && tab && state.activeGrant.targets.some((target) => target.tabId === tab.id));
   const handoff = waitingHandoff(state?.handoff);
 
@@ -126,6 +152,17 @@ function App() {
     });
     await navigator.clipboard.writeText(JSON.stringify(context, null, 2));
     setNotice('页面上下文已复制');
+  });
+
+  const toggleBrowserUse = () => run(async () => {
+    if (!browserUse) return;
+    const { tabId, url, shared } = browserUse;
+    if (!shared && !browser.runtime.getManifest().permissions?.includes('nativeMessaging')
+      && !await browser.permissions.request({ permissions: ['nativeMessaging'] })) return;
+    const status = shared
+      ? await request('browser-use.share.stop', { tabId })
+      : await request('browser-use.share.start', { tabId, url });
+    setBrowserUse({ tabId, url, ...status });
   });
 
   if (!state) {
@@ -187,6 +224,17 @@ function App() {
           </nav>
 
           <section className="popup-workspace">
+            {view === 'home' && browserUse && <section className="popup-browser-use">
+              <div>
+                <strong>YTray 浏览器控制</strong>
+                <span>{browserUse.shared ? (browserUse.managed ? '已接入 · 同源跳转可继续' : '已共享 · 跳转时结束')
+                  : browserUse.paused && browserUse.managed ? '已暂停当前标签页的控制'
+                    : browserUse.managed ? '等待 YTray 浏览器控制接入' : '允许 YTray MCP 读取和操作当前网页'}</span>
+              </div>
+              <Button size="sm" variant={browserUse.shared ? 'secondary' : 'primary'} disabled={busy} onClick={() => void toggleBrowserUse()}>
+                {browserUse.shared ? '停止共享' : browserUse.paused && browserUse.managed ? '恢复控制' : browserUse.managed ? '接入此页' : '共享此页'}
+              </Button>
+            </section>}
             {handoff && <section className="popup-handoff" aria-live="assertive">
               <AlertTriangle size={18} />
               <div className="popup-handoff__copy">

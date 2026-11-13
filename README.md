@@ -357,7 +357,7 @@ manifest 的 `latest` 指向最新版本，`versions[0]` 为完整记录，最�
 
 ## 权限与数据边界
 
-扩展声明 `tabs`、`scripting`、`cookies`、`proxy`、`webRequest`、`webNavigation`、`debugger` 等权限，是为了在用户主动选择的目标页面上提供对应安全测试能力。`nativeMessaging` 是可选权限，仅在用户选择 Native 模式时请求。
+扩展声明 `tabs`、`scripting`、`cookies`、`proxy`、`webRequest`、`webNavigation`、`debugger` 等权限，用于提供页面和安全测试能力。Chrome 企业版在安装时声明 `nativeMessaging`，供 YTray 托管实例自动接入 Browser Use。商店版和 Firefox 按需申请该权限。
 
 默认数据策略：
 
